@@ -7,6 +7,7 @@ struct itcore_snapshot {
   uint64_t revision = 1;
   uint64_t generation = 0;
   uint32_t mouse_mode = 0;
+  uint64_t epoch = 1;
   std::vector<std::vector<itcore_cell>> grid;
   std::vector<itcore_wrap> wrap;
   std::vector<uint64_t> row_rev;
@@ -85,3 +86,6 @@ extern "C" void itcore_snapshot_cursor(const itcore_snapshot *s, uint16_t *col, 
 extern "C" uint64_t itcore_snapshot_generation(const itcore_snapshot *s) { return s ? s->generation : 0; }
 extern "C" uint32_t itcore_snapshot_mouse_mode(const itcore_snapshot *s) { return s ? s->mouse_mode : 0; }
 extern "C" void itcore_snapshot_release(itcore_snapshot *s) { delete s; }
+
+extern "C" uint64_t itcore_snapshot_epoch(const itcore_snapshot *s) { return s ? s->epoch : 0; }
+extern "C" void itmock_bump_epoch(itcore_snapshot *s) { if (s) s->epoch++; }

@@ -48,9 +48,10 @@ class DirtyRows {
  public:
   std::vector<uint16_t> collect(const itcore_snapshot *s) {
     uint16_t rows = itcore_snapshot_rows(s);
-    uint64_t gen = itcore_snapshot_generation(s);
-    bool all = rows != rev_.size() || gen != gen_ || cols_ != itcore_snapshot_columns(s);
-    if (all) { rev_.assign(rows, UINT64_MAX); gen_ = gen; cols_ = itcore_snapshot_columns(s); }
+    uint64_t gen = itcore_snapshot_generation(s), ep = itcore_snapshot_epoch(s);
+    // generation（尺寸）或 epoch（字素/链接 id 重编号）任一变化都整屏重画
+    bool all = rows != rev_.size() || gen != gen_ || ep != epoch_ || cols_ != itcore_snapshot_columns(s);
+    if (all) { rev_.assign(rows, UINT64_MAX); gen_ = gen; epoch_ = ep; cols_ = itcore_snapshot_columns(s); }
     std::vector<uint16_t> out;
     for (uint16_t y = 0; y < rows; ++y) {
       itcore_wrap w; uint64_t rr = 0;
@@ -62,7 +63,7 @@ class DirtyRows {
   void invalidate() { rev_.clear(); }  // 设备丢失 / DPI / 字体变化
  private:
   std::vector<uint64_t> rev_;
-  uint64_t gen_ = UINT64_MAX;
+  uint64_t gen_ = UINT64_MAX, epoch_ = UINT64_MAX;
   uint16_t cols_ = 0;
 };
 

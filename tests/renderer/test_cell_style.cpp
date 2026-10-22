@@ -24,6 +24,8 @@ int main() {
   assert(d.collect(s).empty());          // 无变化不画
   itmock_set_style(s, 1, 0, ITCORE_CELL_BOLD, 0, 0);
   auto v = d.collect(s); assert(v.size() == 1 && v[0] == 1);  // 只画变了的行
+  itmock_bump_epoch(s); assert(d.collect(s).size() == 5);  // epoch 变化整屏重画
+  assert(d.collect(s).empty());
   d.invalidate(); assert(d.collect(s).size() == 5);
   itcore_snapshot_release(s);
   std::puts("cell_style ok");
