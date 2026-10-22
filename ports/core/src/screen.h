@@ -41,6 +41,7 @@ public:
     const std::string *at(uint32_t id) const;
     // 仅写端：返回新 id；满（kChunk*kMaxChunks）时返回 0。
     uint32_t append(std::string &&s);
+    static constexpr uint32_t capacity() { return kChunk * kMaxChunks; }
 private:
     std::atomic<std::string *> chunks_[kMaxChunks];
     std::atomic<uint32_t> size_{0};
@@ -62,6 +63,13 @@ public:
     uint32_t size() const { return store_->size(); }
     uint64_t epoch() const { return epoch_; }
     void clear();
+    // 压缩：只保留 live 中的 id（0 恒保留），重建新 store；返回 旧id→新id（未列入者映射到 0）。
+    // epoch 递增；旧 PoolRef 继续持有旧 store。bytes_ 重新按实际条目计算。
+    std::unordered_map<uint32_t, uint32_t> compact(const std::vector<uint32_t> &live);
+    // 池满时 intern 返回的预留 U+FFFD id（未满时为 0 表示尚未预留）。
+    uint32_t replacement_id() const { return fffd_id_; }
+    void set_capacity_for_test(uint32_t c) { cap_ = c; }
+    static size_t entry_bytes(size_t n) { return n * 2 + 48; }
     PoolRef ref() const { return PoolRef{store_, store_->size(), epoch_}; }
     // OSC 8：超链接以 "\0H" id "\0" url 编码存于同一池（与字素不冲突：文本不含 NUL）。
     uint32_t intern_hyperlink(std::string_view url, std::string_view id);
@@ -71,6 +79,8 @@ private:
     std::unordered_map<std::string, uint32_t> to_id_;
     size_t bytes_ = 0;
     uint64_t epoch_ = 1;
+    uint32_t fffd_id_ = 0;
+    uint32_t cap_ = PoolStore::capacity();
 };
 
 // 终端列宽：CJK/全角=2，组合/零宽=0，其余=1（设计 14.2：不由 DirectWrite 像素反推）。
@@ -148,7 +158,14 @@ public:
     int origin_top() const { return origin_ ? scroll_top_ : 0; }
     int origin_bottom() const { return origin_ ? scroll_bottom_ : rows_ - 1; }
     size_t mem_bytes() const;
+    // 行 revision 全局单调：所有赋值取 ++counter（counter 由 Screen 持有，主/备用屏共享）。
+    void set_rev_counter(uint64_t *c) { rev_ = c; }
+    uint64_t next_rev() { return ++(rev_ ? *rev_ : local_rev_); }
+    void touch_all_rows() { for (auto &r : rows_data_) r.revision = next_rev(); }
+    template <class F> void for_each_row(F f) { for (auto &r : rows_data_) f(r); }
 private:
+    uint64_t *rev_ = nullptr;
+    uint64_t local_rev_ = 0;
     uint16_t cols_ = 0, rows_ = 0;
     std::vector<Row> rows_data_;
     Cursor cursor_;
@@ -179,6 +196,7 @@ public:
     // 以当前宽度重排：返回显示行列表（Row 形态），并填充 wrap。
     void reflow_into(uint16_t cols, std::vector<Row> &out) const;
     void clear();
+    template <class F> void for_each_line(F f) { for (auto &l : lines_) f(l); }
     // 绝对显示行（从最旧开始）→ (逻辑行下标, 行内列偏移)；失败返回 false。
     bool map_display_row(uint16_t cols, size_t display_row, size_t *logic_i, size_t *cell_off) const;
     size_t display_rows(uint16_t cols) const;
@@ -223,7 +241,13 @@ public:
     // OSC 8：params 为 "k=v:k=v"，url 为空表示结束链接。
     void set_hyperlink(std::string_view params, std::string_view url);
     uint32_t hyperlink_id() const { return link_id_; }
-    void reset_pool_for_test() { pool_.clear(); }
+    // 换新池并推进所有行 revision（epoch 同时递增）。
+    void reset_pool_for_test() { pool_.clear(); main_.touch_all_rows(); alt_.touch_all_rows(); }
+    // 字素池压缩（RIS / ED 3 / 字节超预算 75% 时自动触发）。
+    void compact_pool();
+    void set_pool_budget(size_t b) { pool_budget_ = b; pool_threshold_ = b / 4 * 3; }
+    size_t pool_budget() const { return pool_budget_; }
+    uint64_t compactions() const { return compactions_; }
     void bump() { ++revision_; }
     // 组装视口+滚动历史的显示行快照数据。
     // first_row：相对视口顶部，0=屏幕首行，负=滚入历史。
@@ -235,6 +259,7 @@ public:
         int cursor_col = 0, cursor_row = 0;
         bool cursor_visible = true;
         std::vector<Row> rows_data;  // 长度 = requested row_count（裁剪后）
+        uint64_t epoch = 0;          // 字素池 epoch（clear/压缩时递增）
         PoolRef pool;                // 增量引用字素池（不拷贝），见 GraphemePool
     };
     SnapshotData take_snapshot(int32_t first_row, uint16_t row_count) const;
@@ -256,6 +281,14 @@ private:
     void evict_to_scrollback(Row &&r);
     static void evict_thunk(Row &&r, void *ctx);
     void flush_soft_line_to_scrollback_if_needed();
+    void full_reset();
+    void apply_one(const Token &t, std::string *reply);
+    void maybe_compact();
+
+    uint64_t row_rev_ = 0;           // 行 revision 计数器（须先于 main_/alt_ 声明）
+    size_t pool_budget_ = 8u << 20, pool_threshold_ = 6u << 20;
+    bool want_compact_ = false;
+    uint64_t compactions_ = 0;
 
     GraphemePool pool_;
     Grid main_, alt_;

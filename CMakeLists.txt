@@ -101,6 +101,8 @@ target_link_libraries(itcore_test_unicode PRIVATE itcore Threads::Threads)
 add_test(NAME CORE-06.ucd_width_grapheme COMMAND itcore_test_unicode width)
 add_test(NAME CORE-07.osc8_hyperlink COMMAND itcore_test_unicode osc8)
 add_test(NAME CORE-08.snapshot_pool_ref COMMAND itcore_test_unicode pool)
+add_test(NAME CORE-09.row_revision_epoch COMMAND itcore_test_unicode rev)
+add_test(NAME CORE-10.pool_compaction COMMAND itcore_test_unicode compact)
 
 # T07：SSH 会话（ssh -G 解析、错误映射；Linux 下可选本机 sshd 实连）。SshTransport 仅 Windows
 if(NOT CMAKE_CROSSCOMPILING AND NOT WIN32)

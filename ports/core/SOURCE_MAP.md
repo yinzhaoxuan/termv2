@@ -61,3 +61,15 @@
 | `encode.cpp` | `encode_text` / `encode_paste`（≤32KiB、bracketed 事务）/ `encode_key`（DECCKM/应用键区）/ `encode_mouse`（1000/1002/1003+SGR 1006）。 |
 | `renderer/d2d/*` | ISwapChainHost + D2D/DWrite 网格原型；字形 advance 不参与列定位；`caret_rect_px` + 预编辑覆盖层。 |
 | `conpty_transport.cpp` `failStart` | Wait 读线程后 `CloseHandle(reader_)`；正常 close 路径同样释放。 |
+
+## 与上游一致的行为（评审确认，刻意保留）
+
+- **行尾 VS16 / 肤色修饰符不加宽**：基字已落在行末列时，后续 U+FE0F 或 Emoji 修饰符只并入字素簇，不把单元格升为宽 2，也不触发换行回填。对应上游 `VT100Screen`/`ScreenChar` 在 `wrap_pending` 位置的处理。
+- **无 `id=` 的 OSC 8 链接不自动分配 id**：相邻、URL 相同但未带 `id=` 的链接不会被合并为同一链接（hover 分组仅按显式 id），与上游 `iTermURLStore` 一致。
+
+## 字素池生命周期（本端实现，非上游）
+
+- 池满时 `intern` 返回预留的 U+FFFD id（最后一个槽位），不再退化为 0/空格。
+- 压缩触发：池字节数 > 预算 75%（预算默认 `max(1 MiB, mem_limit/8)`，压缩后阈值取 `max(75% 预算, 2×存活字节)` 防抖）、RIS（`ESC c`）、ED 3。
+- 压缩从主屏、备用屏、滚动历史、REP/字素簇续写状态与当前 OSC 8 链接收集仍在用的 grapheme/hyperlink id，重建新 store，重映射所有 Cell；epoch +1，所有行 revision 以全局单调计数推进；`bytes_` 按存活条目重新计算。旧快照持有旧 store，不受影响。
+- 行 revision 由 Screen 级单调计数器分配（主/备用屏共享），滚动/插删行/reset/清池都会取新值；resize 保留原 revision。历史行在快照中以当前计数作 revision。快照 `itcore_snapshot_epoch()` 暴露池 epoch。

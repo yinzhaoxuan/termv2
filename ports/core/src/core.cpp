@@ -216,6 +216,7 @@ itcore_snapshot *itcore_acquire_snapshot(itcore_core *c, int32_t first_row, uint
     return s;
 }
 uint64_t itcore_snapshot_revision(const itcore_snapshot *s) { return s ? s->data.revision : 0; }
+uint64_t itcore_snapshot_epoch(const itcore_snapshot *s) { return s ? s->data.epoch : 0; }
 uint16_t itcore_snapshot_columns(const itcore_snapshot *s) { return s ? s->data.cols : 0; }
 uint16_t itcore_snapshot_rows(const itcore_snapshot *s) { return s ? s->data.rows : 0; }
 const itcore_cell *itcore_snapshot_row(const itcore_snapshot *s, uint16_t row, itcore_wrap *wrap, uint64_t *row_revision) {

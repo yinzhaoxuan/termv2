@@ -103,6 +103,8 @@ uint64_t itcore_incomplete_count(const itcore_core *c);
 
 itcore_snapshot *itcore_acquire_snapshot(itcore_core *c, int32_t first_row, uint16_t row_count);
 uint64_t itcore_snapshot_revision(const itcore_snapshot *s);
+/* 字素池 epoch：RIS/ED 3/压缩换新存储时递增；变化时 grapheme/hyperlink id 需整屏重解析 */
+uint64_t itcore_snapshot_epoch(const itcore_snapshot *s);
 uint16_t itcore_snapshot_columns(const itcore_snapshot *s);
 uint16_t itcore_snapshot_rows(const itcore_snapshot *s);
 const itcore_cell *itcore_snapshot_row(const itcore_snapshot *s, uint16_t row, itcore_wrap *wrap, uint64_t *row_revision);

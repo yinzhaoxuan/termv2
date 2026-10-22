@@ -80,9 +80,23 @@ uint32_t GraphemePool::intern(std::string_view utf8) {
     std::string key(utf8);
     auto it = to_id_.find(key);
     if (it != to_id_.end()) return it->second;
+    // 池满：最后一个槽位预留给 U+FFFD，之后所有新字素/链接都返回它（不再退化为 0/空格）。
+    if (fffd_id_ || store_->size() + 1 >= cap_) {
+        if (!fffd_id_) {
+            static const std::string kFffd("\xEF\xBF\xBD");
+            auto f = to_id_.find(kFffd);
+            if (f != to_id_.end()) fffd_id_ = f->second;
+            else {
+                fffd_id_ = store_->append(std::string(kFffd));
+                bytes_ += entry_bytes(kFffd.size());
+                to_id_.emplace(kFffd, fffd_id_);
+            }
+        }
+        return fffd_id_;
+    }
     uint32_t id = store_->append(std::string(key));
-    if (!id) return 0;  // 池满：退化为空格（内存上限由 MEM 预算兜底）
-    bytes_ += key.size() * 2 + 48;
+    if (!id) return 0;
+    bytes_ += entry_bytes(key.size());
     to_id_.emplace(std::move(key), id);
     return id;
 }
@@ -92,7 +106,32 @@ const char *GraphemePool::get(uint32_t id, size_t *len) const {
 void GraphemePool::clear() {
     store_ = std::make_shared<PoolStore>();
     store_->append(std::string());
-    to_id_.clear(); bytes_ = 0; ++epoch_;
+    to_id_.clear(); bytes_ = 0; ++epoch_; fffd_id_ = 0;
+}
+std::unordered_map<uint32_t, uint32_t> GraphemePool::compact(const std::vector<uint32_t> &live) {
+    std::unordered_map<uint32_t, uint32_t> remap;
+    auto old = store_;
+    uint32_t lim = old->size();
+    auto ns = std::make_shared<PoolStore>();
+    ns->append(std::string());
+    std::unordered_map<std::string, uint32_t> ids;
+    size_t bytes = 0;
+    remap[0] = 0;
+    for (uint32_t id : live) {
+        if (!id || id >= lim || remap.count(id)) continue;
+        const std::string *s = old->at(id);
+        if (!s) continue;
+        uint32_t nid = ns->append(std::string(*s));
+        remap[id] = nid;
+        ids.emplace(*s, nid);
+        bytes += entry_bytes(s->size());
+    }
+    store_ = std::move(ns);
+    to_id_ = std::move(ids);
+    bytes_ = bytes;
+    fffd_id_ = 0;
+    ++epoch_;
+    return remap;
 }
 uint32_t GraphemePool::intern_hyperlink(std::string_view url, std::string_view id) {
     if (url.empty()) return 0;
@@ -135,7 +174,7 @@ void Grid::reset(uint16_t cols, uint16_t rows) {
     for (auto &r : rows_data_) {
         r.cells.assign(cols, Cell::blank());
         r.id = next_row_id_++;
-        r.revision = 1;
+        r.revision = next_rev();
         r.wrap = ITCORE_WRAP_HARD;
     }
     cursor_ = {0, 0};
@@ -178,7 +217,7 @@ void Grid::scroll_up(int n, EvictFn evict, void *ctx) {
         rows_data_[bot] = Row{};
         rows_data_[bot].cells.assign(cols_, Cell::blank());
         rows_data_[bot].id = next_row_id_++;
-        rows_data_[bot].revision = 1;
+        rows_data_[bot].revision = next_rev();
         rows_data_[bot].wrap = ITCORE_WRAP_HARD;
     }
 }
@@ -192,21 +231,21 @@ void Grid::scroll_down(int n) {
         rows_data_[top] = Row{};
         rows_data_[top].cells.assign(cols_, Cell::blank());
         rows_data_[top].id = next_row_id_++;
-        rows_data_[top].revision = 1;
+        rows_data_[top].revision = next_rev();
     }
 }
 void Grid::clear_all(const Cell &blank) {
     for (auto &r : rows_data_) {
         std::fill(r.cells.begin(), r.cells.end(), blank);
         r.wrap = ITCORE_WRAP_HARD;
-        ++r.revision;
+        r.revision = next_rev();
     }
     wrap_pending_ = false;
 }
 void Grid::erase_in_display(int mode, const Cell &blank) {
     auto erase_row = [&](int y, int x0, int x1) {
         for (int x = x0; x < x1; ++x) rows_data_[y].cells[x] = blank;
-        ++rows_data_[y].revision;
+        rows_data_[y].revision = next_rev();
     };
     if (mode == 0) {
         erase_row(cursor_.y, cursor_.x, cols_);
@@ -223,7 +262,7 @@ void Grid::erase_in_line(int mode, const Cell &blank) {
     if (mode == 0) x0 = cursor_.x;
     else if (mode == 1) x1 = cursor_.x + 1;
     for (int x = x0; x < x1; ++x) rows_data_[cursor_.y].cells[x] = blank;
-    ++rows_data_[cursor_.y].revision;
+    rows_data_[cursor_.y].revision = next_rev();
 }
 void Grid::insert_lines(int n, const Cell &blank) {
     (void)blank;
@@ -236,7 +275,7 @@ void Grid::insert_lines(int n, const Cell &blank) {
         rows_data_[y] = Row{};
         rows_data_[y].cells.assign(cols_, Cell::blank());
         rows_data_[y].id = next_row_id_++;
-        rows_data_[y].revision = 1;
+        rows_data_[y].revision = next_rev();
     }
 }
 void Grid::delete_lines(int n, const Cell &blank) {
@@ -250,7 +289,7 @@ void Grid::delete_lines(int n, const Cell &blank) {
         rows_data_[bot] = Row{};
         rows_data_[bot].cells.assign(cols_, Cell::blank());
         rows_data_[bot].id = next_row_id_++;
-        rows_data_[bot].revision = 1;
+        rows_data_[bot].revision = next_rev();
     }
 }
 void Grid::insert_chars(int n, const Cell &blank) {
@@ -258,7 +297,7 @@ void Grid::insert_chars(int n, const Cell &blank) {
     if (n > cols_ - cursor_.x) n = cols_ - cursor_.x;
     for (int i = cols_ - 1; i >= cursor_.x + n; --i) cells[i] = cells[i - n];
     for (int i = 0; i < n; ++i) cells[cursor_.x + i] = blank;
-    ++rows_data_[cursor_.y].revision;
+    rows_data_[cursor_.y].revision = next_rev();
     repair_wide_orphans(cursor_.y);
 }
 void Grid::delete_chars(int n, const Cell &blank) {
@@ -266,7 +305,7 @@ void Grid::delete_chars(int n, const Cell &blank) {
     if (n > cols_ - cursor_.x) n = cols_ - cursor_.x;
     for (int i = cursor_.x; i + n < cols_; ++i) cells[i] = cells[i + n];
     for (int i = cols_ - n; i < cols_; ++i) cells[i] = blank;
-    ++rows_data_[cursor_.y].revision;
+    rows_data_[cursor_.y].revision = next_rev();
     repair_wide_orphans(cursor_.y);
 }
 void Grid::repair_wide_orphans(int y) {
@@ -278,7 +317,7 @@ void Grid::repair_wide_orphans(int y) {
         if (c.flags & ITCORE_CELL_CONTINUATION) {
             // 孤立尾格：无基字覆盖
             c = blank;
-            ++rows_data_[y].revision;
+            rows_data_[y].revision = next_rev();
             ++x;
             continue;
         }
@@ -289,7 +328,7 @@ void Grid::repair_wide_orphans(int y) {
             c.width = 1;
             c.flags = static_cast<uint16_t>(c.flags & ~ITCORE_CELL_CONTINUATION);
             for (int k = x + 1; k < cols_; ++k) cells[k] = blank;
-            ++rows_data_[y].revision;
+            rows_data_[y].revision = next_rev();
             ++x;
             continue;
         }
@@ -299,14 +338,14 @@ void Grid::repair_wide_orphans(int y) {
                 cont.flags = ITCORE_CELL_CONTINUATION;
                 cont.width = 0;
                 cells[x + k] = cont;
-                ++rows_data_[y].revision;
+                rows_data_[y].revision = next_rev();
             }
         }
         // 若下一格是 CONTINUATION 但超出本字 width，清掉孤儿
         int nx = x + w;
         while (nx < cols_ && (cells[nx].flags & ITCORE_CELL_CONTINUATION)) {
             cells[nx] = blank;
-            ++rows_data_[y].revision;
+            rows_data_[y].revision = next_rev();
             ++nx;
         }
         x += w;
@@ -321,7 +360,7 @@ void Grid::clear_for_write(int x, int y, int write_width, const Cell &blank) {
         while (base > 0 && (cells[base].flags & ITCORE_CELL_CONTINUATION)) --base;
         int ow = cells[base].width ? cells[base].width : 1;
         for (int i = 0; i < ow && base + i < cols_; ++i) cells[base + i] = blank;
-        ++rows_data_[y].revision;
+        rows_data_[y].revision = next_rev();
     }
     // 覆盖区间内每个基字及其尾格
     int end = x + (write_width > 0 ? write_width : 1);
@@ -332,7 +371,7 @@ void Grid::clear_for_write(int x, int y, int write_width, const Cell &blank) {
             while (b > 0 && (cells[b].flags & ITCORE_CELL_CONTINUATION)) --b;
             int ow = cells[b].width ? cells[b].width : 1;
             for (int k = 0; k < ow && b + k < cols_; ++k) cells[b + k] = blank;
-            ++rows_data_[y].revision;
+            rows_data_[y].revision = next_rev();
             i = b + ow;
             continue;
         }
@@ -341,7 +380,7 @@ void Grid::clear_for_write(int x, int y, int write_width, const Cell &blank) {
         // 窄盖宽：清掉多出的尾格
         if (ow > 1 && i + ow > end) {
             for (int k = end; k < i + ow && k < cols_; ++k) cells[k] = blank;
-            ++rows_data_[y].revision;
+            rows_data_[y].revision = next_rev();
         }
         for (int k = 0; k < ow && i + k < cols_; ++k) {
             if (i + k >= x && i + k < end) cells[i + k] = blank;
@@ -349,7 +388,7 @@ void Grid::clear_for_write(int x, int y, int write_width, const Cell &blank) {
         i += ow;
     }
     // 写 CONTINUATION 场景：确保区间左侧若被切到中段已清净（上面已处理）
-    ++rows_data_[y].revision;
+    rows_data_[y].revision = next_rev();
 }
 void Grid::clamp_cursor(bool allow_pending) {
     int max_x = allow_pending ? cols_ : cols_ - 1;
@@ -526,6 +565,9 @@ Screen::Screen(uint16_t cols, uint16_t rows, uint32_t sb_lines, uint64_t mem_lim
     : scrollback_(sb_lines ? sb_lines : 10000, mem_limit ? mem_limit : (64ull << 20)) {
     if (!cols) cols = 80;
     if (!rows) rows = 24;
+    main_.set_rev_counter(&row_rev_);
+    alt_.set_rev_counter(&row_rev_);
+    set_pool_budget(std::max<uint64_t>(1u << 20, (mem_limit ? mem_limit : (64ull << 20)) / 8));
     main_.reset(cols, rows);
     alt_.reset(cols, rows);
 }
@@ -636,7 +678,7 @@ void Screen::write_char(uint32_t cp, const uint8_t *utf8, size_t utf8_len) {
             cont.hyperlink_id = cell.hyperlink_id;
             g.row(y).cells[x + k] = cont;
         }
-        ++g.row(y).revision;
+        g.row(y).revision = g.next_rev();
         return true;
     };
 
@@ -726,7 +768,7 @@ bool Screen::join_cluster(uint32_t cp, const uint8_t *utf8, size_t utf8_len) {
         if (g.cursor().x >= g.cols()) { g.cursor().x = g.cols(); g.set_wrap_pending(modes_.wrap); }
         last_printed_.width = 2;
     }
-    ++row.revision;
+    row.revision = grid().next_rev();
     bump();
     return true;
 }
@@ -938,6 +980,60 @@ void Screen::leave_alt(bool clear) {
 }
 
 void Screen::apply(const Token &t, std::string *reply) {
+    apply_one(t, reply);
+    maybe_compact();
+}
+
+void Screen::maybe_compact() {
+    if (want_compact_ || pool_.bytes() > pool_threshold_) compact_pool();
+}
+
+void Screen::full_reset() {
+    uint16_t cols = main_.cols(), rows = main_.rows();
+    modes_ = ScreenModes{};
+    pen_ = Pen{};
+    saved_main_ = SavedCursor{}; saved_alt_ = SavedCursor{};
+    scrollback_.clear();
+    main_.reset(cols, rows);
+    alt_.reset(cols, rows);
+    link_id_ = 0;
+    has_last_ = false;
+    last_printed_ = Cell::blank();
+    last_x_ = last_y_ = -1;
+    last_base_cp_ = last_cp_ = 0; last_cluster_cps_ = 0;
+    want_compact_ = true;
+    bump();
+}
+
+void Screen::compact_pool() {
+    want_compact_ = false;
+    std::vector<uint32_t> live;
+    auto add = [&](const Cell &c) {
+        if (c.grapheme_id) live.push_back(c.grapheme_id);
+        if (c.hyperlink_id) live.push_back(c.hyperlink_id);
+    };
+    main_.for_each_row([&](Row &r) { for (auto &c : r.cells) add(c); });
+    alt_.for_each_row([&](Row &r) { for (auto &c : r.cells) add(c); });
+    scrollback_.for_each_line([&](LogicalLine &l) { for (auto &c : l.cells) add(c); });
+    if (has_last_) add(last_printed_);
+    if (link_id_) live.push_back(link_id_);
+    auto m = pool_.compact(live);
+    auto map = [&](uint32_t &id) { if (id) { auto it = m.find(id); id = it == m.end() ? 0 : it->second; } };
+    auto fix = [&](Cell &c) { map(c.grapheme_id); map(c.hyperlink_id); };
+    main_.for_each_row([&](Row &r) { for (auto &c : r.cells) fix(c); });
+    alt_.for_each_row([&](Row &r) { for (auto &c : r.cells) fix(c); });
+    scrollback_.for_each_line([&](LogicalLine &l) { for (auto &c : l.cells) fix(c); });
+    fix(last_printed_);
+    map(link_id_);
+    main_.touch_all_rows();
+    alt_.touch_all_rows();
+    // 滞回：存活量本身很大时避免每个 token 都压缩
+    pool_threshold_ = std::max(pool_budget_ / 4 * 3, pool_.bytes() * 2);
+    ++compactions_;
+    bump();
+}
+
+void Screen::apply_one(const Token &t, std::string *reply) {
     switch (t.type) {
     case TokenType::Text:
         write_utf8_text(t.text);
@@ -966,6 +1062,7 @@ void Screen::apply(const Token &t, std::string *reply) {
             } else if (t.final == 'D') index();
             else if (t.final == 'M') reverse_index();
             else if (t.final == 'E') { carriage_return(); linefeed(true); }
+            else if (t.final == 'c') full_reset();  // RIS
         }
         break;
     case TokenType::Csi: {
@@ -984,7 +1081,7 @@ void Screen::apply(const Token &t, std::string *reply) {
         else if (cmd == "CUP" || cmd == "HVP") do_cup(param_or(t2, 0, 1), param_or(t2, 1, 1));
         else if (cmd == "ED") {
             int m = param_or(t2, 0, 0);
-            if (m == 3) scrollback_.clear();
+            if (m == 3) { scrollback_.clear(); want_compact_ = true; }
             g.erase_in_display(m == 3 ? 2 : m, blank);
         }
         else if (cmd == "EL") g.erase_in_line(param_or(t2, 0, 0), blank);
@@ -996,7 +1093,7 @@ void Screen::apply(const Token &t, std::string *reply) {
             int n = param_or(t2, 0, 1);
             for (int i = 0; i < n && g.cursor().x + i < g.cols(); ++i)
                 g.row(g.cursor().y).cells[g.cursor().x + i] = blank;
-            ++g.row(g.cursor().y).revision;
+            g.row(g.cursor().y).revision = g.next_rev();
         }
         else if (cmd == "SU") g.scroll_up(param_or(t2, 0, 1), &Screen::evict_thunk, this);
         else if (cmd == "SD") g.scroll_down(param_or(t2, 0, 1));
@@ -1056,6 +1153,7 @@ Screen::SnapshotData Screen::take_snapshot(int32_t first_row, uint16_t row_count
     sn.cursor_visible = modes_.cursor_visible;
     sn.mouse_mode = modes_.mouse_mode;
     sn.pool = pool_.ref();  // 增量引用：O(1)，不拷贝
+    sn.epoch = sn.pool.epoch;
 
     std::vector<Row> hist;
     if (!modes_.alt) reflow_merged(scrollback_, sn.cols, hist);
@@ -1074,7 +1172,11 @@ Screen::SnapshotData Screen::take_snapshot(int32_t first_row, uint16_t row_count
         r.cells.assign(sn.cols, Cell::blank());
         if (abs < 0) {
             int64_t hi = hist_n + abs;
-            if (hi >= 0 && hi < hist_n) r = hist[static_cast<size_t>(hi)];
+            if (hi >= 0 && hi < hist_n) {
+                r = hist[static_cast<size_t>(hi)];
+                // 历史行按位置取内容；用当前全局计数作 revision，保证单调且内容不变时不变
+                r.revision = row_rev_;
+            }
         } else if (abs < sn.rows) {
             r = view[static_cast<size_t>(abs)];
         }

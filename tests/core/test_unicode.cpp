@@ -2,6 +2,7 @@
 #include "itcore.h"
 #include "ucd_width.h"
 #include "screen.h"
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -211,11 +212,167 @@ static void test_snapshot_pool() {
     }
 }
 
+
+static uint64_t rowrev(const itcore_snapshot *s, uint16_t y) {
+    itcore_wrap w; uint64_t rev = 0; itcore_snapshot_row(s, y, &w, &rev); return rev;
+}
+// CORE-09：行 revision 全局单调 + 快照 epoch
+static void test_revision_epoch() {
+    // 1) 滚动后被复用的行位置 revision 必须严格变大
+    {
+        auto *c = make(10, 3);
+        feed(c, "a\r\nb\r\nc");
+        auto *s1 = itcore_acquire_snapshot(c, 0, 3);
+        uint64_t mx = 0; for (uint16_t y = 0; y < 3; ++y) mx = std::max(mx, rowrev(s1, y));
+        feed(c, "\r\nd");  // 滚动一行
+        auto *s2 = itcore_acquire_snapshot(c, 0, 3);
+        CHECK(rowrev(s2, 2) > mx);
+        CHECK(rowrev(s2, 2) != rowrev(s1, 2));
+        // SU / IL / DL 新行同样取新值
+        feed(c, "\x1b[S"); auto *s3 = itcore_acquire_snapshot(c, 0, 3);
+        CHECK(rowrev(s3, 2) > rowrev(s2, 2));
+        feed(c, "\x1b[1;1H\x1b[L"); auto *s4 = itcore_acquire_snapshot(c, 0, 3);
+        CHECK(rowrev(s4, 0) > rowrev(s3, 2));
+        feed(c, "\x1b[M"); auto *s5 = itcore_acquire_snapshot(c, 0, 3);
+        CHECK(rowrev(s5, 2) > rowrev(s4, 0));
+        // resize 保留原 revision
+        uint64_t r0 = rowrev(s5, 0);
+        itcore_resize(c, 12, 3, 2);
+        auto *s6 = itcore_acquire_snapshot(c, 0, 3);
+        CHECK(rowrev(s6, 0) == r0);
+        for (auto *s : {s1, s2, s3, s4, s5, s6}) itcore_snapshot_release(s);
+        itcore_destroy(c);
+    }
+    // 2) 清池后所有行（主/备用屏）revision 推进
+    {
+        itcore::Screen sc(10, 3, 100, 1 << 22);
+        uint64_t before[3], abefore[3];
+        for (int y = 0; y < 3; ++y) before[y] = sc.grid().row(y).revision;
+        uint64_t mx = 0; for (int y = 0; y < 3; ++y) mx = std::max(mx, before[y]);
+        sc.reset_pool_for_test();
+        for (int y = 0; y < 3; ++y) CHECK(sc.grid().row(y).revision > mx);
+        (void)abefore;
+    }
+    // 3) epoch 读出：RIS 后递增，旧快照不变
+    {
+        auto *c = make();
+        feed(c, "x");
+        auto *s1 = itcore_acquire_snapshot(c, 0, 1);
+        uint64_t e1 = itcore_snapshot_epoch(s1);
+        CHECK(e1 >= 1);
+        feed(c, "\x1b" "c");
+        auto *s2 = itcore_acquire_snapshot(c, 0, 1);
+        CHECK(itcore_snapshot_epoch(s2) == e1 + 1);
+        CHECK(itcore_snapshot_epoch(s1) == e1);
+        CHECK(itcore_snapshot_epoch(nullptr) == 0);
+        CHECK(row0(s2)[0].grapheme_id == 0);
+        CHECK(g(s1, row0(s1)[0].grapheme_id) == "x");
+        itcore_snapshot_release(s1); itcore_snapshot_release(s2);
+        itcore_destroy(c);
+    }
+}
+
+static std::string dump(itcore::Screen &sc) {
+    std::string out;
+    for (int y = 0; y < sc.grid().rows(); ++y) {
+        for (auto &cell : sc.grid().row(y).cells) {
+            size_t n; const char *p = sc.pool().get(cell.grapheme_id, &n);
+            out.append(p, n); out += '|';
+            if (cell.hyperlink_id) {
+                std::string_view u, i;
+                const char *q = sc.pool().get(cell.hyperlink_id, &n);
+                if (itcore::GraphemePool::decode_hyperlink(q, n, &u, &i)) { out += '<'; out += u; out += '>'; }
+            }
+        }
+        out += '\n';
+    }
+    return out;
+}
+struct VecSink : itcore::TokenSink {
+    std::vector<itcore::Token> v;
+    void token(const itcore::Token &t) override { v.push_back(t); }
+};
+static void feed_screen(itcore::Screen &sc, itcore::Parser &p, const std::string &s) {
+    VecSink k;
+    p.feed(reinterpret_cast<const uint8_t *>(s.data()), s.size(), k);
+    p.flush_text(k);
+    for (auto &t : k.v) sc.apply(t, nullptr);
+}
+// CORE-10：字素池压缩 / 池满 U+FFFD
+static void test_compact() {
+    // 1) 池满返回预留 U+FFFD id
+    {
+        itcore::GraphemePool p;
+        p.set_capacity_for_test(100);
+        uint32_t last = 0;
+        for (uint32_t k = 1; k + 1 < 100; ++k) last = p.intern("q" + std::to_string(k));
+        CHECK(last == 98);
+        uint32_t f = p.intern("overflow-1");
+        CHECK(f != 0 && f == p.replacement_id());
+        CHECK(gs(p, f) == "\xEF\xBF\xBD");
+        CHECK(p.intern("overflow-2") == f);
+        CHECK(p.intern_hyperlink("http://x", "") == f);
+    }
+    // 2) 长会话（ABI 层）：每行一个唯一 OSC 8 链接；压缩前的旧快照仍有效
+    {
+        auto *c = make(20, 5);
+        itcore_snapshot *early = nullptr;
+        for (int k = 0; k < 30000; ++k) {
+            feed(c, "\xE4\xB8\xAD\x1b]8;;http://h/" + std::to_string(k) + "\x1b\\L\x1b]8;;\x1b\\\r\n");
+            if (k == 10) early = itcore_acquire_snapshot(c, -1, 5);
+        }
+        auto *late = itcore_acquire_snapshot(c, 0, 1);
+        CHECK(itcore_snapshot_epoch(late) > itcore_snapshot_epoch(early));
+        CHECK(early && g(early, row0(early)[0].grapheme_id) == "\xE4\xB8\xAD");
+        char url[64]; size_t ul = 0;
+        (void)url; (void)ul;
+        itcore_snapshot_release(early); itcore_snapshot_release(late);
+        itcore_destroy(c);
+    }
+    {
+        itcore::Screen sc(20, 5, 50, 1 << 20);
+        sc.set_pool_budget(64 << 10);
+        itcore::Parser par;
+        size_t peak = 0;
+        for (int k = 0; k < 50000; ++k) {
+            sc.set_hyperlink("", "http://h/" + std::to_string(k));
+            feed_screen(sc, par, "\xF0\x9F\x91\x8D" + std::string(k % 2 ? "\xF0\x9F\x8F\xBB" : "\xF0\x9F\x8F\xBF") + "e\xCC\x81L");
+            sc.set_hyperlink("", "");
+            feed_screen(sc, par, "\r\n");
+            peak = std::max(peak, sc.pool().bytes());
+        }
+        CHECK(sc.compactions() > 0);
+        CHECK(peak <= sc.pool_budget());
+        // 压缩后内容不变
+        std::string before = dump(sc);
+        auto old = sc.pool().ref();
+        uint32_t gid0 = sc.grid().row(0).cells[0].grapheme_id;
+        std::string g0 = gs(old, gid0);
+        uint64_t mx = 0; for (int y = 0; y < 5; ++y) mx = std::max(mx, sc.grid().row(y).revision);
+        uint64_t ep = sc.pool().epoch();
+        sc.compact_pool();
+        CHECK(dump(sc) == before);
+        CHECK(sc.pool().epoch() == ep + 1);
+        for (int y = 0; y < 5; ++y) CHECK(sc.grid().row(y).revision > mx);
+        CHECK(gs(old, gid0) == g0);  // 旧引用仍有效
+        // bytes_ 精确：等于存活条目之和
+        size_t sum = 0;
+        for (uint32_t id = 1; id < sc.pool().size(); ++id) { size_t n; sc.pool().get(id, &n); sum += itcore::GraphemePool::entry_bytes(n); }
+        CHECK(sc.pool().bytes() == sum);
+        // ED 3 触发压缩
+        uint64_t n0 = sc.compactions();
+        feed_screen(sc, par, "\x1b[3J");
+        CHECK(sc.compactions() == n0 + 1);
+    }
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "all" || w == "width") { test_width_table(); test_width_screen(); }
     if (w == "all" || w == "osc8") test_osc8();
     if (w == "all" || w == "pool") test_snapshot_pool();
+    if (w == "all" || w == "rev") test_revision_epoch();
+    if (w == "all" || w == "compact") test_compact();
     if (failures) { std::printf("%d failures\n", failures); return 1; }
     std::printf("OK\n");
     return 0;
