@@ -1,23 +1,30 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// iTerm2 Windows 派生核心：C ABI 实现（设计 14.1）。解析部分见 vt_parser.cpp。
+// iTerm2 Windows 派生核心：C ABI 实现（设计 14.1 / 14.2）。解析见 vt_parser；屏幕见 screen。
 #include "itcore.h"
 #include "vt_parser.h"
+#include "screen.h"
 #include <deque>
 #include <memory>
 #include <new>
 #include <string>
+#include <vector>
 
 struct itcore_event {
     itcore_event_kind kind;
     std::string data;
 };
 
+struct itcore_snapshot {
+    itcore::Screen::SnapshotData data;
+    // ABI 行缓存（与 data.rows_data 平行）
+    std::vector<std::vector<itcore_cell>> rows;
+};
+
 namespace {
-constexpr std::size_t kEventCapacity = 1024;  // 有界事件队列
-constexpr std::size_t kPerByteReserve = 4;    // 单字节最多产生的事件数（含失效通知）
+constexpr std::size_t kEventCapacity = 1024;
+constexpr std::size_t kPerByteReserve = 4;
 constexpr std::size_t kMaxTitleChars = 256;
 
-// 去除控制字符，按码点截断到 256（输入已由解析器保证为 UTF-8 字节，非法字节按单字节计）
 std::string sanitize_title(const std::string &in) {
     std::string out; std::size_t chars = 0;
     for (std::size_t i = 0; i < in.size() && chars < kMaxTitleChars;) {
@@ -25,7 +32,7 @@ std::string sanitize_title(const std::string &in) {
         std::size_t n = b < 0x80 ? 1 : (b >> 5) == 6 ? 2 : (b >> 4) == 14 ? 3 : (b >> 3) == 30 ? 4 : 1;
         if (i + n > in.size()) break;
         if (n == 1 && (b < 0x20 || b == 0x7f)) { ++i; continue; }
-        if (n == 2 && b == 0xc2 && (unsigned char)in[i + 1] < 0xa0) { i += 2; continue; }  // C1
+        if (n == 2 && b == 0xc2 && (unsigned char)in[i + 1] < 0xa0) { i += 2; continue; }
         out.append(in, i, n); i += n; ++chars;
     }
     return out;
@@ -34,14 +41,18 @@ std::string sanitize_title(const std::string &in) {
 
 struct itcore_core final : itcore::TokenSink {
     itcore::Parser parser;
+    std::unique_ptr<itcore::Screen> screen;
     std::deque<itcore_event *> events;
     bool finished = false, fatal = false, invalidated_pending = false;
     uint64_t incomplete = 0;
+    uint64_t resize_gen = 0;
 
+    itcore_core(uint16_t cols, uint16_t rows, uint32_t sb, uint64_t mem)
+        : screen(std::make_unique<itcore::Screen>(cols, rows, sb, mem)) {}
     ~itcore_core() override { for (auto *e : events) delete e; }
 
     void push(itcore_event_kind k, std::string d = {}) {
-        if (k == ITCORE_EV_RENDER_INVALIDATED) {  // 合并：队列中最多一个
+        if (k == ITCORE_EV_RENDER_INVALIDATED) {
             if (invalidated_pending) return;
             invalidated_pending = true;
         }
@@ -50,30 +61,40 @@ struct itcore_core final : itcore::TokenSink {
     void token(const itcore::Token &t) override {
         using itcore::TokenType;
         switch (t.type) {
-        case TokenType::Text: push(ITCORE_EV_RENDER_INVALIDATED); break;
+        case TokenType::Text:
+            screen->apply(t, nullptr);
+            push(ITCORE_EV_RENDER_INVALIDATED);
+            break;
         case TokenType::C0:
-            if (t.c == 0x07) push(ITCORE_EV_BELL); else push(ITCORE_EV_RENDER_INVALIDATED);
+            if (t.c == 0x07) push(ITCORE_EV_BELL);
+            else {
+                screen->apply(t, nullptr);
+                push(ITCORE_EV_RENDER_INVALIDATED);
+            }
             break;
-        case TokenType::Csi:
-            if (t.final == 'n' && t.priv == 0 && t.inter.empty() && t.params.size() == 1 &&
-                t.params[0][0] == 5)
-                push(ITCORE_EV_REPLY_BYTES, "\x1b[0n");  // DSR 5n；6n 待屏幕模型（T05）
-            else push(ITCORE_EV_RENDER_INVALIDATED);
+        case TokenType::Csi: {
+            std::string reply;
+            screen->apply(t, &reply);
+            if (!reply.empty()) push(ITCORE_EV_REPLY_BYTES, std::move(reply));
+            push(ITCORE_EV_RENDER_INVALIDATED);
             break;
-        case TokenType::Esc: push(ITCORE_EV_RENDER_INVALIDATED); break;
+        }
+        case TokenType::Esc:
+            screen->apply(t, nullptr);
+            push(ITCORE_EV_RENDER_INVALIDATED);
+            break;
         case TokenType::Osc: {
             auto semi = t.text.find(';');
             std::string num = t.text.substr(0, semi);
             std::string arg = semi == std::string::npos ? std::string() : t.text.substr(semi + 1);
             if (num == "0" || num == "2") push(ITCORE_EV_TITLE, sanitize_title(arg));
-            else if (num == "52") {  // 首版策略：核心消费并拒绝，不触达系统剪贴板
+            else if (num == "52")
                 push(ITCORE_EV_CLIPBOARD_REQUEST, arg.substr(0, arg.find(';')));
-            }
             break;
         }
         case TokenType::Incomplete: ++incomplete; break;
         case TokenType::Error: fatal = true; break;
-        default: break;  // DCS/SOS/PM/APC/INVALID：按状态机消费，无副作用
+        default: break;
         }
     }
 };
@@ -83,8 +104,18 @@ extern "C" {
 int itcore_create(const itcore_options *opt, itcore_core **out) {
     if (!out) return -1;
     *out = nullptr;
-    if (opt && (opt->struct_size < sizeof(itcore_options) || opt->abi_version != ITCORE_ABI_VERSION)) return -2;
-    *out = new (std::nothrow) itcore_core();
+    if (opt && (opt->struct_size < sizeof(itcore_options) || opt->abi_version != ITCORE_ABI_VERSION))
+        return -2;
+    uint16_t cols = 80, rows = 24;
+    uint32_t sb = 10000;
+    uint64_t mem = 64ull << 20;
+    if (opt) {
+        if (opt->columns) cols = opt->columns;
+        if (opt->rows) rows = opt->rows;
+        if (opt->scrollback_lines) sb = opt->scrollback_lines;
+        if (opt->memory_limit_bytes) mem = opt->memory_limit_bytes;
+    }
+    *out = new (std::nothrow) itcore_core(cols, rows, sb, mem);
     return *out ? 0 : -3;
 }
 
@@ -104,12 +135,19 @@ itcore_feed_result itcore_feed(itcore_core *c, const uint8_t *bytes, size_t leng
 
 int itcore_finish_input(itcore_core *c) {
     if (!c) return -1;
-    if (c->finished) return 0;  // 重复调用无副作用
+    if (c->finished) return 0;
     c->finished = true;
     if (c->fatal) return 0;
     bool utf8 = c->parser.utf8_pending();
     c->parser.finish(*c);
-    if (utf8) c->push(ITCORE_EV_RENDER_INVALIDATED);  // 残缺 UTF-8 → 一个 U+FFFD 进入屏幕
+    if (utf8) {
+        // 残缺 UTF-8 → 解析器已产出 U+FFFD Text 或需补写
+        itcore::Token t;
+        t.type = itcore::TokenType::Text;
+        t.text = "\xEF\xBF\xBD";
+        c->screen->apply(t, nullptr);
+        c->push(ITCORE_EV_RENDER_INVALIDATED);
+    }
     return 0;
 }
 
@@ -130,10 +168,57 @@ const uint8_t *itcore_event_data(const itcore_event *e, size_t *len) {
 void itcore_event_release(itcore_event *e) { delete e; }
 void itcore_destroy(itcore_core *c) { delete c; }
 
-// 以下为 T05 屏幕模型范围，当前返回失败。
-int itcore_resize(itcore_core *, uint16_t, uint16_t, uint64_t) { return -100; }
-int itcore_encode_text(itcore_core *, const char *, size_t, itcore_buffer **o) { if (o) *o = nullptr; return -100; }
-int itcore_encode_paste(itcore_core *, const char *, size_t, itcore_buffer **o) { if (o) *o = nullptr; return -100; }
-void itcore_buffer_release(itcore_buffer *) {}
-itcore_snapshot *itcore_acquire_snapshot(itcore_core *, int32_t, uint16_t) { return nullptr; }
+int itcore_resize(itcore_core *c, uint16_t columns, uint16_t rows, uint64_t generation) {
+    if (!c || !columns || !rows) return -1;
+    if (generation && generation < c->resize_gen) return -2;  // 过期
+    c->resize_gen = generation ? generation : c->resize_gen + 1;
+    c->screen->resize(columns, rows);
+    c->push(ITCORE_EV_RENDER_INVALIDATED);
+    return 0;
 }
+
+int itcore_encode_text(itcore_core *, const char *, size_t, itcore_buffer **o) {
+    if (o) *o = nullptr;
+    return -100;  // T06+
+}
+int itcore_encode_paste(itcore_core *, const char *, size_t, itcore_buffer **o) {
+    if (o) *o = nullptr;
+    return -100;
+}
+void itcore_buffer_release(itcore_buffer *b) { delete b; }
+
+itcore_snapshot *itcore_acquire_snapshot(itcore_core *c, int32_t first_row, uint16_t row_count) {
+    if (!c || !c->screen || !row_count) return nullptr;
+    auto *s = new (std::nothrow) itcore_snapshot;
+    if (!s) return nullptr;
+    s->data = c->screen->take_snapshot(first_row, row_count);
+    s->rows.resize(s->data.rows_data.size());
+    for (size_t i = 0; i < s->data.rows_data.size(); ++i) {
+        auto &src = s->data.rows_data[i];
+        s->rows[i].resize(src.cells.size());
+        for (size_t x = 0; x < src.cells.size(); ++x) s->rows[i][x] = src.cells[x].to_abi();
+    }
+    return s;
+}
+uint64_t itcore_snapshot_revision(const itcore_snapshot *s) { return s ? s->data.revision : 0; }
+uint16_t itcore_snapshot_columns(const itcore_snapshot *s) { return s ? s->data.cols : 0; }
+uint16_t itcore_snapshot_rows(const itcore_snapshot *s) { return s ? s->data.rows : 0; }
+const itcore_cell *itcore_snapshot_row(const itcore_snapshot *s, uint16_t row, itcore_wrap *wrap, uint64_t *row_revision) {
+    if (!s || row >= s->rows.size()) return nullptr;
+    if (wrap) *wrap = s->data.rows_data[row].wrap;
+    if (row_revision) *row_revision = s->data.rows_data[row].revision;
+    return s->rows[row].data();
+}
+const char *itcore_snapshot_grapheme(const itcore_snapshot *s, uint32_t grapheme_id, size_t *len) {
+    if (!s) { if (len) *len = 0; return ""; }
+    return s->data.pool_copy.get(grapheme_id, len);
+}
+void itcore_snapshot_cursor(const itcore_snapshot *s, uint16_t *col, uint16_t *row, int *visible) {
+    if (!s) return;
+    if (col) *col = static_cast<uint16_t>(s->data.cursor_col);
+    if (row) *row = static_cast<uint16_t>(s->data.cursor_row);
+    if (visible) *visible = s->data.cursor_visible ? 1 : 0;
+}
+void itcore_snapshot_release(itcore_snapshot *s) { delete s; }
+
+}  // extern "C"

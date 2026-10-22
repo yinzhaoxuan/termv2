@@ -31,3 +31,21 @@
 - UTF-8 严格解码：拒绝过长编码（E0 80..9F、F0 80..8F）、代理区（ED A0..BF）及 > U+10FFFF（F4 90+），输出 U+FFFD。
 - OSC/DCS 负载中除 BEL/ESC/CAN/SUB 外的 C0 字节被忽略。
 - core.cpp：按设计 §14.1 接入 vt_parser（有界事件队列 1024、NEED_DRAIN、ParserLimitExceeded→FATAL、finish_input 幂等）。
+
+## T05：屏幕模型（Grid / Cell / Scrollback）
+
+| 本仓库 | 上游文件 | 上游函数/结构 | 修改与原因 |
+|---|---|---|---|
+| `src/screen.h` `Cell` / `itcore_cell` | `sources/ScreenChar/ScreenChar.h` `screen_char_t` | 字素簇 ID、宽、fg/bg/样式、continuation | 去掉 UTF-16/`complexChar` 私有码点表，改为 grapheme 池 + `ITCORE_CELL_CONTINUATION`；颜色统一 `0xTTRRGGBB`（设计 14.2）。 |
+| `src/screen.h` `Row` / `Grid` | `sources/VT100/VT100Grid.{h,m}` | 光标、滚动区、行、默认字符、scrollUp/appendChars | 去除 DVR/代理/脏行；行带 `id`/`revision`/`itcore_wrap`（hard/soft/wide）；0 基坐标在协议边界转 1 基。 |
+| `src/screen.h` `Scrollback` | `sources/LineBuffer/LineBuffer.h` | 未包装逻辑行 + 按宽重排 | 双重限额（行数与字节，设计 15.4：默认 10000 / 64MiB）；重排合并连续 soft 逻辑行；无 LineBlock 分块/搜索索引（P1 子集）。 |
+| `src/screen.cpp` `apply_csi_defaults` | `sources/VT100/VT100CSIParser.m` `SetCSITypeAndDefaultParameters` | CUP/HVP→1,1；ED/EL/DSR/DA/SGR→0；CU*/ICH/DCH/IL/DL/…→1 | 仅实现 P1 网格/模式/查询相关命令；返回命令标签供应用层分派；其余 CSI 仍由解析器消费、无副作用。 |
+| `src/screen.cpp` `Screen::do_sgr` / `set_mode` | `sources/VT100/VT100Terminal.m` `executeSGR` / DECSET/DECRST | 粗体/斜体/下划线/反色、16/256/真彩（分号与冒号子参数）、DECAWM/DECOM/IRM/DECTCEM、47/1047/1048/1049、2004 | 无 SGR 栈、无图片/鼠标扩展；DA1 应答拟定 `?1;2c`（设计 14.3，未冻结）。 |
+| `src/screen.cpp` `cell_width` | `sources/ScreenChar/ScreenChar.m` 宽字符逻辑 | 东亚宽≈2、组合/ZWJ=0 | **差异**：未移植完整 UCD/emoji ZWJ 序列宽度；默认策略固定为精简区间表（设计 14.2）。 |
+| `src/core.cpp` 快照 ABI | 设计 14.1 / 14.2 `Snapshot` | `acquire_snapshot` / grapheme / cursor | 快照自持字素池拷贝；`first_row` 相对视口顶（负=历史）；销毁 core 后快照仍可读至 release。 |
+
+### T05 已知差异（相对上游完整 VT100Screen）
+- 未移植：标记/提示符状态机、DVR、完整 bidirectional、OSC 8 写入超链接池、六进制/图像、鼠标报告编码、bracketed paste 的 encode 路径（`encode_*` 仍 -100）。
+- 滚动历史：按显示行驱逐并标记 hard/soft；软换行合并在重排阶段完成，不保留上游 LineBlock 元数据。
+- 宽度重排在快照读取时按当前列宽计算，不维护持久 wrapped 索引缓存。
+- `finish_input` 对残缺 UTF-8 显式写入 U+FFFD（解析器仅计 `Incomplete`）。
