@@ -19,6 +19,10 @@ cases={
  "utf8_invalid_tail": b"\xff"+"中".encode()+b"\xe4\xb8",
  "csi_prefix_mid": E+b"[1?2h",
  "csi_empty_params": E+b"[;5H"+E+b"[1;;m"+E+b"[:3m",
+ "csi_cancel_can": E+b"[1\x18A",
+ "utf8_surrogate": b"\xed\xa0\x80A",
+ "utf8_overlong": b"\xe0\x80\x80\xf0\x8f\xbf\xbf\xf4\x90\x80\x80B",
+ "osc_c0_ignored": E+b"]2;a\x01\x0ab\x07",
 }
 vec=[{"case":"T04-EXTRA","name":k,"hex":v.hex(),"expect":"切分无关","splits":splits(v)} for k,v in cases.items()]
 json.dump(vec,open(sys.argv[1] if len(sys.argv)>1 else "extra.json","w"),ensure_ascii=False,indent=1)

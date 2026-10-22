@@ -25,3 +25,9 @@
 | `State::Esc`/`EscInter` | 设计 15.2 | ESC + 中间字节 + 最终字节输出 `ESC` Token；CAN/SUB/ESC/0x80+ 取消（`INVALID`）。 |
 | `State::Str`/`StrEsc`、`str_append` | 设计 15.2 | OSC（BEL 或 ST 结束）、DCS/SOS/PM/APC（ST 结束）。负载上限 1 MiB，超限后丢弃并置 `trunc`，仍识别终止符；丢弃再超 1 MiB → `ERROR ParserLimitExceeded` 并停止解析（Dead）。CAN/SUB 取消；ESC 后非 `\` 取消并重新进入 ESC。 |
 | `tools/itcore_test_tokens.cpp` | 测试计划 CORE-01/02 | 命令行驱动。 |
+
+## 评审偏离（T04 追加）
+- CAN/SUB 在 Esc/Csi/Str 状态：输出 INVALID 后丢弃该字节（不再作为 C0 输出）；ESC 仍重入。上游 iTerm2 VT100Parser 将其作为控制字符输出。
+- UTF-8 严格解码：拒绝过长编码（E0 80..9F、F0 80..8F）、代理区（ED A0..BF）及 > U+10FFFF（F4 90+），输出 U+FFFD。
+- OSC/DCS 负载中除 BEL/ESC/CAN/SUB 外的 C0 字节被忽略。
+- core.cpp：按设计 §14.1 接入 vt_parser（有界事件队列 1024、NEED_DRAIN、ParserLimitExceeded→FATAL、finish_input 幂等）。

@@ -131,7 +131,17 @@ void Parser::step(uint8_t b, TokenSink &sink) {
             return;
         case State::Ground:
             if (utf8_need_ > 0) {
-                if ((b & 0xc0) == 0x80) {
+                uint8_t lo = 0x80, hi = 0xbf;
+                if (utf8_have_ == 1) {  // 拒绝过长编码、代理区与超出 U+10FFFF
+                    switch (utf8_buf_[0]) {
+                        case 0xe0: lo = 0xa0; break;
+                        case 0xed: hi = 0x9f; break;
+                        case 0xf0: lo = 0x90; break;
+                        case 0xf4: hi = 0x8f; break;
+                        default: break;
+                    }
+                }
+                if (b >= lo && b <= hi) {
                     utf8_buf_[utf8_have_++] = b;
                     if (utf8_have_ == utf8_need_ + 1) {
                         text_.append(reinterpret_cast<char *>(utf8_buf_), utf8_have_);
@@ -154,7 +164,7 @@ void Parser::step(uint8_t b, TokenSink &sink) {
 
         case State::Esc:
         case State::EscInter:
-            if (b == CAN || b == SUB) { emit_simple(TokenType::Invalid, sink); state_ = State::Ground; continue; }
+            if (b == CAN || b == SUB) { emit_simple(TokenType::Invalid, sink); state_ = State::Ground; return; }  // 取消，CAN/SUB 本身丢弃
             if (b == ESC) { emit_simple(TokenType::Invalid, sink); esc_inter_.clear(); state_ = State::Esc; return; }
             if (b < 0x20) { Token t; t.type = TokenType::C0; t.c = b; emit(std::move(t), sink); return; }
             if (b == DEL) return;
@@ -180,7 +190,10 @@ void Parser::step(uint8_t b, TokenSink &sink) {
 
         case State::Csi:
             // AdvanceAndEatControlChars：CAN/SUB/ESC 取消序列；部分 C0 作为 incidental 输出；其余 C0 吞掉。
-            if (b == CAN || b == SUB || b == ESC) {
+            if (b == CAN || b == SUB) {  // 取消，CAN/SUB 本身丢弃
+                emit_simple(TokenType::Invalid, sink); state_ = State::Ground; return;
+            }
+            if (b == ESC) {  // 取消并以 ESC 重新开始
                 emit_simple(TokenType::Invalid, sink); state_ = State::Ground; continue;
             }
             if (b < 0x20 || b == DEL) {
@@ -222,8 +235,9 @@ void Parser::step(uint8_t b, TokenSink &sink) {
 
         case State::Str:
             if (b == ESC) { state_ = State::StrEsc; return; }
-            if (b == CAN || b == SUB) { emit_simple(TokenType::Invalid, sink); payload_.clear(); state_ = State::Ground; continue; }
+            if (b == CAN || b == SUB) { emit_simple(TokenType::Invalid, sink); payload_.clear(); state_ = State::Ground; return; }
             if (b == BEL && str_type_ == TokenType::Osc) { str_finish(sink); return; }
+            if (b < 0x20) return;  // 负载中其余 C0 忽略
             str_append(b, sink);
             return;
 

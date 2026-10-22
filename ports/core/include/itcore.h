@@ -26,7 +26,7 @@ typedef struct { uint32_t grapheme_id; uint8_t width; uint8_t reserved; uint16_t
 typedef enum { ITCORE_WRAP_HARD = 0, ITCORE_WRAP_SOFT = 1, ITCORE_WRAP_WIDE = 2 } itcore_wrap;
 
 typedef enum { ITCORE_EV_REPLY_BYTES = 1, ITCORE_EV_TITLE = 2, ITCORE_EV_BELL = 3,
-               ITCORE_EV_RENDER_INVALIDATED = 4 } itcore_event_kind;
+               ITCORE_EV_RENDER_INVALIDATED = 4, ITCORE_EV_CLIPBOARD_REQUEST = 5 } itcore_event_kind;
 
 int  itcore_create(const itcore_options *opt, itcore_core **out);
 itcore_feed_result itcore_feed(itcore_core *c, const uint8_t *bytes, size_t length);
@@ -37,7 +37,12 @@ int  itcore_encode_paste(itcore_core *c, const char *utf8, size_t len, itcore_bu
 void itcore_buffer_release(itcore_buffer *b);
 itcore_event *itcore_next_event(itcore_core *c);
 itcore_event_kind itcore_event_type(const itcore_event *e);
+/* 事件负载：REPLY_BYTES 为待写回字节，TITLE 为清洗后的 UTF-8，CLIPBOARD_REQUEST 为
+   已被拒绝的 OSC 52 选择参数；指针在 itcore_event_release 前有效。 */
+const uint8_t *itcore_event_data(const itcore_event *e, size_t *len);
 void itcore_event_release(itcore_event *e);
+/* finish_input 丢弃的残缺控制序列计数（含 EOF 时残缺 UTF-8，后者另产生一个 U+FFFD） */
+uint64_t itcore_incomplete_count(const itcore_core *c);
 
 itcore_snapshot *itcore_acquire_snapshot(itcore_core *c, int32_t first_row, uint16_t row_count);
 uint64_t itcore_snapshot_revision(const itcore_snapshot *s);

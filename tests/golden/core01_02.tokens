@@ -24,11 +24,9 @@
 {"t":"INCOMPLETE"}
 # CORE-02 cancel_can
 {"t":"INVALID"}
-{"t":"C0","c":24}
 {"t":"TEXT","s":"A"}
 # CORE-02 cancel_sub
 {"t":"INVALID"}
-{"t":"C0","c":26}
 {"t":"TEXT","s":"A"}
 # CORE-02 esc_restart
 {"t":"INVALID"}
@@ -42,5 +40,15 @@
 {"t":"C0","c":7}
 {"t":"C0","c":127}
 {"t":"CSI","priv":"","inter":"","final":"H","p":[[12]],"trunc":false}
+# CORE-02 can_no_c0
+{"t":"INVALID"}
+# CORE-02 utf8_surrogate
+{"t":"TEXT","s":"���"}
+# CORE-02 utf8_overlong
+{"t":"TEXT","s":"���"}
+# CORE-02 utf8_over_max
+{"t":"TEXT","s":"����"}
+# CORE-02 osc_c0_filter
+{"t":"OSC","s":"0;abc","trunc":false}
 # CORE-02 invalid_final
 {"t":"INVALID"}

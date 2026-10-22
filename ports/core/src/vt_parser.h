@@ -54,6 +54,7 @@ public:
     // EOF：丢弃未完成序列并输出 INCOMPLETE。
     void finish(TokenSink &sink);
     bool dead() const { return state_ == State::Dead; }
+    bool utf8_pending() const { return utf8_need_ > 0; }
 
 private:
     enum class State { Ground, Esc, EscInter, Csi, Str, StrEsc, Dead };

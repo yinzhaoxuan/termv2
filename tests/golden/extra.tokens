@@ -7,7 +7,6 @@
 {"t":"DCS","s":"1$r","trunc":false}
 # T04-EXTRA osc_cancel_can
 {"t":"INVALID"}
-{"t":"C0","c":24}
 {"t":"TEXT","s":"y"}
 # T04-EXTRA osc_esc_restart
 {"t":"INVALID"}
@@ -25,3 +24,12 @@
 {"t":"CSI","priv":"","inter":"","final":"H","p":[[null],[5]],"trunc":false}
 {"t":"CSI","priv":"","inter":"","final":"m","p":[[1],[null]],"trunc":false}
 {"t":"CSI","priv":"","inter":"","final":"m","p":[[null,3]],"trunc":false}
+# T04-EXTRA csi_cancel_can
+{"t":"INVALID"}
+{"t":"TEXT","s":"A"}
+# T04-EXTRA utf8_surrogate
+{"t":"TEXT","s":"���A"}
+# T04-EXTRA utf8_overlong
+{"t":"TEXT","s":"�����������B"}
+# T04-EXTRA osc_c0_ignored
+{"t":"OSC","s":"2;ab","trunc":false}
