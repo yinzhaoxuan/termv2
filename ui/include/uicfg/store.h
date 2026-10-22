@@ -40,4 +40,8 @@ LoadResult loadConnections(const std::filesystem::path& file);
 bool saveConnections(const std::filesystem::path& file, ConnectionsFile& data,
                      bool readOnly, std::string* error);
 
+// 原子保存底层：临时文件落盘 + 替换（Windows 含 FlushFileBuffers / 占用重试）
+bool writeDurable(const std::filesystem::path& tmp, const std::string& bytes, std::string* err);
+bool replaceFile(const std::filesystem::path& tmp, const std::filesystem::path& target, std::string* err);
+
 }  // namespace uicfg

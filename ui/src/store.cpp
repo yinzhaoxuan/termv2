@@ -123,6 +123,8 @@ Parse parseFile(const fs::path& p, ConnectionsFile& out, std::string& why) {
   } catch (const std::exception& e) { why = e.what(); return Parse::Bad; }
 }
 
+}  // namespace (helpers below are public)
+
 bool writeDurable(const fs::path& tmp, const std::string& bytes, std::string* err) {
 #ifdef _WIN32
   HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -162,7 +164,7 @@ bool replaceFile(const fs::path& tmp, const fs::path& target, std::string* err) 
 #endif
 }
 
-}  // namespace
+
 
 LoadResult loadConnections(const fs::path& file) {
   LoadResult r;
