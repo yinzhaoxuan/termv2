@@ -126,21 +126,28 @@ static SshExitInfo connectAskpass(const SshTarget &t, const char *name, const st
     OutputTail tail; tail.append(out);
     return mapSshExit(uint32_t(rc), tail.text());
 }
+// 凭据目录：环境变量 IT2W_SSH_LAB 指定，默认 /workspace/qa/ssh-lab（凭据不入库、不打印）
+static std::string labPath(const char *f) {
+    const char *d = std::getenv("IT2W_SSH_LAB");
+    std::string dir = (d && *d) ? d : "/workspace/qa/ssh-lab";
+    if (dir.back() != '/') dir += '/';
+    return dir + f;
+}
 static void live_secret() {
-    const char *pw = "/home/it2wcli/lab/it2wpw.password";
-    const char *pk = "/home/it2wcli/lab/id_pass", *pp = "/home/it2wcli/lab/id_pass.passphrase";
+    const std::string pws = labPath("it2wpw.password"), pks = labPath("id_pass"), pps = labPath("id_pass.passphrase");
+    const char *pw = pws.c_str(), *pk = pks.c_str(), *pp = pps.c_str();
     if (portOpen(22423) && access(pw, R_OK) == 0) {
         std::string scan; run("ssh-keyscan -p 22423 127.0.0.1 2>/dev/null", &scan);
         std::ofstream(tmpdir + "/known_hosts", std::ios::app) << scan;
         auto e = connectAskpass(target(22423, "it2wpw", SshAuthMode::Interactive), "p.conf", pw);
-        std::printf("  password exit 7 -> %s (%u)\\n", sshErrorName(e.error), e.exitCode);
+        std::printf("  password exit 7 -> %s (%u)\n", sshErrorName(e.error), e.exitCode);
         CHECK(e.error == SshError::RemoteExit && e.exitCode == 7);
-    } else std::printf("SKIP live password: 22423 不可达或 %s 对当前用户不可读\\n", pw);
+    } else std::printf("SKIP live password: 22423 不可达或 %s 对当前用户不可读\n", pw);
     if (access(pk, R_OK) == 0 && access(pp, R_OK) == 0) {
         auto e = connectAskpass(target(22422, "it2wtest", SshAuthMode::KeyFile, std::string("/") + pk), "q.conf", pp);
-        std::printf("  passphrase-key -> %s (%u)\\n", sshErrorName(e.error), e.exitCode);
-        CHECK(e.error == SshError::RemoteExit || e.error == SshError::AuthFailed);
-    } else std::printf("SKIP live passphrase-key: %s 或口令文件对当前用户不可读\\n", pk);
+        std::printf("  passphrase-key exit 7 -> %s (%u)\n", sshErrorName(e.error), e.exitCode);
+        CHECK(e.error == SshError::RemoteExit && e.exitCode == 7);
+    } else std::printf("SKIP live passphrase-key: %s 或口令文件对当前用户不可读\n", pk);
 }
 
 static void live() {
@@ -173,8 +180,8 @@ static void live() {
     e = connect(target(1, "it2wtest", SshAuthMode::KeyFile, stranger), "d.conf");
     std::printf("  refused -> %s\n", sshErrorName(e.error));
     CHECK(e.error == SshError::ConnectionRefused);
-    // 4) 授权密钥实连：远端 exit 7 → RemoteExit；需本账户可读 /home/it2wcli/lab/id_test
-    const char *key = "/home/it2wcli/lab/id_test";
+    // 4) 授权密钥实连：远端 exit 7 → RemoteExit；凭据目录见 labPath
+    const std::string keys = labPath("id_test"); const char *key = keys.c_str();
     if (access(key, R_OK) == 0) {
         e = connectRetry(target(22422, "it2wtest", SshAuthMode::KeyFile, std::string("/") + key), "f.conf");
         std::printf("  authorized-key exit 7 -> %s (%u)\n", sshErrorName(e.error), e.exitCode);
