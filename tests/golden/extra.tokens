@@ -1,0 +1,27 @@
+# T04-EXTRA osc_bel_st
+{"t":"OSC","s":"0;标题","trunc":false}
+{"t":"TEXT","s":"a"}
+{"t":"OSC","s":"8;;http://x","trunc":false}
+{"t":"TEXT","s":"b"}
+# T04-EXTRA dcs_st
+{"t":"DCS","s":"1$r","trunc":false}
+# T04-EXTRA osc_cancel_can
+{"t":"INVALID"}
+{"t":"C0","c":24}
+{"t":"TEXT","s":"y"}
+# T04-EXTRA osc_esc_restart
+{"t":"INVALID"}
+{"t":"ESC","inter":"","final":"c"}
+{"t":"TEXT","s":"Q"}
+# T04-EXTRA esc_inter
+{"t":"ESC","inter":"(","final":"B"}
+{"t":"ESC","inter":"#","final":"8"}
+# T04-EXTRA utf8_invalid_tail
+{"t":"TEXT","s":"�中"}
+{"t":"INCOMPLETE"}
+# T04-EXTRA csi_prefix_mid
+{"t":"INVALID"}
+# T04-EXTRA csi_empty_params
+{"t":"CSI","priv":"","inter":"","final":"H","p":[[null],[5]],"trunc":false}
+{"t":"CSI","priv":"","inter":"","final":"m","p":[[1],[null]],"trunc":false}
+{"t":"CSI","priv":"","inter":"","final":"m","p":[[null,3]],"trunc":false}

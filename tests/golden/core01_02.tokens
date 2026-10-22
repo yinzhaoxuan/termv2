@@ -1,0 +1,46 @@
+# CORE-01 sgr_basic
+{"t":"CSI","priv":"","inter":"","final":"m","p":[[1],[31]],"trunc":false}
+{"t":"TEXT","s":"Hi"}
+{"t":"CSI","priv":"","inter":"","final":"m","p":[[0]],"trunc":false}
+# CORE-01 cup
+{"t":"CSI","priv":"","inter":"","final":"H","p":[[10],[20]],"trunc":false}
+# CORE-01 private_mode
+{"t":"CSI","priv":"?","inter":"","final":"h","p":[[1049]],"trunc":false}
+{"t":"CSI","priv":"?","inter":"","final":"l","p":[[1049]],"trunc":false}
+# CORE-01 subparams
+{"t":"CSI","priv":"","inter":"","final":"m","p":[[38,2,null,255,0,0]],"trunc":false}
+# CORE-01 intermediate
+{"t":"CSI","priv":"","inter":" ","final":"q","p":[],"trunc":false}
+# CORE-01 mixed_text
+{"t":"TEXT","s":"abc"}
+{"t":"CSI","priv":"","inter":"","final":"J","p":[[2]],"trunc":false}
+{"t":"TEXT","s":"xyz"}
+{"t":"CSI","priv":"","inter":"","final":"K","p":[],"trunc":false}
+# CORE-01 utf8_cjk
+{"t":"TEXT","s":"中文测试"}
+{"t":"CSI","priv":"","inter":"","final":"C","p":[[5]],"trunc":false}
+{"t":"TEXT","s":"é"}
+# CORE-02 incomplete_eof
+{"t":"INCOMPLETE"}
+# CORE-02 cancel_can
+{"t":"INVALID"}
+{"t":"C0","c":24}
+{"t":"TEXT","s":"A"}
+# CORE-02 cancel_sub
+{"t":"INVALID"}
+{"t":"C0","c":26}
+{"t":"TEXT","s":"A"}
+# CORE-02 esc_restart
+{"t":"INVALID"}
+{"t":"CSI","priv":"","inter":"","final":"m","p":[[3]],"trunc":false}
+{"t":"TEXT","s":"X"}
+# CORE-02 huge_params
+{"t":"CSI","priv":"","inter":"","final":"m","p":[[9],[9],[9],[9],[9],[9],[9],[9],[9],[9],[9],[9],[9],[9],[9],[9]],"trunc":true}
+# CORE-02 huge_number
+{"t":"CSI","priv":"","inter":"","final":"A","p":[[2147483647]],"trunc":true}
+# CORE-02 invalid_ctrl
+{"t":"C0","c":7}
+{"t":"C0","c":127}
+{"t":"CSI","priv":"","inter":"","final":"H","p":[[12]],"trunc":false}
+# CORE-02 invalid_final
+{"t":"INVALID"}
