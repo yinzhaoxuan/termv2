@@ -80,7 +80,10 @@ void ConPtyTransport::failStart(TransportFault f, const char *stage, DWORD err) 
     // 逆序释放：线程先停，再关句柄
     writerStop_ = true;
     closePseudoConsoleOnce();
-    if (reader_) WaitForSingleObject(reader_, INFINITE);  // ConPTY 已关闭，读线程会读到 EOF；不提前释放 outRead
+    if (reader_) {
+        WaitForSingleObject(reader_, INFINITE);  // ConPTY 已关闭，读线程会读到 EOF；不提前释放 outRead
+        closeH(reader_);
+    }
     closeH(inWrite_); closeH(outRead_); closeH(process_); closeH(job_);
     if (snapshot_) DeleteFileW(snapshot_->c_str());
     setState(TransportState::Failed, f);
@@ -361,6 +364,7 @@ void ConPtyTransport::doClose() {
         WaitForSingleObject(reader_, INFINITE);
     }
     closeH(outRead_);
+    closeH(reader_);
     { Lock l(lock_); if (output_.incomplete()) diag("close.drain-discarded", 0, output_.discardedBytes(), "数据不完整"); }
     t = stage("close.reader", t);
     // 7. 进程退出码，关闭 hProcess，最后关闭 hJob

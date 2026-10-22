@@ -242,6 +242,7 @@ void Grid::insert_chars(int n, const Cell &blank) {
     for (int i = cols_ - 1; i >= cursor_.x + n; --i) cells[i] = cells[i - n];
     for (int i = 0; i < n; ++i) cells[cursor_.x + i] = blank;
     ++rows_data_[cursor_.y].revision;
+    repair_wide_orphans(cursor_.y);
 }
 void Grid::delete_chars(int n, const Cell &blank) {
     auto &cells = rows_data_[cursor_.y].cells;
@@ -249,6 +250,89 @@ void Grid::delete_chars(int n, const Cell &blank) {
     for (int i = cursor_.x; i + n < cols_; ++i) cells[i] = cells[i + n];
     for (int i = cols_ - n; i < cols_; ++i) cells[i] = blank;
     ++rows_data_[cursor_.y].revision;
+    repair_wide_orphans(cursor_.y);
+}
+void Grid::repair_wide_orphans(int y) {
+    if (y < 0 || y >= rows_) return;
+    auto &cells = rows_data_[y].cells;
+    const Cell blank = Cell::blank();
+    for (int x = 0; x < cols_;) {
+        Cell &c = cells[x];
+        if (c.flags & ITCORE_CELL_CONTINUATION) {
+            // 孤立尾格：无基字覆盖
+            c = blank;
+            ++rows_data_[y].revision;
+            ++x;
+            continue;
+        }
+        int w = c.width ? c.width : 1;
+        if (w < 1) w = 1;
+        if (x + w > cols_) {
+            // 宽字溢出：降为窄并清尾
+            c.width = 1;
+            c.flags = static_cast<uint16_t>(c.flags & ~ITCORE_CELL_CONTINUATION);
+            for (int k = x + 1; k < cols_; ++k) cells[k] = blank;
+            ++rows_data_[y].revision;
+            ++x;
+            continue;
+        }
+        for (int k = 1; k < w; ++k) {
+            if (!(cells[x + k].flags & ITCORE_CELL_CONTINUATION)) {
+                Cell cont = blank;
+                cont.flags = ITCORE_CELL_CONTINUATION;
+                cont.width = 0;
+                cells[x + k] = cont;
+                ++rows_data_[y].revision;
+            }
+        }
+        // 若下一格是 CONTINUATION 但超出本字 width，清掉孤儿
+        int nx = x + w;
+        while (nx < cols_ && (cells[nx].flags & ITCORE_CELL_CONTINUATION)) {
+            cells[nx] = blank;
+            ++rows_data_[y].revision;
+            ++nx;
+        }
+        x += w;
+    }
+}
+void Grid::clear_for_write(int x, int y, int write_width, const Cell &blank) {
+    if (y < 0 || y >= rows_ || x < 0 || x >= cols_) return;
+    auto &cells = rows_data_[y].cells;
+    // 若目标是 CONTINUATION：回溯到基字并整段清空
+    int base = x;
+    if (cells[x].flags & ITCORE_CELL_CONTINUATION) {
+        while (base > 0 && (cells[base].flags & ITCORE_CELL_CONTINUATION)) --base;
+        int ow = cells[base].width ? cells[base].width : 1;
+        for (int i = 0; i < ow && base + i < cols_; ++i) cells[base + i] = blank;
+        ++rows_data_[y].revision;
+    }
+    // 覆盖区间内每个基字及其尾格
+    int end = x + (write_width > 0 ? write_width : 1);
+    if (end > cols_) end = cols_;
+    for (int i = x; i < end; ) {
+        if (cells[i].flags & ITCORE_CELL_CONTINUATION) {
+            int b = i;
+            while (b > 0 && (cells[b].flags & ITCORE_CELL_CONTINUATION)) --b;
+            int ow = cells[b].width ? cells[b].width : 1;
+            for (int k = 0; k < ow && b + k < cols_; ++k) cells[b + k] = blank;
+            ++rows_data_[y].revision;
+            i = b + ow;
+            continue;
+        }
+        int ow = cells[i].width ? cells[i].width : 1;
+        if (ow < 1) ow = 1;
+        // 窄盖宽：清掉多出的尾格
+        if (ow > 1 && i + ow > end) {
+            for (int k = end; k < i + ow && k < cols_; ++k) cells[k] = blank;
+            ++rows_data_[y].revision;
+        }
+        for (int k = 0; k < ow && i + k < cols_; ++k) {
+            if (i + k >= x && i + k < end) cells[i + k] = blank;
+        }
+        i += ow;
+    }
+    // 写 CONTINUATION 场景：确保区间左侧若被切到中段已清净（上面已处理）
+    ++rows_data_[y].revision;
 }
 void Grid::clamp_cursor(bool allow_pending) {
     int max_x = allow_pending ? cols_ : cols_ - 1;
@@ -514,12 +598,18 @@ void Screen::write_char(uint32_t cp, const uint8_t *utf8, size_t utf8_len) {
         std::string merged(og, olen);
         merged.append(reinterpret_cast<const char *>(utf8), utf8_len);
         uint32_t gid = pool_.intern(merged);
-        // 写回光标前一格
-        int x = g.cursor().x, y = g.cursor().y;
-        if (g.wrap_pending()) { /* 仍在行末 */ }
-        else if (x > 0) {
-            int tx = x - 1;
+        int y = g.cursor().y;
+        int tx = -1;
+        if (g.wrap_pending()) {
+            // 评审：wrap_pending 时回写本行最后一个非 CONTINUATION 格，不触发换行
+            tx = g.cols() - 1;
             while (tx > 0 && (g.row(y).cells[tx].flags & ITCORE_CELL_CONTINUATION)) --tx;
+            if (tx < 0 || (g.row(y).cells[tx].flags & ITCORE_CELL_CONTINUATION)) tx = -1;
+        } else if (g.cursor().x > 0) {
+            tx = g.cursor().x - 1;
+            while (tx > 0 && (g.row(y).cells[tx].flags & ITCORE_CELL_CONTINUATION)) --tx;
+        }
+        if (tx >= 0) {
             g.row(y).cells[tx].grapheme_id = gid;
             ++g.row(y).revision;
             last_printed_.grapheme_id = gid;
@@ -544,6 +634,7 @@ void Screen::write_char(uint32_t cp, const uint8_t *utf8, size_t utf8_len) {
 
     auto place = [&](int x, int y) {
         if (x + w > g.cols()) return false;
+        g.clear_for_write(x, y, w, Cell::blank());
         g.row(y).cells[x] = cell;
         for (int k = 1; k < w; ++k) {
             Cell cont = Cell::blank();
@@ -722,6 +813,27 @@ void Screen::set_mode(const Token &t, bool set) {
                 }
                 break;
             case 2004: modes_.bracketed_paste = set; break;
+            case 1: modes_.app_cursor = set; break;  // DECCKM
+            case 9:
+                if (set) modes_.mouse_mode = (modes_.mouse_mode & ~(ITCORE_MOUSE_MODE_NORMAL|ITCORE_MOUSE_MODE_BUTTON|ITCORE_MOUSE_MODE_ANY)) | ITCORE_MOUSE_MODE_X10;
+                else modes_.mouse_mode &= ~ITCORE_MOUSE_MODE_X10;
+                break;
+            case 1000:
+                if (set) modes_.mouse_mode = (modes_.mouse_mode & ~(ITCORE_MOUSE_MODE_X10|ITCORE_MOUSE_MODE_BUTTON|ITCORE_MOUSE_MODE_ANY)) | ITCORE_MOUSE_MODE_NORMAL;
+                else modes_.mouse_mode &= ~ITCORE_MOUSE_MODE_NORMAL;
+                break;
+            case 1002:
+                if (set) modes_.mouse_mode = (modes_.mouse_mode & ~(ITCORE_MOUSE_MODE_X10|ITCORE_MOUSE_MODE_NORMAL|ITCORE_MOUSE_MODE_ANY)) | ITCORE_MOUSE_MODE_BUTTON;
+                else modes_.mouse_mode &= ~ITCORE_MOUSE_MODE_BUTTON;
+                break;
+            case 1003:
+                if (set) modes_.mouse_mode = (modes_.mouse_mode & ~(ITCORE_MOUSE_MODE_X10|ITCORE_MOUSE_MODE_NORMAL|ITCORE_MOUSE_MODE_BUTTON)) | ITCORE_MOUSE_MODE_ANY;
+                else modes_.mouse_mode &= ~ITCORE_MOUSE_MODE_ANY;
+                break;
+            case 1006:
+                if (set) modes_.mouse_mode |= ITCORE_MOUSE_MODE_SGR;
+                else modes_.mouse_mode &= ~ITCORE_MOUSE_MODE_SGR;
+                break;
             default: break;
             }
         } else {
@@ -871,6 +983,7 @@ Screen::SnapshotData Screen::take_snapshot(int32_t first_row, uint16_t row_count
     if (sn.cursor_col < 0) sn.cursor_col = 0;
     sn.cursor_row = grid().cursor().y;
     sn.cursor_visible = modes_.cursor_visible;
+    sn.mouse_mode = modes_.mouse_mode;
     sn.pool_copy = pool_;
 
     std::vector<Row> hist;

@@ -99,6 +99,100 @@ static void test_core03() {
         itcore_snapshot_release(s);
     }
     itcore_destroy(c);
+
+    // --- CORE-03 追加：wrap_pending 组合、宽字符孤儿、快照 generation ---
+    c = make(8, 3);
+    feed(c, "12345678");  // 填满一行 → wrap_pending
+    feed(c, std::string("\xCC\x81"));  // combining，应附着到 '8'
+    {
+        auto *s = itcore_acquire_snapshot(c, 0, 3);
+        std::string t = cell_text(s, 0, 7);
+        CHECK(t.size() >= 2);
+        CHECK(t[0] == '8');
+        itcore_wrap w; uint64_t rev;
+        const itcore_cell *r1 = itcore_snapshot_row(s, 1, &w, &rev);
+        bool empty = true;
+        for (int i = 0; i < 8; ++i) if (r1[i].grapheme_id) empty = false;
+        CHECK(empty);
+        itcore_snapshot_release(s);
+    }
+    itcore_destroy(c);
+
+    // 窄盖宽：清多余尾格
+    c = make(6, 2);
+    feed(c, "中");
+    feed(c, "\x1b[1;1H");
+    feed(c, "A");
+    {
+        auto *s = itcore_acquire_snapshot(c, 0, 2);
+        itcore_wrap w; uint64_t rev;
+        const itcore_cell *cells = itcore_snapshot_row(s, 0, &w, &rev);
+        CHECK(cell_text(s, 0, 0) == "A");
+        CHECK(!(cells[1].flags & ITCORE_CELL_CONTINUATION));
+        itcore_snapshot_release(s);
+    }
+    itcore_destroy(c);
+
+    // ICH 后行内修复
+    c = make(8, 2);
+    feed(c, "中文");
+    feed(c, "\x1b[1;2H");
+    feed(c, "\x1b[2@");
+    {
+        auto *s = itcore_acquire_snapshot(c, 0, 2);
+        itcore_wrap w; uint64_t rev;
+        const itcore_cell *cells = itcore_snapshot_row(s, 0, &w, &rev);
+        for (int x = 0; x < 8; ++x) {
+            if (cells[x].flags & ITCORE_CELL_CONTINUATION) {
+                CHECK(x > 0);
+                int b = x;
+                while (b > 0 && (cells[b].flags & ITCORE_CELL_CONTINUATION)) --b;
+                CHECK(!(cells[b].flags & ITCORE_CELL_CONTINUATION));
+                CHECK(b + cells[b].width > x);
+            }
+        }
+        itcore_snapshot_release(s);
+    }
+    itcore_destroy(c);
+
+    // DCH 后行内修复
+    c = make(8, 2);
+    feed(c, "中AB");
+    feed(c, "\x1b[1;1H");
+    feed(c, "\x1b[1P");
+    {
+        auto *s = itcore_acquire_snapshot(c, 0, 2);
+        itcore_wrap w; uint64_t rev;
+        const itcore_cell *cells = itcore_snapshot_row(s, 0, &w, &rev);
+        for (int x = 0; x < 8; ++x) {
+            if (cells[x].flags & ITCORE_CELL_CONTINUATION) {
+                int b = x;
+                while (b > 0 && (cells[b].flags & ITCORE_CELL_CONTINUATION)) --b;
+                CHECK(b + (cells[b].width ? cells[b].width : 1) > x);
+            }
+        }
+        itcore_snapshot_release(s);
+    }
+    itcore_destroy(c);
+
+    // 快照携带 resize generation
+    c = make(10, 4);
+    CHECK(itcore_resize(c, 12, 5, 42) == 0);
+    {
+        auto *s = itcore_acquire_snapshot(c, 0, 5);
+        CHECK(itcore_snapshot_generation(s) == 42);
+        CHECK(itcore_snapshot_columns(s) == 12);
+        CHECK(itcore_snapshot_rows(s) == 5);
+        itcore_snapshot_release(s);
+    }
+    CHECK(itcore_resize(c, 10, 4, 40) == -2);
+    CHECK(itcore_resize(c, 10, 4, 43) == 0);
+    {
+        auto *s = itcore_acquire_snapshot(c, 0, 4);
+        CHECK(itcore_snapshot_generation(s) == 43);
+        itcore_snapshot_release(s);
+    }
+    itcore_destroy(c);
 }
 
 // CORE-04：主备用屏、滚动区、清屏、DSR 光标查询

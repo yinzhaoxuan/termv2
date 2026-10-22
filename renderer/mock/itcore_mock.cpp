@@ -5,6 +5,8 @@
 struct itcore_snapshot {
   uint16_t cols, rows;
   uint64_t revision = 1;
+  uint64_t generation = 0;
+  uint32_t mouse_mode = 0;
   std::vector<std::vector<itcore_cell>> grid;
   std::vector<itcore_wrap> wrap;
   std::vector<uint64_t> row_rev;
@@ -80,4 +82,6 @@ extern "C" const char *itcore_snapshot_grapheme(const itcore_snapshot *s, uint32
 extern "C" void itcore_snapshot_cursor(const itcore_snapshot *s, uint16_t *col, uint16_t *row, int *visible) {
   if (col) *col = s->cur_col; if (row) *row = s->cur_row; if (visible) *visible = 1;
 }
+extern "C" uint64_t itcore_snapshot_generation(const itcore_snapshot *s) { return s ? s->generation : 0; }
+extern "C" uint32_t itcore_snapshot_mouse_mode(const itcore_snapshot *s) { return s ? s->mouse_mode : 0; }
 extern "C" void itcore_snapshot_release(itcore_snapshot *s) { delete s; }

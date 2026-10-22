@@ -102,6 +102,10 @@ public:
     void delete_lines(int n, const Cell &blank);
     void insert_chars(int n, const Cell &blank);
     void delete_chars(int n, const Cell &blank);
+    // 修复宽字符孤儿：孤立 CONTINUATION→blank；width 与尾格不一致→对齐/清空
+    void repair_wide_orphans(int y);
+    // 写格前：清掉将被覆盖的宽基字及其尾格；窄盖宽时清多余尾格
+    void clear_for_write(int x, int y, int write_width, const Cell &blank);
     void clamp_cursor(bool allow_pending);
     int origin_top() const { return origin_ ? scroll_top_ : 0; }
     int origin_bottom() const { return origin_ ? scroll_bottom_ : rows_ - 1; }
@@ -154,6 +158,9 @@ struct ScreenModes {
     bool cursor_visible = true;// DECTCEM
     bool alt = false;          // 当前是否备用屏
     bool bracketed_paste = false;
+    bool app_cursor = false;   // DECCKM (?1)
+    bool app_keypad = false;   // DECKPAM / DECKPNM
+    uint32_t mouse_mode = 0;   // ITCORE_MOUSE_MODE_* 位掩码
 };
 
 // CSI 默认参数（上游 SetCSITypeAndDefaultParameters 子集）；就地填充 omitted→default。
@@ -180,6 +187,8 @@ public:
     // first_row：相对视口顶部，0=屏幕首行，负=滚入历史。
     struct SnapshotData {
         uint64_t revision = 0;
+        uint64_t generation = 0;     // 最近成功 resize_gen（由 core 填入）
+        uint32_t mouse_mode = 0;
         uint16_t cols = 0, rows = 0;
         int cursor_col = 0, cursor_row = 0;
         bool cursor_visible = true;

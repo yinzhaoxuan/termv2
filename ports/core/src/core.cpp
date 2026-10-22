@@ -3,6 +3,7 @@
 #include "itcore.h"
 #include "vt_parser.h"
 #include "screen.h"
+#include "encode.h"
 #include <deque>
 #include <memory>
 #include <new>
@@ -177,21 +178,30 @@ int itcore_resize(itcore_core *c, uint16_t columns, uint16_t rows, uint64_t gene
     return 0;
 }
 
-int itcore_encode_text(itcore_core *, const char *, size_t, itcore_buffer **o) {
-    if (o) *o = nullptr;
-    return -100;  // T06+
+int itcore_encode_text(itcore_core *c, const char *utf8, size_t len, itcore_buffer **o) {
+    if (!c || !c->screen) { if (o) *o = nullptr; return -1; }
+    return itcore_encode::encode_text(c->screen.get(), utf8, len, o);
 }
-int itcore_encode_paste(itcore_core *, const char *, size_t, itcore_buffer **o) {
-    if (o) *o = nullptr;
-    return -100;
+int itcore_encode_paste(itcore_core *c, const char *utf8, size_t len, itcore_buffer **o) {
+    if (!c || !c->screen) { if (o) *o = nullptr; return -1; }
+    return itcore_encode::encode_paste(c->screen.get(), utf8, len, o);
 }
-void itcore_buffer_release(itcore_buffer *b) { delete b; }
+int itcore_encode_key(itcore_core *c, const itcore_key_event *ev, itcore_buffer **o) {
+    if (!c || !c->screen) { if (o) *o = nullptr; return -1; }
+    return itcore_encode::encode_key(c->screen.get(), ev, o);
+}
+int itcore_encode_mouse(itcore_core *c, const itcore_mouse_event *ev, itcore_buffer **o) {
+    if (!c || !c->screen) { if (o) *o = nullptr; return -1; }
+    return itcore_encode::encode_mouse(c->screen.get(), ev, o);
+}
+void itcore_buffer_release(itcore_buffer *b) { itcore_encode::release_buf(b); }
 
 itcore_snapshot *itcore_acquire_snapshot(itcore_core *c, int32_t first_row, uint16_t row_count) {
     if (!c || !c->screen || !row_count) return nullptr;
     auto *s = new (std::nothrow) itcore_snapshot;
     if (!s) return nullptr;
     s->data = c->screen->take_snapshot(first_row, row_count);
+    s->data.generation = c->resize_gen;
     s->rows.resize(s->data.rows_data.size());
     for (size_t i = 0; i < s->data.rows_data.size(); ++i) {
         auto &src = s->data.rows_data[i];
@@ -219,6 +229,8 @@ void itcore_snapshot_cursor(const itcore_snapshot *s, uint16_t *col, uint16_t *r
     if (row) *row = static_cast<uint16_t>(s->data.cursor_row);
     if (visible) *visible = s->data.cursor_visible ? 1 : 0;
 }
+uint64_t itcore_snapshot_generation(const itcore_snapshot *s) { return s ? s->data.generation : 0; }
+uint32_t itcore_snapshot_mouse_mode(const itcore_snapshot *s) { return s ? s->data.mouse_mode : 0; }
 void itcore_snapshot_release(itcore_snapshot *s) { delete s; }
 
 }  // extern "C"

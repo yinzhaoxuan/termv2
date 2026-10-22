@@ -32,8 +32,65 @@ int  itcore_create(const itcore_options *opt, itcore_core **out);
 itcore_feed_result itcore_feed(itcore_core *c, const uint8_t *bytes, size_t length);
 int  itcore_resize(itcore_core *c, uint16_t columns, uint16_t rows, uint64_t generation);
 int  itcore_finish_input(itcore_core *c);
+/* 键盘：vk 为 Windows VK_* 或便携枚举（见 ITCORE_VK_*）；unicode 非 0 时优先作为已提交字符 */
+enum {
+    ITCORE_MOD_SHIFT = 1u << 0, ITCORE_MOD_CTRL = 1u << 1,
+    ITCORE_MOD_ALT = 1u << 2, ITCORE_MOD_WIN = 1u << 3
+};
+/* 便携虚拟键（与 Win32 VK_ 数值对齐的常用项） */
+enum {
+    ITCORE_VK_BACK = 0x08, ITCORE_VK_TAB = 0x09, ITCORE_VK_RETURN = 0x0D,
+    ITCORE_VK_ESCAPE = 0x1B, ITCORE_VK_SPACE = 0x20,
+    ITCORE_VK_LEFT = 0x25, ITCORE_VK_UP = 0x26, ITCORE_VK_RIGHT = 0x27, ITCORE_VK_DOWN = 0x28,
+    ITCORE_VK_INSERT = 0x2D, ITCORE_VK_DELETE = 0x2E,
+    ITCORE_VK_HOME = 0x24, ITCORE_VK_END = 0x23, ITCORE_VK_PRIOR = 0x21, ITCORE_VK_NEXT = 0x22,
+    ITCORE_VK_F1 = 0x70, ITCORE_VK_F12 = 0x7B,
+    ITCORE_VK_NUMPAD0 = 0x60, ITCORE_VK_NUMPAD9 = 0x69,
+    ITCORE_VK_MULTIPLY = 0x6A, ITCORE_VK_ADD = 0x6B, ITCORE_VK_SEPARATOR = 0x6C,
+    ITCORE_VK_SUBTRACT = 0x6D, ITCORE_VK_DECIMAL = 0x6E, ITCORE_VK_DIVIDE = 0x6F
+};
+typedef struct {
+    uint32_t struct_size;
+    uint32_t vk;          /* ITCORE_VK_* / VK_* */
+    uint32_t scan;        /* 可选扫描码，0 忽略 */
+    uint32_t modifiers;   /* ITCORE_MOD_* */
+    int is_repeat;
+    uint32_t unicode;     /* 已提交码点，0 表示纯功能键 */
+} itcore_key_event;
+
+enum {
+    ITCORE_MOUSE_PRESS = 1, ITCORE_MOUSE_RELEASE = 2,
+    ITCORE_MOUSE_MOVE = 3, ITCORE_MOUSE_WHEEL = 4
+};
+enum {
+    ITCORE_MBUTTON_LEFT = 0, ITCORE_MBUTTON_MIDDLE = 1, ITCORE_MBUTTON_RIGHT = 2,
+    ITCORE_MBUTTON_NONE = 3, ITCORE_MBUTTON_WHEEL_UP = 64, ITCORE_MBUTTON_WHEEL_DOWN = 65
+};
+typedef struct {
+    uint32_t struct_size;
+    uint16_t col, row;    /* 0 基格坐标 */
+    uint8_t button;       /* ITCORE_MBUTTON_* */
+    uint8_t action;       /* ITCORE_MOUSE_* */
+    int32_t wheel_delta;  /* >0 上滚 */
+    uint32_t modifiers;
+} itcore_mouse_event;
+
+/* 鼠标报告模式位（与 DECSET 1000/1002/1003/1006 对应） */
+enum {
+    ITCORE_MOUSE_MODE_NONE = 0,
+    ITCORE_MOUSE_MODE_X10 = 1,       /* 9 */
+    ITCORE_MOUSE_MODE_NORMAL = 2,    /* 1000 */
+    ITCORE_MOUSE_MODE_BUTTON = 4,    /* 1002 */
+    ITCORE_MOUSE_MODE_ANY = 8,       /* 1003 */
+    ITCORE_MOUSE_MODE_SGR = 16       /* 1006 */
+};
+
 int  itcore_encode_text(itcore_core *c, const char *utf8, size_t len, itcore_buffer **out);
+/* 粘贴：整事务（可选 bracketed 首尾）一次返回；>32KiB 返回 -2，*out=null */
 int  itcore_encode_paste(itcore_core *c, const char *utf8, size_t len, itcore_buffer **out);
+int  itcore_encode_key(itcore_core *c, const itcore_key_event *ev, itcore_buffer **out);
+/* 未启用鼠标模式时返回 1 且 *out=null（留给本地选择）；成功 0 */
+int  itcore_encode_mouse(itcore_core *c, const itcore_mouse_event *ev, itcore_buffer **out);
 void itcore_buffer_release(itcore_buffer *b);
 itcore_event *itcore_next_event(itcore_core *c);
 itcore_event_kind itcore_event_type(const itcore_event *e);
@@ -52,6 +109,10 @@ const itcore_cell *itcore_snapshot_row(const itcore_snapshot *s, uint16_t row, i
 /* 字素簇 ID 取回 UTF-8；指针在快照释放前有效 */
 const char *itcore_snapshot_grapheme(const itcore_snapshot *s, uint32_t grapheme_id, size_t *len);
 void itcore_snapshot_cursor(const itcore_snapshot *s, uint16_t *col, uint16_t *row, int *visible);
+/* 最近一次成功 itcore_resize 的 generation（供渲染对齐） */
+uint64_t itcore_snapshot_generation(const itcore_snapshot *s);
+/* 当前鼠标模式位掩码（ITCORE_MOUSE_MODE_*）；0 表示本地选择 */
+uint32_t itcore_snapshot_mouse_mode(const itcore_snapshot *s);
 void itcore_snapshot_release(itcore_snapshot *s);
 void itcore_destroy(itcore_core *c);
 #ifdef __cplusplus

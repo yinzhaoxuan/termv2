@@ -49,3 +49,15 @@
 - 滚动历史：按显示行驱逐并标记 hard/soft；软换行合并在重排阶段完成，不保留上游 LineBlock 元数据。
 - 宽度重排在快照读取时按当前列宽计算，不维护持久 wrapped 索引缓存。
 - `finish_input` 对残缺 UTF-8 显式写入 U+FFFD（解析器仅计 `Incomplete`）。
+
+## T05 评审追加 + T06 encode / 渲染原型（同提交）
+
+| 本仓库 | 说明 |
+|---|---|
+| `screen.cpp` `write_char` 组合 + `wrap_pending` | 组合字符在 wrap_pending 时回写**本行**最后一个非 CONTINUATION 格，不触发软换行。 |
+| `Grid::clear_for_write` / `repair_wide_orphans` | 写格前清宽字孤儿（CONTINUATION→基字清空；窄盖宽清多余尾格）；ICH/DCH 后行内修复。 |
+| `ScreenModes` + `set_mode` | DECCKM (?1)、鼠标 9/1000/1002/1003/1006、DECKPAM/DECKPNM（ESC =/>）。 |
+| `itcore_snapshot_generation` | 快照携带最近成功 `resize_gen`。 |
+| `encode.cpp` | `encode_text` / `encode_paste`（≤32KiB、bracketed 事务）/ `encode_key`（DECCKM/应用键区）/ `encode_mouse`（1000/1002/1003+SGR 1006）。 |
+| `renderer/d2d/*` | ISwapChainHost + D2D/DWrite 网格原型；字形 advance 不参与列定位；`caret_rect_px` + 预编辑覆盖层。 |
+| `conpty_transport.cpp` `failStart` | Wait 读线程后 `CloseHandle(reader_)`；正常 close 路径同样释放。 |
