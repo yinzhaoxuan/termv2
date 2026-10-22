@@ -223,13 +223,41 @@ bool ConfigDirLock::tryAcquire(const fs::path& configDir, std::string* error) {
   if (ec) lockPath_ = configDir;
   lockPath_ /= ".write.lock";
 #ifdef _WIN32
-  HANDLE h = CreateFileW(lockPath_.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
-  if (h == INVALID_HANDLE_VALUE) {
+  auto tryCreate = [&]() -> HANDLE {
+    return CreateFileW(lockPath_.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+  };
+  HANDLE h = INVALID_HANDLE_VALUE;
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    h = tryCreate();
+    if (h != INVALID_HANDLE_VALUE) break;
     DWORD e = GetLastError();
-    if (error) *error = (e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS)
-                          ? "配置目录已有写入实例"
-                          : ("加锁失败: " + std::to_string(e));
+    if (e == ERROR_ACCESS_DENIED) {
+      // 杀毒/索引在句柄关闭后短暂占用：短重视，不当成“已有写入实例”
+      Sleep(50);
+      continue;
+    }
+    if (e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS) {
+      // 可能是残留的无 DELETE_ON_CLOSE 锁文件：试着打开再立刻关掉；
+      // 若无人占用则删除后重试一次
+      HANDLE existing = CreateFileW(lockPath_.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                    0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (existing != INVALID_HANDLE_VALUE) {
+        CloseHandle(existing);
+        if (DeleteFileW(lockPath_.c_str())) {
+          // 诊断：清掉无主残留锁后重试
+          h = tryCreate();
+          if (h != INVALID_HANDLE_VALUE) break;
+        }
+      }
+      if (error) *error = "配置目录已有写入实例";
+      return false;
+    }
+    if (error) *error = "加锁失败: " + std::to_string(e);
+    return false;
+  }
+  if (h == INVALID_HANDLE_VALUE) {
+    if (error) *error = "加锁失败：目标被短暂占用，重试后仍无法创建";
     return false;
   }
   handle_ = h; held_ = true; return true;
