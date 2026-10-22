@@ -89,6 +89,11 @@ struct itcore_core final : itcore::TokenSink {
             std::string num = t.text.substr(0, semi);
             std::string arg = semi == std::string::npos ? std::string() : t.text.substr(semi + 1);
             if (num == "0" || num == "2") push(ITCORE_EV_TITLE, sanitize_title(arg));
+            else if (num == "8") {
+                auto sc = arg.find(';');
+                if (sc != std::string::npos)
+                    screen->set_hyperlink(std::string_view(arg).substr(0, sc), std::string_view(arg).substr(sc + 1));
+            }
             else if (num == "52")
                 push(ITCORE_EV_CLIPBOARD_REQUEST, arg.substr(0, arg.find(';')));
             break;
@@ -221,7 +226,7 @@ const itcore_cell *itcore_snapshot_row(const itcore_snapshot *s, uint16_t row, i
 }
 const char *itcore_snapshot_grapheme(const itcore_snapshot *s, uint32_t grapheme_id, size_t *len) {
     if (!s) { if (len) *len = 0; return ""; }
-    return s->data.pool_copy.get(grapheme_id, len);
+    return s->data.pool.get(grapheme_id, len);
 }
 void itcore_snapshot_cursor(const itcore_snapshot *s, uint16_t *col, uint16_t *row, int *visible) {
     if (!s) return;
@@ -232,5 +237,18 @@ void itcore_snapshot_cursor(const itcore_snapshot *s, uint16_t *col, uint16_t *r
 uint64_t itcore_snapshot_generation(const itcore_snapshot *s) { return s ? s->data.generation : 0; }
 uint32_t itcore_snapshot_mouse_mode(const itcore_snapshot *s) { return s ? s->data.mouse_mode : 0; }
 void itcore_snapshot_release(itcore_snapshot *s) { delete s; }
+int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t hyperlink_id,
+                              const char **url, size_t *url_len, const char **id, size_t *id_len) {
+    if (!s || !hyperlink_id) return 0;
+    size_t n = 0;
+    const char *p = s->data.pool.get(hyperlink_id, &n);
+    std::string_view u, i;
+    if (!itcore::GraphemePool::decode_hyperlink(p, n, &u, &i)) return 0;
+    if (url) *url = u.data();
+    if (url_len) *url_len = u.size();
+    if (id) *id = i.data();
+    if (id_len) *id_len = i.size();
+    return 1;
+}
 
 }  // extern "C"

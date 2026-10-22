@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // 见 screen.h 来源声明。
 #include "screen.h"
+#include "ucd_width.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -24,41 +25,9 @@ void set_param_if_default(Token &t, size_t i, int def) {
     else if (!t.params[i][0]) t.params[i][0] = def;
 }
 
-bool is_combining(uint32_t cp) {
-    // 常用组合区 + VS + ZWJ/ZWNJ 等零宽
-    if (cp == 0x200C || cp == 0x200D || cp == 0xFE0E || cp == 0xFE0F) return true;
-    if (cp >= 0x0300 && cp <= 0x036F) return true;
-    if (cp >= 0x1AB0 && cp <= 0x1AFF) return true;
-    if (cp >= 0x1DC0 && cp <= 0x1DFF) return true;
-    if (cp >= 0x20D0 && cp <= 0x20FF) return true;
-    if (cp >= 0xFE20 && cp <= 0xFE2F) return true;
-    return false;
-}
-
-bool is_wide(uint32_t cp) {
-    // 精简东亚宽：Hangul、CJK、全角、部分 emoji 区
-    if (cp >= 0x1100 && cp <= 0x115F) return true;
-    if (cp >= 0x2329 && cp <= 0x232A) return true;
-    if (cp >= 0x2E80 && cp <= 0xA4CF) return true;
-    if (cp >= 0xAC00 && cp <= 0xD7A3) return true;
-    if (cp >= 0xF900 && cp <= 0xFAFF) return true;
-    if (cp >= 0xFE10 && cp <= 0xFE19) return true;
-    if (cp >= 0xFE30 && cp <= 0xFE6F) return true;
-    if (cp >= 0xFF00 && cp <= 0xFF60) return true;
-    if (cp >= 0xFFE0 && cp <= 0xFFE6) return true;
-    if (cp >= 0x1F300 && cp <= 0x1F64F) return true;
-    if (cp >= 0x1F900 && cp <= 0x1F9FF) return true;
-    if (cp >= 0x20000 && cp <= 0x3FFFD) return true;
-    return false;
-}
-
 }  // namespace
 
-int cell_width(uint32_t cp) {
-    if (cp == 0 || is_combining(cp)) return 0;
-    if (is_wide(cp)) return 2;
-    return 1;
-}
+int cell_width(uint32_t cp) { return ucd::width(cp); }
 
 bool utf8_next(const uint8_t *p, size_t n, uint32_t *cp, size_t *adv) {
     if (!n) { *cp = 0xFFFD; *adv = 0; return false; }
@@ -74,24 +43,72 @@ bool utf8_next(const uint8_t *p, size_t n, uint32_t *cp, size_t *adv) {
     *cp = c; *adv = need; return true;
 }
 
-// ---- GraphemePool ----
+// ---- PoolStore / PoolRef / GraphemePool ----
+PoolStore::PoolStore() {
+    for (auto &c : chunks_) c.store(nullptr, std::memory_order_relaxed);
+}
+PoolStore::~PoolStore() {
+    for (auto &c : chunks_) delete[] c.load(std::memory_order_relaxed);
+}
+const std::string *PoolStore::at(uint32_t id) const {
+    std::string *c = chunks_[id >> kChunkBits].load(std::memory_order_acquire);
+    return c ? &c[id & (kChunk - 1)] : nullptr;
+}
+uint32_t PoolStore::append(std::string &&s) {
+    uint32_t id = size_.load(std::memory_order_relaxed);
+    uint32_t ci = id >> kChunkBits;
+    if (ci >= kMaxChunks) return 0;
+    std::string *c = chunks_[ci].load(std::memory_order_relaxed);
+    if (!c) {
+        c = new std::string[kChunk];
+        chunks_[ci].store(c, std::memory_order_release);
+    }
+    c[id & (kChunk - 1)] = std::move(s);
+    size_.store(id + 1, std::memory_order_release);  // 发布：此后读端可见且不再修改
+    return id;
+}
+const char *PoolRef::get(uint32_t id, size_t *len) const {
+    const std::string *e = (store && id < limit) ? store->at(id) : nullptr;
+    if (!e) { if (len) *len = 0; return ""; }
+    if (len) *len = e->size();
+    return e->c_str();
+}
+
+GraphemePool::GraphemePool() : store_(std::make_shared<PoolStore>()) { store_->append(std::string()); }
 uint32_t GraphemePool::intern(std::string_view utf8) {
     if (utf8.empty()) return 0;
     std::string key(utf8);
     auto it = to_id_.find(key);
     if (it != to_id_.end()) return it->second;
-    uint32_t id = static_cast<uint32_t>(by_id_.size());
-    bytes_ += key.size() + 8;
-    by_id_.push_back(std::move(key));
-    to_id_[by_id_.back()] = id;
+    uint32_t id = store_->append(std::string(key));
+    if (!id) return 0;  // 池满：退化为空格（内存上限由 MEM 预算兜底）
+    bytes_ += key.size() * 2 + 48;
+    to_id_.emplace(std::move(key), id);
     return id;
 }
 const char *GraphemePool::get(uint32_t id, size_t *len) const {
-    if (id >= by_id_.size()) { if (len) *len = 0; return ""; }
-    if (len) *len = by_id_[id].size();
-    return by_id_[id].c_str();
+    return PoolRef{store_, store_->size(), epoch_}.get(id, len);
 }
-void GraphemePool::clear() { by_id_.assign(1, ""); to_id_.clear(); bytes_ = 0; }
+void GraphemePool::clear() {
+    store_ = std::make_shared<PoolStore>();
+    store_->append(std::string());
+    to_id_.clear(); bytes_ = 0; ++epoch_;
+}
+uint32_t GraphemePool::intern_hyperlink(std::string_view url, std::string_view id) {
+    if (url.empty()) return 0;
+    std::string k("\0H", 2);
+    k.append(id); k.push_back('\0'); k.append(url);
+    return intern(k);
+}
+bool GraphemePool::decode_hyperlink(const char *s, size_t n, std::string_view *url, std::string_view *id) {
+    if (n < 3 || s[0] != '\0' || s[1] != 'H') return false;
+    std::string_view v(s + 2, n - 2);
+    size_t z = v.find('\0');
+    if (z == std::string_view::npos) return false;
+    if (id) *id = v.substr(0, z);
+    if (url) *url = v.substr(z + 1);
+    return true;
+}
 
 // ---- Cell / Row ----
 itcore_cell Cell::to_abi() const {
@@ -591,32 +608,7 @@ void Screen::write_utf8_text(const std::string &text) {
 
 void Screen::write_char(uint32_t cp, const uint8_t *utf8, size_t utf8_len) {
     auto &g = grid();
-    if (is_combining(cp) && has_last_) {
-        // 合并进上一字素：新建组合串
-        size_t olen = 0;
-        const char *og = pool_.get(last_printed_.grapheme_id, &olen);
-        std::string merged(og, olen);
-        merged.append(reinterpret_cast<const char *>(utf8), utf8_len);
-        uint32_t gid = pool_.intern(merged);
-        int y = g.cursor().y;
-        int tx = -1;
-        if (g.wrap_pending()) {
-            // 评审：wrap_pending 时回写本行最后一个非 CONTINUATION 格，不触发换行
-            tx = g.cols() - 1;
-            while (tx > 0 && (g.row(y).cells[tx].flags & ITCORE_CELL_CONTINUATION)) --tx;
-            if (tx < 0 || (g.row(y).cells[tx].flags & ITCORE_CELL_CONTINUATION)) tx = -1;
-        } else if (g.cursor().x > 0) {
-            tx = g.cursor().x - 1;
-            while (tx > 0 && (g.row(y).cells[tx].flags & ITCORE_CELL_CONTINUATION)) --tx;
-        }
-        if (tx >= 0) {
-            g.row(y).cells[tx].grapheme_id = gid;
-            ++g.row(y).revision;
-            last_printed_.grapheme_id = gid;
-            bump();
-        }
-        return;
-    }
+    if (join_cluster(cp, utf8, utf8_len)) return;
     int w = cell_width(cp);
     if (w <= 0) w = 1;
     if (cp == 0xFFFD) w = 1;
@@ -630,6 +622,7 @@ void Screen::write_char(uint32_t cp, const uint8_t *utf8, size_t utf8_len) {
 
     Cell cell = pen_.make_cell(pool_.intern(std::string_view(reinterpret_cast<const char *>(utf8), utf8_len)),
                                static_cast<uint8_t>(w));
+    cell.hyperlink_id = link_id_;
     if (modes_.insert) g.insert_chars(w, Cell::blank());
 
     auto place = [&](int x, int y) {
@@ -640,6 +633,7 @@ void Screen::write_char(uint32_t cp, const uint8_t *utf8, size_t utf8_len) {
             Cell cont = Cell::blank();
             cont.flags = ITCORE_CELL_CONTINUATION;
             cont.width = 0;
+            cont.hyperlink_id = cell.hyperlink_id;
             g.row(y).cells[x + k] = cont;
         }
         ++g.row(y).revision;
@@ -674,7 +668,84 @@ void Screen::write_char(uint32_t cp, const uint8_t *utf8, size_t utf8_len) {
     }
     last_printed_ = cell;
     has_last_ = true;
+    last_base_cp_ = last_cp_ = cp;
+    last_cluster_cps_ = 1;
     bump();
+}
+
+// 字素簇合并（上游 StringToScreenChars）：组合/ZWJ+Extended_Pictographic/区域指示符成对并入前一格；
+// Default_Ignorable 丢弃；VS16（主屏，同 vs16SupportedInPrimaryScreen=YES/vs16Supported=NO）与
+// 肤色修饰序列把窄 emoji 扩成 2 格。单簇最多 kMaxClusterCps 个码点，超出丢弃（防池膨胀）。
+bool Screen::join_cluster(uint32_t cp, const uint8_t *utf8, size_t utf8_len) {
+    constexpr int kMaxClusterCps = 32;
+    if (ucd::is_ignorable(cp)) return true;
+    bool join = false;
+    if (has_last_) {
+        if (ucd::is_combining(cp)) join = true;
+        else if (last_cp_ == 0x200D && ucd::is_ext_pict(cp)) join = true;
+        else if (ucd::is_regional_indicator(cp) && ucd::is_regional_indicator(last_base_cp_) &&
+                 last_cluster_cps_ == 1) join = true;
+    }
+    if (!join) return false;
+    auto &g = grid();
+    int y = g.cursor().y;
+    int tx = -1;
+    if (g.wrap_pending()) {
+        // 评审：wrap_pending 时回写本行最后一个非 CONTINUATION 格，不触发换行
+        tx = g.cols() - 1;
+        while (tx > 0 && (g.row(y).cells[tx].flags & ITCORE_CELL_CONTINUATION)) --tx;
+        if (tx < 0 || (g.row(y).cells[tx].flags & ITCORE_CELL_CONTINUATION)) tx = -1;
+    } else if (g.cursor().x > 0) {
+        tx = g.cursor().x - 1;
+        while (tx > 0 && (g.row(y).cells[tx].flags & ITCORE_CELL_CONTINUATION)) --tx;
+    }
+    if (tx < 0) return true;
+    if (last_cluster_cps_ >= kMaxClusterCps) return true;
+    size_t olen = 0;
+    const char *og = pool_.get(last_printed_.grapheme_id, &olen);
+    std::string merged(og, olen);
+    merged.append(reinterpret_cast<const char *>(utf8), utf8_len);
+    uint32_t gid = pool_.intern(merged);
+    Row &row = g.row(y);
+    row.cells[tx].grapheme_id = gid;
+    last_printed_.grapheme_id = gid;
+    last_cp_ = cp;
+    ++last_cluster_cps_;
+    bool widen = row.cells[tx].width == 1 &&
+                 ((cp == 0xFE0F && !modes_.alt && ucd::is_vs16_base(last_base_cp_)) ||
+                  (ucd::is_modifier(cp) && ucd::is_modifier_base(last_base_cp_)));
+    if (widen && !g.wrap_pending() && tx + 1 < g.cols() && g.cursor().x == tx + 1) {
+        g.clear_for_write(tx + 1, y, 1, Cell::blank());
+        row.cells[tx].width = 2;
+        Cell cont = Cell::blank();
+        cont.flags = ITCORE_CELL_CONTINUATION;
+        cont.width = 0;
+        cont.hyperlink_id = row.cells[tx].hyperlink_id;
+        row.cells[tx + 1] = cont;
+        g.cursor().x = tx + 2;
+        if (g.cursor().x >= g.cols()) { g.cursor().x = g.cols(); g.set_wrap_pending(modes_.wrap); }
+        last_printed_.width = 2;
+    }
+    ++row.revision;
+    bump();
+    return true;
+}
+
+// OSC 8（上游 VT100Terminal executeLink）：URL 超过 maxURLLength 忽略；空 URL 结束链接。
+void Screen::set_hyperlink(std::string_view params, std::string_view url) {
+    constexpr size_t kMaxUrl = 2097152;  // iTermAdvancedSettingsModel maxURLLength
+    if (url.size() > kMaxUrl) return;
+    if (url.empty()) { link_id_ = 0; return; }
+    std::string_view id;
+    size_t i = 0;
+    while (i <= params.size()) {
+        size_t e = params.find(':', i);
+        if (e == std::string_view::npos) e = params.size();
+        auto kv = params.substr(i, e - i);
+        if (kv.substr(0, 3) == "id=") id = kv.substr(3);
+        i = e + 1;
+    }
+    link_id_ = pool_.intern_hyperlink(url, id);
 }
 
 void Screen::linefeed(bool hard) {
@@ -984,7 +1055,7 @@ Screen::SnapshotData Screen::take_snapshot(int32_t first_row, uint16_t row_count
     sn.cursor_row = grid().cursor().y;
     sn.cursor_visible = modes_.cursor_visible;
     sn.mouse_mode = modes_.mouse_mode;
-    sn.pool_copy = pool_;
+    sn.pool = pool_.ref();  // 增量引用：O(1)，不拷贝
 
     std::vector<Row> hist;
     if (!modes_.alt) reflow_merged(scrollback_, sn.cols, hist);

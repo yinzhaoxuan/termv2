@@ -12,7 +12,9 @@
 #pragma once
 #include "itcore.h"
 #include "vt_parser.h"
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <deque>
 #include <optional>
 #include <string>
@@ -23,16 +25,52 @@
 namespace itcore {
 
 // ---- 字素池：grapheme_id → UTF-8；id 0 为空格/空 ----
+// 增量共享（设计 14.2 快照语义）：存储为分块、只追加的 PoolStore；已发布条目不可变。
+// 写端（解析线程，持核心锁）追加后以 release 发布 size；快照只记录
+// {shared_ptr<const PoolStore>, limit}，读端以 acquire 读取 id<limit 的条目，无需拷贝也无需加锁。
+// clear()（RIS 等）换新 PoolStore 并递增 epoch，旧快照继续持有旧存储，id 不会被重解释。
+class PoolStore {
+public:
+    static constexpr uint32_t kChunkBits = 12, kChunk = 1u << kChunkBits, kMaxChunks = 4096;
+    PoolStore();
+    ~PoolStore();
+    PoolStore(const PoolStore &) = delete;
+    PoolStore &operator=(const PoolStore &) = delete;
+    uint32_t size() const { return size_.load(std::memory_order_acquire); }
+    // 仅读端：id 须 < 调用方先前 acquire 得到的 size。
+    const std::string *at(uint32_t id) const;
+    // 仅写端：返回新 id；满（kChunk*kMaxChunks）时返回 0。
+    uint32_t append(std::string &&s);
+private:
+    std::atomic<std::string *> chunks_[kMaxChunks];
+    std::atomic<uint32_t> size_{0};
+};
+
+struct PoolRef {
+    std::shared_ptr<const PoolStore> store;
+    uint32_t limit = 0;
+    uint64_t epoch = 0;
+    const char *get(uint32_t id, size_t *len) const;
+};
+
 class GraphemePool {
 public:
+    GraphemePool();
     uint32_t intern(std::string_view utf8);
     const char *get(uint32_t id, size_t *len) const;
     size_t bytes() const { return bytes_; }
+    uint32_t size() const { return store_->size(); }
+    uint64_t epoch() const { return epoch_; }
     void clear();
+    PoolRef ref() const { return PoolRef{store_, store_->size(), epoch_}; }
+    // OSC 8：超链接以 "\0H" id "\0" url 编码存于同一池（与字素不冲突：文本不含 NUL）。
+    uint32_t intern_hyperlink(std::string_view url, std::string_view id);
+    static bool decode_hyperlink(const char *s, size_t n, std::string_view *url, std::string_view *id);
 private:
-    std::vector<std::string> by_id_{{}};  // [0] = ""
+    std::shared_ptr<PoolStore> store_;
     std::unordered_map<std::string, uint32_t> to_id_;
     size_t bytes_ = 0;
+    uint64_t epoch_ = 1;
 };
 
 // 终端列宽：CJK/全角=2，组合/零宽=0，其余=1（设计 14.2：不由 DirectWrite 像素反推）。
@@ -182,6 +220,10 @@ public:
     const ScreenModes &modes() const { return modes_; }
     Pen &pen() { return pen_; }
     uint64_t revision() const { return revision_; }
+    // OSC 8：params 为 "k=v:k=v"，url 为空表示结束链接。
+    void set_hyperlink(std::string_view params, std::string_view url);
+    uint32_t hyperlink_id() const { return link_id_; }
+    void reset_pool_for_test() { pool_.clear(); }
     void bump() { ++revision_; }
     // 组装视口+滚动历史的显示行快照数据。
     // first_row：相对视口顶部，0=屏幕首行，负=滚入历史。
@@ -193,7 +235,7 @@ public:
         int cursor_col = 0, cursor_row = 0;
         bool cursor_visible = true;
         std::vector<Row> rows_data;  // 长度 = requested row_count（裁剪后）
-        GraphemePool pool_copy;      // 快照自持字素（简化：全量拷贝池）
+        PoolRef pool;                // 增量引用字素池（不拷贝），见 GraphemePool
     };
     SnapshotData take_snapshot(int32_t first_row, uint16_t row_count) const;
     size_t mem_bytes() const;
@@ -227,6 +269,12 @@ private:
     // 简化：滚动出顶部的行按 wrap 标记合并/压入。
     Cell last_printed_;  // REP 用
     bool has_last_ = false;
+    // 字素簇状态（上游 enumerateComposedCharacters + StringToScreenChars）
+    uint32_t last_base_cp_ = 0, last_cp_ = 0;
+    int last_cluster_cps_ = 0;
+    int last_x_ = -1, last_y_ = -1;
+    uint32_t link_id_ = 0;
+    bool join_cluster(uint32_t cp, const uint8_t *utf8, size_t utf8_len);
 };
 
 }  // namespace itcore

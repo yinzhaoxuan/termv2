@@ -15,6 +15,11 @@
 ## 模块状态
 
 ### 已落地（可在 Linux 单测 / mingw 交叉编译门闸）
+- **CORE-06/07/08 Unicode 宽度 / OSC 8 / 快照池引用**（2026-10-23）
+  - `ports/core/tools/gen_width_table.py` 从 UCD 16.0.0（可 `--ucd-dir` 离线）生成 `src/ucd_width_table.inc`；`ucd::width` 覆盖 EAW W/F、组合符、Default_Ignorable、Extended_Pictographic、emoji 修饰、VS16（仅主屏）、RI 对、ZWJ 序列；对齐 upstream iTermCharacterWidth.c / StringToScreenChars。
+  - OSC 8：URL+id 入 grapheme pool（`\0H` 前缀），cell 携带 hyperlink id；新 ABI `itcore_snapshot_hyperlink`；URL 上限 2097152，空 URL 结束链接，SGR 0 不结束。
+  - 快照不再复制 pool：`PoolRef{shared_ptr<PoolStore>, limit, epoch}`，分块追加、release/acquire 发布；clear 换新 store 并 ++epoch。
+  - 测试：`itcore_test_unicode`（width/osc8/pool，含并发读线程）；Linux ctest 57/57；mingw 全量构建通过（Windows 上未实际运行）。
 
 - **itcore（ports/core）**
   - VT 解析、屏幕模型、SGR/网格、scrollback 预算

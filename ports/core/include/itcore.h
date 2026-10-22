@@ -114,6 +114,11 @@ uint64_t itcore_snapshot_generation(const itcore_snapshot *s);
 /* 当前鼠标模式位掩码（ITCORE_MOUSE_MODE_*）；0 表示本地选择 */
 uint32_t itcore_snapshot_mouse_mode(const itcore_snapshot *s);
 void itcore_snapshot_release(itcore_snapshot *s);
+/* OSC 8：itcore_cell.hyperlink_id → URL 与 id 参数（字节串，非 NUL 结尾，生命周期同快照）。
+   hyperlink_id 为 0 或无效返回 0，成功返回 1。快照增量引用字素池：任何线程可读，
+   与核心后续写入并发安全；释放前指针稳定。 */
+int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t hyperlink_id,
+                              const char **url, size_t *url_len, const char **id, size_t *id_len);
 void itcore_destroy(itcore_core *c);
 #ifdef __cplusplus
 }
