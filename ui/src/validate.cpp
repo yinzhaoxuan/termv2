@@ -52,6 +52,10 @@ std::vector<ValidationError> validate(const Connection& c) {
     if (ssh.authMode == AuthMode::KeyFile) {
       if (!ssh.identityFile || ssh.identityFile->empty()) err("ssh.auth.identityFile", "密钥文件模式必须选择路径");
       else if (hasNul(*ssh.identityFile)) err("ssh.auth.identityFile", "路径不能含 NUL");
+      // 与 ssh -F 快照生成器保持一致：引号、% 与 ~ 会触发 OpenSSH token 展开，编辑器提前拒绝
+      else if (ssh.identityFile->find_first_of("\"'%") != std::string::npos ||
+               ssh.identityFile->find('~') != std::string::npos)
+        err("ssh.auth.identityFile", "密钥路径不能含引号、% 或 ~，请使用完整绝对路径");
     }
   } else {
     if (c.endpoint || c.ssh) err("endpoint", "本地连接不能包含 SSH 字段");

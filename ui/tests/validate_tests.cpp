@@ -25,6 +25,9 @@ int main() {
   CHECK(!validate(key).empty());
   key.ssh->identityFile = "C:\\Users\\测试 用户\\.ssh\\id_ed25519";  // Unicode+空格路径
   CHECK(validate(key).empty());
+  for (const char* bad : {"C:\\k\\a\"b", "C:\\k\\%h", "~/.ssh/id", "C:\\it's"}) {
+    auto k2 = key; k2.ssh->identityFile = bad; CHECK(!validate(k2).empty());
+  }
   Connection loc; loc.name = "PowerShell"; loc.kind = ConnectionKind::Local;
   loc.local = LocalSettings{"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", {"-NoLogo"}, std::nullopt};
   CHECK(validate(loc).empty());
