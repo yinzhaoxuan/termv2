@@ -56,7 +56,30 @@ int main() {
   CHECK(b.tryAcquire(dir, &err));
   b.release();
 
+  // 连接删除 → MissingConnection；重新绑定；拒绝绑到不存在的 id；不按同名自动匹配
+  ConnectionsFile cons;
+  Connection c; c.id = "conn-a"; c.name = "Ubuntu 开发机"; c.kind = ConnectionKind::Ssh;
+  c.endpoint = Endpoint{EndpointMode::Manual, std::string("h"), 22, std::nullopt};
+  c.ssh = SshSettings{"u", AuthMode::Agent, std::nullopt, 15};
+  cons.connections.push_back(c);
+  Connection c2 = c; c2.id = "conn-b"; c2.name = "Ubuntu 开发机";  // 同名不同 id
+  cons.connections.push_back(c2);
+
+  WorkspaceFile ws;
+  Tab tab; tab.title = "t"; tab.activePaneId = "p1";
+  tab.root = LayoutNode::pane("p1", "conn-deleted");
+  ws.tabs.push_back(std::move(tab));
+  auto binds = resolvePaneBindings(ws, cons);
+  CHECK(binds.size() == 1 && binds[0].status == PaneBindStatus::MissingConnection);
+
+  CHECK(!rebindPane(ws, "p1", "conn-nope", cons, &err));  // 目标不存在
+  CHECK(rebindPane(ws, "p1", "conn-b", cons, &err));       // 显式绑到 conn-b，即使有同名 conn-a
+  binds = resolvePaneBindings(ws, cons);
+  CHECK(binds[0].status == PaneBindStatus::Ok && binds[0].connectionId == "conn-b");
+  CHECK(ws.tabs[0].root.connectionId == "conn-b");
+
   fs::remove_all(dir);
   std::printf(fails ? "%d failed\n" : "all passed\n", fails);
   return fails != 0;
 }
+

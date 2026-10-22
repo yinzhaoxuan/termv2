@@ -16,14 +16,11 @@ struct AppearanceOverride {
 
 enum class SplitAxis { Columns, Rows };
 
-// 递归布局树：Split 恰好两个子节点（第 13.3 节）
 struct LayoutNode {
   enum class Kind { Pane, Split } kind = Kind::Pane;
-  // Pane
   std::string paneId;
   std::string connectionId;
   AppearanceOverride appearance;
-  // Split
   SplitAxis axis = SplitAxis::Columns;
   double ratio = 0.5;
   std::unique_ptr<LayoutNode> first;
@@ -65,17 +62,29 @@ bool saveWorkspace(const std::filesystem::path& file, WorkspaceFile& data,
                    bool readOnly, std::string* error);
 std::vector<ValidationError> validateWorkspace(const WorkspaceFile& w);
 
+enum class PaneBindStatus { Ok, MissingConnection, EmptyConnectionId };
+
+struct PaneBindInfo {
+  std::string paneId;
+  std::string connectionId;
+  PaneBindStatus status = PaneBindStatus::EmptyConnectionId;
+};
+
+std::vector<PaneBindInfo> resolvePaneBindings(const WorkspaceFile& workspace,
+                                              const ConnectionsFile& connections);
+bool rebindPane(WorkspaceFile& workspace, const std::string& paneId,
+                const std::string& newConnectionId,
+                const ConnectionsFile& connections, std::string* error);
+
 class ConfigDirLock {
  public:
   ConfigDirLock() = default;
   ~ConfigDirLock() { release(); }
   ConfigDirLock(const ConfigDirLock&) = delete;
   ConfigDirLock& operator=(const ConfigDirLock&) = delete;
-
   bool tryAcquire(const std::filesystem::path& configDir, std::string* error);
   void release();
   bool held() const { return held_; }
-
  private:
   bool held_ = false;
   std::filesystem::path lockPath_;

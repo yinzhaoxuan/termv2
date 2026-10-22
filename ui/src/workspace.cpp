@@ -1,5 +1,6 @@
 #include "uicfg/workspace.h"
 #include <algorithm>
+#include <functional>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #ifdef _WIN32
@@ -154,6 +155,63 @@ bool saveWorkspace(const fs::path& file, WorkspaceFile& data, bool readOnly, std
   }
   if (!replaceFile(tmp, file, error)) { fs::remove(tmp, ec); return false; }
   data.revision += 1;
+  return true;
+}
+
+
+namespace {
+
+void walkPanes(LayoutNode& n, const std::function<void(LayoutNode&)>& fn) {
+  if (n.kind == LayoutNode::Kind::Pane) fn(n);
+  else { walkPanes(*n.first, fn); walkPanes(*n.second, fn); }
+}
+void walkPanesConst(const LayoutNode& n, const std::function<void(const LayoutNode&)>& fn) {
+  if (n.kind == LayoutNode::Kind::Pane) fn(n);
+  else { walkPanesConst(*n.first, fn); walkPanesConst(*n.second, fn); }
+}
+
+bool connectionExists(const ConnectionsFile& c, const std::string& id) {
+  for (const auto& x : c.connections) if (x.id == id) return true;
+  return false;
+}
+
+}  // namespace
+
+std::vector<PaneBindInfo> resolvePaneBindings(const WorkspaceFile& workspace,
+                                              const ConnectionsFile& connections) {
+  std::vector<PaneBindInfo> out;
+  for (const auto& tab : workspace.tabs) {
+    walkPanesConst(tab.root, [&](const LayoutNode& n) {
+      PaneBindInfo info;
+      info.paneId = n.paneId;
+      info.connectionId = n.connectionId;
+      if (n.connectionId.empty()) info.status = PaneBindStatus::EmptyConnectionId;
+      else if (!connectionExists(connections, n.connectionId))
+        info.status = PaneBindStatus::MissingConnection;  // UI 显示「连接配置已删除」
+      else info.status = PaneBindStatus::Ok;
+      out.push_back(std::move(info));
+    });
+  }
+  return out;
+}
+
+bool rebindPane(WorkspaceFile& workspace, const std::string& paneId,
+                const std::string& newConnectionId,
+                const ConnectionsFile& connections, std::string* error) {
+  if (!connectionExists(connections, newConnectionId)) {
+    if (error) *error = "目标连接不存在，拒绝绑定";
+    return false;
+  }
+  bool found = false;
+  for (auto& tab : workspace.tabs) {
+    walkPanes(tab.root, [&](LayoutNode& n) {
+      if (n.paneId != paneId) return;
+      // 绝不按显示名自动匹配；只接受显式 connectionId
+      n.connectionId = newConnectionId;
+      found = true;
+    });
+  }
+  if (!found) { if (error) *error = "pane 不存在"; return false; }
   return true;
 }
 
