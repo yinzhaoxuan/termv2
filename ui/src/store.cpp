@@ -123,10 +123,37 @@ Parse parseFile(const fs::path& p, ConnectionsFile& out, std::string& why) {
   } catch (const std::exception& e) { why = e.what(); return Parse::Bad; }
 }
 
+bool writeDurable(const fs::path& tmp, const std::string& bytes, std::string* err) {
+#ifdef _WIN32
+  HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) { if (err) *err = "创建临时文件失败: " + std::to_string(GetLastError()); return false; }
+  DWORD written = 0;
+  bool ok = WriteFile(h, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
+            written == bytes.size() && FlushFileBuffers(h);
+  if (!ok && err) *err = "写临时文件失败: " + std::to_string(GetLastError());
+  CloseHandle(h);
+  return ok;
+#else
+  std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+  out << bytes; out.flush();
+  if (!out && err) *err = "写临时文件失败";
+  return static_cast<bool>(out);
+#endif
+}
+
 bool replaceFile(const fs::path& tmp, const fs::path& target, std::string* err) {
 #ifdef _WIN32
-  if (MoveFileExW(tmp.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return true;
-  if (err) *err = "MoveFileExW 失败: " + std::to_string(GetLastError());
+  // 杀毒/索引服务短暂占用时重试；仍失败就报错，绝不退回非原子写
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    if (MoveFileExW(tmp.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return true;
+    DWORD e = GetLastError();
+    if (e != ERROR_ACCESS_DENIED && e != ERROR_SHARING_VIOLATION) {
+      if (err) *err = "MoveFileExW 失败: " + std::to_string(e);
+      return false;
+    }
+    Sleep(50);
+  }
+  if (err) *err = "目标文件被占用，重试 5 次后仍无法替换";
   return false;
 #else
   std::error_code ec; fs::rename(tmp, target, ec);
@@ -173,12 +200,7 @@ bool saveConnections(const fs::path& file, ConnectionsFile& data, bool readOnly,
   for (const auto& c : data.connections) j["connections"].push_back(connTo(c));
 
   fs::path tmp = file; tmp += ".tmp";
-  {
-    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-    out << j.dump(2);
-    out.flush();
-    if (!out) { if (error) *error = "写临时文件失败"; std::error_code ec; fs::remove(tmp, ec); return false; }
-  }
+  if (!writeDurable(tmp, j.dump(2), error)) { std::error_code ec; fs::remove(tmp, ec); return false; }
   std::error_code ec;
   if (fs::exists(file, ec)) {
     // 仅当当前主文件可解析时才更新 .bak，保证备份始终是"最近一次可解析版本"
