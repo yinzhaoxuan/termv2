@@ -103,8 +103,15 @@ SnapshotResult buildSshSnapshot(const SshTarget &t) {
         kv("PubkeyAuthentication", "no");
         kv("PasswordAuthentication", "yes");
         kv("KbdInteractiveAuthentication", "yes");
+        kv("IdentityFile", "none");      // SSH-CFG-01 A4：不加载 ~/.ssh/id_*
+        kv("IdentitiesOnly", "yes");
+        kv("IdentityAgent", "none");
         break;
     }
+    // 三种模式共用：显式排除证书与连接复用（A4 / 纵深防御）
+    kv("CertificateFile", "none");
+    kv("ControlMaster", "no");
+    kv("ControlPath", "none");
     r.text = std::move(s);
     return r;
 }

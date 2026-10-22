@@ -43,8 +43,11 @@ public:
 
     // 设备丢失标志（DXGI_ERROR_DEVICE_REMOVED/RESET）
     bool device_lost() const { return device_lost_; }
+    // 设备丢失后重建（present_frame 内自动调用；宿主也可在 WM_DISPLAYCHANGE 等时机主动调用）
+    bool recover_device();
 
 private:
+    void shutdown_device();
     struct Impl;
     ISwapChainHost *host_ = nullptr;
     GridMetrics metrics_{};

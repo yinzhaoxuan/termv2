@@ -38,6 +38,10 @@ else()
 endif()
 itcore_add_vector_tests("${CMAKE_SOURCE_DIR}/tests/vectors/extra.json" "${CMAKE_SOURCE_DIR}/tests/golden/extra.tokens")
 add_subdirectory(renderer)
+# 交叉编译时 uicfg 用仓库内 nlohmann 头文件（独立 INTERFACE 路径），不经 find_package 引入 /usr/include
+if(CMAKE_CROSSCOMPILING AND NOT UICFG_NLOHMANN_INCLUDE_DIR)
+  set(UICFG_NLOHMANN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/third_party/nlohmann_json/include" CACHE PATH "" FORCE)
+endif()
 add_subdirectory(ui)
 
 # ABI-01：C ABI 契约测试（feed_result、事件释放、EOF）与超大 OSC 场景（PARSE-01 部分）

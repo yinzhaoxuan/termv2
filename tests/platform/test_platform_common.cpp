@@ -29,7 +29,7 @@ static void test_snapshot() {
                    "PreferredAuthentications publickey", "PasswordAuthentication no",
                    "KbdInteractiveAuthentication no", "IdentityFile none", "IdentitiesOnly no"})
         CHECK(has(s, l));
-    for (auto bad : {"ProxyCommand", "ProxyJump", "\n  LocalCommand", "RemoteCommand", "ControlMaster", "\r", "\xef\xbb\xbf"})
+    for (auto bad : {"ProxyCommand", "ProxyJump", "\n  LocalCommand", "RemoteCommand", "ControlMaster auto", "ControlMaster yes", "ControlPersist", "\r", "\xef\xbb\xbf"})
         CHECK(s.find(bad) == std::string::npos);
 
     auto t = base(); t.auth = SshAuthMode::KeyFile; t.keyFile = "D:\\keys\\id_ed25519";
@@ -43,7 +43,15 @@ static void test_snapshot() {
     r = buildSshSnapshot(t);
     CHECK(r.text && has(*r.text, "PubkeyAuthentication no") &&
           has(*r.text, "PreferredAuthentications keyboard-interactive,password") &&
-          r.text->find("IdentityFile") == std::string::npos);
+          has(*r.text, "IdentityFile none") && has(*r.text, "IdentitiesOnly yes") &&
+          has(*r.text, "IdentityAgent none"));
+    // A4：三种模式都显式 CertificateFile none / ControlMaster no / ControlPath none
+    for (auto m : {SshAuthMode::Agent, SshAuthMode::KeyFile, SshAuthMode::Interactive}) {
+        t = base(); t.auth = m; t.keyFile = "D:/keys/id_ed25519";
+        r = buildSshSnapshot(t);
+        CHECK(r.text && has(*r.text, "CertificateFile none") && has(*r.text, "ControlMaster no") &&
+              has(*r.text, "ControlPath none"));
+    }
 
     t = base(); t.hostName = "2001:db8::10";
     CHECK(buildSshSnapshot(t).text && has(*buildSshSnapshot(t).text, "HostName 2001:db8::10"));

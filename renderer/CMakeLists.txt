@@ -26,3 +26,8 @@ add_test(NAME renderer_d2d_caret COMMAND test_renderer_d2d_caret)
 add_executable(test_renderer_cell_style ${PROJECT_SOURCE_DIR}/tests/renderer/test_cell_style.cpp)
 target_link_libraries(test_renderer_cell_style PRIVATE itcore_mock itrender_layout)
 add_test(NAME renderer_cell_style COMMAND test_renderer_cell_style)
+
+# 渲染评审第 3/5 点：文本样式选择与 generation 不一致时的布局保持
+add_executable(test_renderer_frame_policy ${PROJECT_SOURCE_DIR}/tests/renderer/test_frame_policy.cpp)
+target_include_directories(test_renderer_frame_policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/d2d ${PROJECT_SOURCE_DIR}/ports/core/include)
+add_test(NAME renderer_frame_policy COMMAND test_renderer_frame_policy)
