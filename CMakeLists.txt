@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.24)
+project(iterm2_win LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_library(itcore STATIC ports/core/src/core.cpp)
+target_include_directories(itcore PUBLIC ports/core/include)
