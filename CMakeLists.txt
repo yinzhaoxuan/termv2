@@ -73,6 +73,9 @@ if(WIN32)
   endif()
 endif()
 
+# T06：最小 Win32 实验窗（Linux 上 if(WIN32) 跳过；依赖 it2w_conpty + itrender_d2d）
+add_subdirectory(app/win32_term)
+
 # T05：屏幕模型 CORE-03/04/05 与 MEM-01 子集
 add_executable(itcore_test_screen tests/core/test_screen.cpp)
 target_link_libraries(itcore_test_screen PRIVATE itcore)

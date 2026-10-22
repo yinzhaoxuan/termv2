@@ -22,6 +22,8 @@ public:
 
     // 设备/交换链/图集；失败返回 false（设备丢失时上层重调）
     bool init(const GridMetrics &metrics, const wchar_t *font_family, float font_size_pt);
+    // 客户区尺寸变化：ResizeBuffers + 重建 D2D target（保留设备与字体）
+    bool resize_surface();
     void shutdown();
 
     // 只读快照；generation 不匹配时保持旧布局、多出区域填背景

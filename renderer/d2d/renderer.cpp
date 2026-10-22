@@ -152,6 +152,36 @@ void D2DRenderer::shutdown() {
 
 void D2DRenderer::set_snapshot(const itcore_snapshot *snap) { snap_ = snap; }
 
+bool D2DRenderer::resize_surface() {
+#ifdef _WIN32
+    if (!impl_ || !impl_->swap || !impl_->d2d || !host_) return false;
+    auto sz = host_->client_size_px();
+    UINT w = sz.w > 0 ? UINT(sz.w) : 1;
+    UINT h = sz.h > 0 ? UINT(sz.h) : 1;
+    impl_->d2d->SetTarget(nullptr);
+    if (impl_->target) { impl_->target->Release(); impl_->target = nullptr; }
+    HRESULT hr = impl_->swap->ResizeBuffers(0, w, h, DXGI_FORMAT_UNKNOWN, 0);
+    if (FAILED(hr)) {
+        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) device_lost_ = true;
+        return false;
+    }
+    IDXGISurface *surf = nullptr;
+    hr = impl_->swap->GetBuffer(0, IID_PPV_ARGS(&surf));
+    if (FAILED(hr)) return false;
+    D2D1_BITMAP_PROPERTIES1 bp = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
+    hr = impl_->d2d->CreateBitmapFromDxgiSurface(surf, &bp, &impl_->target);
+    surf->Release();
+    if (FAILED(hr)) return false;
+    impl_->d2d->SetTarget(impl_->target);
+    last_drawn_revision_ = 0;  // 强制整帧重绘
+    return true;
+#else
+    return true;
+#endif
+}
+
 GridMetrics::Rect D2DRenderer::caret_rect_px() const {
     uint16_t col = 0, row = 0; int vis = 0;
     if (snap_) itcore_snapshot_cursor(snap_, &col, &row, &vis);
@@ -286,6 +316,7 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *, float) {
 }
 void D2DRenderer::shutdown() { snap_ = nullptr; }
 void D2DRenderer::set_snapshot(const itcore_snapshot *snap) { snap_ = snap; }
+bool D2DRenderer::resize_surface() { return true; }
 GridMetrics::Rect D2DRenderer::caret_rect_px() const {
     uint16_t col = 0, row = 0; int vis = 0;
     if (snap_) itcore_snapshot_cursor(snap_, &col, &row, &vis);
