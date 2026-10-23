@@ -27,4 +27,5 @@ if(WIN32)
   # 仅链接检查：确保工厂及全部依赖符号可解析（不在 Linux 运行）
   add_executable(it2w_pane_backend_link ${PROJECT_SOURCE_DIR}/tests/app/pane_backend_link.cpp)
   target_link_libraries(it2w_pane_backend_link PRIVATE it2w_pane_backend)
+  set_property(TARGET it2w_pane_backend_link PROPERTY IT2W_TEST ON)   # 未经 add_test 的测试程序：显式标记
 endif()
