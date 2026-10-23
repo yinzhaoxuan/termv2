@@ -38,10 +38,10 @@ inline uint32_t resolve(const Theme &t, uint32_t c, bool is_fg) {
 
 // SGR 2/5/8/9 标志：itcore.h 尚未定义（缺口，待架构师在 itcore_cell.flags 补位），先用本地占位位值
 #ifndef ITCORE_HAS_SGR_EXT_FLAGS
-enum : uint16_t { ITREN_CELL_DIM = 1u << 6, ITREN_CELL_BLINK = 1u << 7, ITREN_CELL_HIDDEN = 1u << 8, ITREN_CELL_STRIKE = 1u << 9 };
+constexpr uint16_t ITREN_CELL_DIM = 1u << 6, ITREN_CELL_BLINK = 1u << 7, ITREN_CELL_HIDDEN = 1u << 8, ITREN_CELL_STRIKE = 1u << 9;
 #else
-enum : uint16_t { ITREN_CELL_DIM = ITCORE_CELL_DIM, ITREN_CELL_BLINK = ITCORE_CELL_BLINK,
-                  ITREN_CELL_HIDDEN = ITCORE_CELL_HIDDEN, ITREN_CELL_STRIKE = ITCORE_CELL_STRIKE };
+constexpr uint16_t ITREN_CELL_DIM = ITCORE_CELL_DIM, ITREN_CELL_BLINK = ITCORE_CELL_BLINK,
+                   ITREN_CELL_HIDDEN = ITCORE_CELL_HIDDEN, ITREN_CELL_STRIKE = ITCORE_CELL_STRIKE;
 #endif
 
 inline uint32_t blend50(uint32_t a, uint32_t b) {
