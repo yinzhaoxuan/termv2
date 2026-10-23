@@ -19,6 +19,7 @@
 struct itcore_event {
     itcore_event_kind kind;
     std::string data;
+    bool bel_term = false;  // CLIPBOARD_READ：请求以 BEL 结尾（否则 ST），应答照搬
 };
 
 struct itcore_snapshot {
@@ -222,12 +223,17 @@ struct itcore_core final : itcore::TokenSink {
         }
         return pad <= 2 && (in.size() % 4 == 0 || pad == 0);
     }
-    void osc52(const std::string &arg) {
+    void osc52(const std::string &arg, bool bel) {
         auto sc = arg.find(';');
         std::string sel = arg.substr(0, sc);
         if (sc == std::string::npos) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }
         std::string_view data = std::string_view(arg).substr(sc + 1);
-        if (data == "?") { push(clip_read ? ITCORE_EV_CLIPBOARD_READ : ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }
+        if (data == "?") {
+            if (!clip_read) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }
+            push(ITCORE_EV_CLIPBOARD_READ, sel);
+            events.back()->bel_term = bel;
+            return;
+        }
         std::string dec;
         if (!clip_write || data.size() > (clip_max / 3 + 1) * 4 || !b64_decode(data, clip_max, &dec)) {
             push(ITCORE_EV_CLIPBOARD_REQUEST, sel);
@@ -298,7 +304,7 @@ struct itcore_core final : itcore::TokenSink {
                 if (sc != std::string::npos)
                     screen->set_hyperlink(std::string_view(arg).substr(0, sc), std::string_view(arg).substr(sc + 1));
             }
-            else if (num == "52") osc52(arg);
+            else if (num == "52") osc52(arg, t.bel_term);
             if (!reply.empty()) push(ITCORE_EV_REPLY_BYTES, std::move(reply));
             break;
         }
@@ -478,9 +484,10 @@ int itcore_set_clipboard_policy(itcore_core *c, const itcore_clipboard_policy *c
     c->clip_max = cfg->max_bytes ? cfg->max_bytes : ITCORE_CLIPBOARD_DEFAULT_MAX;
     return 0;
 }
-int itcore_encode_clipboard_reply(itcore_core *c, const char *utf8, size_t len, itcore_buffer **out) {
+int itcore_encode_clipboard_reply(itcore_core *c, const itcore_event *req, const char *utf8, size_t len, itcore_buffer **out) {
     if (out) *out = nullptr;
     if (!c || !out || (!utf8 && len)) return -1;
+    if (req && req->kind != ITCORE_EV_CLIPBOARD_READ) return -1;
     if (!c->clip_read) return 1;
     if (len > c->clip_max) return -2;
     static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -494,7 +501,7 @@ int itcore_encode_clipboard_reply(itcore_core *c, const char *utf8, size_t len, 
         s.push_back(i + 1 < len ? T[(v >> 6) & 63] : '=');
         s.push_back(i + 2 < len ? T[v & 63] : '=');
     }
-    s += "\x1b\\";
+    s += (req && req->bel_term) ? "\x07" : "\x1b\\";  // 与请求结尾一致（同 OSC 4/10/11/12）
     *out = itcore_encode::make_buf(std::move(s));
     return *out ? 0 : -1;
 }

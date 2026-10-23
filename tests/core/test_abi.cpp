@@ -126,7 +126,7 @@ static void test_osc52() {
     // 默认：写、读都拒绝；读应答编码也拒绝
     CHECK(isReq(only(c, "\x1b]52;c;aGk=\x07"), "c"));
     CHECK(isReq(only(c, "\x1b]52;c;?\x07"), "c"));
-    CHECK(itcore_encode_clipboard_reply(c, "x", 1, &b) == 1 && !b);
+    CHECK(itcore_encode_clipboard_reply(c, nullptr, "x", 1, &b) == 1 && !b);
     // 只开写
     itcore_clipboard_policy p{sizeof(p), 1, 0, 8};
     CHECK(itcore_set_clipboard_policy(c, &p) == 0);
@@ -144,18 +144,40 @@ static void test_osc52() {
     CHECK(isReq(only(c, "\x1b]52;c;aG=k\x07"), "c"));   // 填充后有数据
     CHECK(isReq(only(c, "\x1b]52;c\x07"), "c"));        // 缺数据段
     CHECK(isReq(only(c, "\x1b]52;c;?\x07"), "c"));      // 写开 ≠ 读开
-    CHECK(itcore_encode_clipboard_reply(c, "x", 1, &b) == 1);
+    CHECK(itcore_encode_clipboard_reply(c, nullptr, "x", 1, &b) == 1);
     // 再开读
     p = {sizeof(p), 1, 1, 8};
     CHECK(itcore_set_clipboard_policy(c, &p) == 0);
     Ev r = only(c, "\x1b]52;c;?\x07");
     CHECK(r.k == ITCORE_EV_CLIPBOARD_READ && r.d == "c");
-    CHECK(itcore_encode_clipboard_reply(c, "hi", 2, &b) == 0 && b);
+    CHECK(itcore_encode_clipboard_reply(c, nullptr, "hi", 2, &b) == 0 && b);
     CHECK(std::string(reinterpret_cast<char *>(b->data), b->length) == "\x1b]52;c;aGk=\x1b\\");
     itcore_buffer_release(b); b = nullptr;
-    CHECK(itcore_encode_clipboard_reply(c, "", 0, &b) == 0 && std::string(reinterpret_cast<char *>(b->data), b->length) == "\x1b]52;c;\x1b\\");
+    CHECK(itcore_encode_clipboard_reply(c, nullptr, "", 0, &b) == 0 && std::string(reinterpret_cast<char *>(b->data), b->length) == "\x1b]52;c;\x1b\\");
     itcore_buffer_release(b); b = nullptr;
-    CHECK(itcore_encode_clipboard_reply(c, "123456789", 9, &b) == -2 && !b);  // 读也受上限
+    CHECK(itcore_encode_clipboard_reply(c, nullptr, "123456789", 9, &b) == -2 && !b);  // 读也受上限
+    // 应答结尾与请求一致：BEL ↔ BEL，ST ↔ ST
+    auto replyFor = [&](const std::string &req) {
+        feed(c, req);
+        std::string r; int reads = 0;
+        while (itcore_event *e = itcore_next_event(c)) {
+            if (itcore_event_type(e) == ITCORE_EV_CLIPBOARD_READ) {
+                ++reads;
+                itcore_buffer *bb = nullptr;
+                CHECK(itcore_encode_clipboard_reply(c, e, "hi", 2, &bb) == 0 && bb);
+                if (bb) { r.assign(reinterpret_cast<char *>(bb->data), bb->length); itcore_buffer_release(bb); }
+            } else if (itcore_event_type(e) == ITCORE_EV_REPLY_BYTES) {
+                itcore_buffer *bb = nullptr;
+                CHECK(itcore_encode_clipboard_reply(c, e, "hi", 2, &bb) == -1 && !bb);  // 非 READ 事件
+            }
+            itcore_event_release(e);
+        }
+        CHECK(reads == 1);
+        return r;
+    };
+    CHECK(replyFor("\x1b]52;c;?\x07") == "\x1b]52;c;aGk=\x07");
+    CHECK(replyFor("\x1b]52;c;?\x1b\\") == "\x1b]52;c;aGk=\x1b\\");
+    CHECK(replyFor("\x1b]52;c;?\x07\x1b[5n") == "\x1b]52;c;aGk=\x07");  // 与 DSR 同批，非 READ 事件被拒
     // 只开读不开写
     p = {sizeof(p), 0, 1, 0};
     CHECK(itcore_set_clipboard_policy(c, &p) == 0);

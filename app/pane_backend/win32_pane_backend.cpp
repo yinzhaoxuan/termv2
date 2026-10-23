@@ -499,7 +499,7 @@ void Win32PaneBackend::drainCoreEvents() {
             if (transport_) {
                 itcore_buffer *b = nullptr;
                 std::string cur = getClipboardUtf8();
-                if (itcore_encode_clipboard_reply(core_, cur.data(), cur.size(), &b) == 0 && b)
+                if (itcore_encode_clipboard_reply(core_, e, cur.data(), cur.size(), &b) == 0 && b)
                     transport_->reply(std::string_view(reinterpret_cast<const char *>(b->data), b->length));
                 if (b) itcore_buffer_release(b);
             }
