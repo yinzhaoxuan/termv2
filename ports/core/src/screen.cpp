@@ -419,11 +419,16 @@ void Scrollback::trim() {
 }
 void Scrollback::clear() { lines_.clear(); bytes_ = 0; }
 
-static void reflow_line(const LogicalLine &ll, uint16_t cols, std::vector<Row> &out, bool last_hard) {
+static void reflow_line(const LogicalLine &ll, uint16_t cols, std::vector<Row> &out, bool last_hard,
+                        const std::vector<SelPos> *src = nullptr, std::vector<std::vector<SelPos>> *opos = nullptr,
+                        SelPos empty_pos = {}) {
     (void)last_hard;
     if (cols == 0) return;
     size_t i = 0;
     while (i < ll.cells.size() || (i == 0 && ll.cells.empty())) {
+        std::vector<SelPos> rp;
+        if (opos) rp.assign(cols, empty_pos);
+        size_t row_first = i;
         Row r;
         r.cells.assign(cols, Cell::blank());
         r.id = ll.id;
@@ -441,9 +446,18 @@ static void reflow_line(const LogicalLine &ll, uint16_t cols, std::vector<Row> &
                 r.cells[col + k].flags = ITCORE_CELL_CONTINUATION;
                 r.cells[col + k].width = 0;
             }
+            if (opos && src) for (uint8_t k = 0; k < w && col + k < cols; ++k) rp[col + k] = (*src)[i];
             col += w;
             ++i;
             // skip continuation sources already consumed above via flag skip
+        }
+        if (opos && src) {
+            SelPos tail = empty_pos;
+            if (i < ll.cells.size()) tail = (*src)[i];
+            else if (i > row_first) { tail = (*src)[i - 1]; tail.off += 1; }
+            else if (!ll.cells.empty()) { tail = src->back(); tail.off += 1; }
+            for (size_t k = col; k < cols; ++k) rp[k] = tail;
+            opos->push_back(std::move(rp));
         }
         bool more = i < ll.cells.size();
         if (more) r.wrap = ITCORE_WRAP_SOFT;
@@ -512,6 +526,7 @@ std::string apply_csi_defaults(Token &t) {
         return "DECDSR";
     }
     if (priv == '?' && (f == 'h' || f == 'l') && no_inter) return f == 'h' ? "DECSET" : "DECRST";
+    if (priv == '?' && f == 'p' && inter == "$") { set_param_if_default(t, 0, 0); return "DECRQM"; }
     if (priv == '>' && f == 'c' && no_inter) { set_param_if_default(t, 0, 0); return "DA2"; }
     if (priv != 0) return "";  // 其它私有：消费但不填默认
 
@@ -608,24 +623,32 @@ void Screen::evict_to_scrollback(Row &&r) {
 }
 
 // 改进 reflow：合并连续 soft 逻辑行
-static void reflow_merged(const Scrollback &sb, uint16_t cols, std::vector<Row> &out) {
+static void reflow_merged(const Scrollback &sb, uint16_t cols, std::vector<Row> &out,
+                          std::vector<std::vector<SelPos>> *opos = nullptr) {
     out.clear();
+    if (opos) opos->clear();
     LogicalLine acc;
+    std::vector<SelPos> src;
+    SelPos empty{};
     for (size_t i = 0; i < sb.logical_count(); ++i) {
         auto &ll = sb.at(i);
-        if (acc.cells.empty() && acc.id == 0) acc.id = ll.id;
-        for (auto &c : ll.cells) acc.cells.push_back(c);
+        if (acc.cells.empty() && acc.id == 0) { acc.id = ll.id; empty = SelPos{ll.id, 0}; }
+        for (size_t k = 0; k < ll.cells.size(); ++k) {
+            acc.cells.push_back(ll.cells[k]);
+            if (opos) src.push_back(SelPos{ll.id, uint32_t(k)});
+        }
         if (ll.hard) {
             acc.hard = true;
-            reflow_line(acc, cols, out, true);
+            reflow_line(acc, cols, out, true, &src, opos, empty);
             acc = LogicalLine{};
+            src.clear();
         } else {
             acc.hard = false;
         }
     }
     if (!acc.cells.empty() || acc.id) {
         acc.hard = false;
-        reflow_line(acc, cols, out, false);
+        reflow_line(acc, cols, out, false, &src, opos, empty);
     }
 }
 
@@ -958,6 +981,7 @@ void Screen::set_mode(const Token &t, bool set) {
 
 void Screen::enter_alt(bool clear) {
     if (!modes_.alt) {
+        sel_clear();
         saved_main_.cur = main_.cursor();
         saved_main_.fg = pen_.fg; saved_main_.bg = pen_.bg; saved_main_.flags = pen_.flags;
         saved_main_.valid = true;
@@ -968,6 +992,7 @@ void Screen::enter_alt(bool clear) {
 }
 void Screen::leave_alt(bool clear) {
     if (modes_.alt) {
+        sel_clear();
         modes_.alt = false;
         if (clear) alt_.clear_all(Cell::blank());
         if (saved_main_.valid) {
@@ -993,6 +1018,8 @@ void Screen::full_reset() {
     modes_ = ScreenModes{};
     pen_ = Pen{};
     saved_main_ = SavedCursor{}; saved_alt_ = SavedCursor{};
+    sel_ = Selection{};
+    ++sel_serial_;
     scrollback_.clear();
     main_.reset(cols, rows);
     alt_.reset(cols, rows);
@@ -1081,7 +1108,7 @@ void Screen::apply_one(const Token &t, std::string *reply) {
         else if (cmd == "CUP" || cmd == "HVP") do_cup(param_or(t2, 0, 1), param_or(t2, 1, 1));
         else if (cmd == "ED") {
             int m = param_or(t2, 0, 0);
-            if (m == 3) { scrollback_.clear(); want_compact_ = true; }
+            if (m == 3) { scrollback_.clear(); want_compact_ = true; if (sel_.active && !sel_.alt) sel_clear(); }
             g.erase_in_display(m == 3 ? 2 : m, blank);
         }
         else if (cmd == "EL") g.erase_in_line(param_or(t2, 0, 0), blank);
@@ -1106,6 +1133,11 @@ void Screen::apply_one(const Token &t, std::string *reply) {
             if (bot == 0) bot = g.rows();
             g.set_scroll(top - 1, bot - 1);
             do_cup(1, 1);
+        }
+        else if (cmd == "DECRQM") {
+            // DECRPM：CSI ? Ps ; Pm $ y（Pm 0 未识别 / 1 置位 / 2 复位）
+            int p = param_or(t2, 0, 0);
+            if (reply) *reply += "\x1b[?" + std::to_string(p) + ";" + std::to_string(dec_mode_state(p)) + "$y";
         }
         else if (cmd == "DECSET") set_mode(t2, true);
         else if (cmd == "DECRST") set_mode(t2, false);
@@ -1183,7 +1215,177 @@ Screen::SnapshotData Screen::take_snapshot(int32_t first_row, uint16_t row_count
         r.resize_cols(sn.cols);
         sn.rows_data.push_back(std::move(r));
     }
+    // 选区叠加：选中格带 ITCORE_CELL_SELECTED，并翻转 INVERSE 以便现有渲染器直接画出
+    if (sel_.active && sel_.alt == modes_.alt) {
+        auto segs = sel_segments();
+        std::pair<size_t, uint32_t> a, b;
+        if (sel_range(segs, &a, &b)) {
+            std::unordered_map<uint64_t, size_t> ord;
+            for (size_t k = 0; k < segs.size(); ++k) ord[segs[k].id] = k;
+            auto pos = view_positions(first_row, row_count);
+            for (size_t y = 0; y < sn.rows_data.size() && y < pos.size(); ++y) {
+                auto &cells = sn.rows_data[y].cells;
+                for (size_t x = 0; x < cells.size() && x < pos[y].size(); ++x) {
+                    auto it = ord.find(pos[y][x].seg);
+                    if (it == ord.end()) continue;
+                    std::pair<size_t, uint32_t> k{it->second, pos[y][x].off};
+                    if (k < a || b < k) continue;
+                    cells[x].flags = uint16_t(cells[x].flags | ITCORE_CELL_SELECTED);
+                    cells[x].flags = uint16_t(cells[x].flags ^ ITCORE_CELL_INVERSE);
+                }
+            }
+        }
+    }
     return sn;
+}
+
+// ---- DECRQM / 模式查询 ----
+int Screen::dec_mode_state(int mode) const {
+    auto st = [](bool on) { return on ? 1 : 2; };
+    const uint32_t mm = modes_.mouse_mode;
+    switch (mode) {
+    case 1: return st(modes_.app_cursor);
+    case 7: return st(modes_.wrap);
+    case 25: return st(modes_.cursor_visible);
+    case 47: case 1047: case 1049: return st(modes_.alt);
+    case 9: return st(mm & ITCORE_MOUSE_MODE_X10);
+    case 1000: return st(mm & ITCORE_MOUSE_MODE_NORMAL);
+    case 1002: return st(mm & ITCORE_MOUSE_MODE_BUTTON);
+    case 1003: return st(mm & ITCORE_MOUSE_MODE_ANY);
+    case 1006: return st(mm & ITCORE_MOUSE_MODE_SGR);
+    case 2004: return st(modes_.bracketed_paste);
+    default: return 0;
+    }
+}
+
+// ---- 选区 ----
+// 段序列：主屏 = 历史逻辑段（淘汰顺序）+ 网格行；备用屏 = 仅网格行。每段的字符不含宽字符尾格。
+std::vector<Screen::Seg> Screen::sel_segments() const {
+    std::vector<Seg> v;
+    if (!sel_.alt) {
+        for (size_t i = 0; i < scrollback_.logical_count(); ++i) {
+            auto &ll = scrollback_.at(i);
+            Seg sg{ll.id, {}, ll.hard};
+            for (auto &c : ll.cells) sg.chars.push_back(&c);
+            v.push_back(std::move(sg));
+        }
+    }
+    const Grid &g = sel_.alt ? alt_ : main_;
+    for (int y = 0; y < g.rows(); ++y) {
+        auto &r = g.row(y);
+        Seg sg{r.id, {}, r.wrap == ITCORE_WRAP_HARD};
+        for (auto &c : r.cells) if (!(c.flags & ITCORE_CELL_CONTINUATION)) sg.chars.push_back(&c);
+        if (r.wrap == ITCORE_WRAP_WIDE)  // 宽字符放不下时行尾补的空格不算内容（上游同）
+            while (!sg.chars.empty() && sg.chars.back()->grapheme_id == 0) sg.chars.pop_back();
+        v.push_back(std::move(sg));
+    }
+    return v;
+}
+
+std::vector<std::vector<SelPos>> Screen::view_positions(int32_t first_row, uint16_t n) const {
+    std::vector<std::vector<SelPos>> out;
+    const uint16_t cols = grid().cols();
+    std::vector<Row> hist;
+    std::vector<std::vector<SelPos>> hpos;
+    if (!modes_.alt) reflow_merged(scrollback_, cols, hist, &hpos);
+    int64_t hist_n = int64_t(hpos.size());
+    for (uint16_t i = 0; i < n; ++i) {
+        int64_t abs = int64_t(first_row) + i;
+        std::vector<SelPos> rp(cols);
+        if (abs < 0) {
+            int64_t hi = hist_n + abs;
+            if (hi >= 0 && hi < hist_n) { rp = hpos[size_t(hi)]; rp.resize(cols, rp.empty() ? SelPos{} : rp.back()); }
+        } else if (abs < grid().rows()) {
+            auto &r = grid().row(int(abs));
+            uint32_t ci = 0;
+            for (uint16_t x = 0; x < cols && x < r.cells.size(); ++x) {
+                if (r.cells[x].flags & ITCORE_CELL_CONTINUATION) rp[x] = SelPos{r.id, ci ? ci - 1 : 0};
+                else rp[x] = SelPos{r.id, ci++};
+            }
+        }
+        out.push_back(std::move(rp));
+    }
+    return out;
+}
+
+bool Screen::sel_pos_at(int32_t first_row, uint16_t col, uint16_t row, SelPos *out) const {
+    auto pos = view_positions(first_row + row, 1);
+    if (pos.empty() || pos[0].empty()) return false;
+    *out = pos[0][std::min<size_t>(col, pos[0].size() - 1)];
+    return out->seg != 0;
+}
+
+// 端点 → (段序号, 字符序号)，按文档序排好。段已被淘汰（历史裁剪）时夹到最前；网格 resize 截掉的段夹到最后。
+bool Screen::sel_range(const std::vector<Seg> &segs, std::pair<size_t, uint32_t> *s, std::pair<size_t, uint32_t> *e) const {
+    if (!sel_.active || segs.empty()) return false;
+    auto locate = [&](SelPos p, bool *found) -> std::pair<size_t, uint32_t> {
+        for (size_t k = 0; k < segs.size(); ++k) if (segs[k].id == p.seg) { *found = true; return {k, p.off}; }
+        *found = false;
+        if (p.seg < segs.front().id) return {0, 0};
+        return {segs.size() - 1, uint32_t(segs.back().chars.size())};
+    };
+    bool fa = false, fb = false;
+    auto a = locate(sel_.anchor, &fa), b = locate(sel_.head, &fb);
+    if (!fa && !fb) return false;
+    if (b < a) std::swap(a, b);
+    *s = a; *e = b;
+    return true;
+}
+
+void Screen::sel_touch() {
+    ++sel_serial_;
+    main_.touch_all_rows();
+    alt_.touch_all_rows();
+    bump();
+}
+
+bool Screen::sel_start(int32_t first_row, uint16_t col, uint16_t row) {
+    SelPos p;
+    if (!sel_pos_at(first_row, col, row, &p)) { sel_clear(); return false; }
+    sel_ = Selection{true, modes_.alt, p, p};
+    sel_touch();
+    return true;
+}
+bool Screen::sel_extend(int32_t first_row, uint16_t col, uint16_t row) {
+    if (!sel_.active || sel_.alt != modes_.alt) return false;
+    SelPos p;
+    if (!sel_pos_at(first_row, col, row, &p)) return false;
+    if (p.seg == sel_.head.seg && p.off == sel_.head.off) return true;
+    sel_.head = p;
+    sel_touch();
+    return true;
+}
+void Screen::sel_clear() {
+    if (!sel_.active) return;
+    sel_ = Selection{};
+    sel_touch();
+}
+
+// 复制文本（上游 iTerm2 默认行为）：空格补空白格，宽字符只出一次，软换行拼接，
+// 硬换行出 '\n' 并去掉该行尾部空白；跨到行尾之后（点在内容右侧）不额外补换行。
+std::string Screen::sel_text() const {
+    auto segs = sel_segments();
+    std::pair<size_t, uint32_t> a, b;
+    if (sel_.alt != modes_.alt || !sel_range(segs, &a, &b)) return {};
+    std::string out, line;
+    auto rtrim = [](std::string &t) { while (!t.empty() && t.back() == ' ') t.pop_back(); };
+    for (size_t k = a.first; k <= b.first; ++k) {
+        const Seg &sg = segs[k];
+        size_t from = k == a.first ? a.second : 0;
+        size_t to = k == b.first ? std::min<size_t>(size_t(b.second) + 1, sg.chars.size()) : sg.chars.size();
+        for (size_t i = from; i < to; ++i) {
+            const Cell *c = sg.chars[i];
+            if (!c->grapheme_id) { line.push_back(' '); continue; }
+            size_t n = 0;
+            const char *t = pool_.get(c->grapheme_id, &n);
+            line.append(t, n);
+        }
+        if (k == b.first) break;
+        if (sg.hard) { rtrim(line); out += line; out += '\n'; line.clear(); }
+    }
+    if (b.second >= segs[b.first].chars.size() || segs[b.first].hard) rtrim(line);
+    out += line;
+    return out;
 }
 
 size_t Screen::mem_bytes() const {

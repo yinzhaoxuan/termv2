@@ -107,6 +107,10 @@ struct Row {
     size_t mem_bytes() const { return cells.size() * sizeof(Cell) + 32; }
 };
 
+// 选区端点：seg = 段身份（历史 LogicalLine.id / 网格 Row.id，淘汰进历史时保持不变），
+// off = 段内字符序号（不计宽字符尾格）。滚动、历史重排、resize 都不改变 (seg, off)。
+struct SelPos { uint64_t seg = 0; uint32_t off = 0; };
+
 struct Cursor { int x = 0, y = 0; };  // 0 基；x 可等于 cols（待换行）
 
 struct SavedCursor {
@@ -263,6 +267,16 @@ public:
         PoolRef pool;                // 增量引用字素池（不拷贝），见 GraphemePool
     };
     SnapshotData take_snapshot(int32_t first_row, uint16_t row_count) const;
+    // DECRQM 语义：0 不支持 / 1 置位 / 2 复位（DEC 私有模式号）
+    int dec_mode_state(int mode) const;
+    // ---- 选区（字符粒度；坐标为视口相对，first_row 同 take_snapshot）----
+    bool sel_start(int32_t first_row, uint16_t col, uint16_t row);
+    bool sel_extend(int32_t first_row, uint16_t col, uint16_t row);
+    void sel_clear();
+    bool sel_active() const { return sel_.active; }
+    std::string sel_text() const;
+    uint64_t sel_serial() const { return sel_serial_; }
+
     size_t mem_bytes() const;
 private:
     void write_char(uint32_t cp, const uint8_t *utf8, size_t utf8_len);
@@ -308,6 +322,17 @@ private:
     int last_x_ = -1, last_y_ = -1;
     uint32_t link_id_ = 0;
     bool join_cluster(uint32_t cp, const uint8_t *utf8, size_t utf8_len);
+    // 选区
+    struct Selection { bool active = false, alt = false; SelPos anchor, head; };
+    struct Seg { uint64_t id; std::vector<const Cell *> chars; bool hard; };
+    Selection sel_;
+    uint64_t sel_serial_ = 0;
+    std::vector<Seg> sel_segments() const;
+    bool sel_pos_at(int32_t first_row, uint16_t col, uint16_t row, SelPos *out) const;
+    // 视口 [first_row, first_row+n) 每行每列的选区坐标
+    std::vector<std::vector<SelPos>> view_positions(int32_t first_row, uint16_t n) const;
+    bool sel_range(const std::vector<Seg> &segs, std::pair<size_t, uint32_t> *s, std::pair<size_t, uint32_t> *e) const;
+    void sel_touch();
 };
 
 }  // namespace itcore

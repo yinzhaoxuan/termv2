@@ -57,8 +57,10 @@
 | `screen.cpp` `write_char` 组合 + `wrap_pending` | 组合字符在 wrap_pending 时回写**本行**最后一个非 CONTINUATION 格，不触发软换行。 |
 | `Grid::clear_for_write` / `repair_wide_orphans` | 写格前清宽字孤儿（CONTINUATION→基字清空；窄盖宽清多余尾格）；ICH/DCH 后行内修复。 |
 | `ScreenModes` + `set_mode` | DECCKM (?1)、鼠标 9/1000/1002/1003/1006、DECKPAM/DECKPNM（ESC =/>）。 |
+| `Screen::dec_mode_state` + DECRQM | 上游 `VT100Terminal` DECRQM 应答（`CSI ? Ps ; Pm $ y`）；ABI `itcore_mode_query`。 |
+| `Screen::sel_*` | 对应上游 `iTermSelection` 的字符粒度子集：端点用 (逻辑行 id, 字符序号) 代替绝对坐标，跟随历史重排；复制规则同上游默认（软换行拼接、去行尾空白）。 |
 | `itcore_snapshot_generation` | 快照携带最近成功 `resize_gen`。 |
-| `encode.cpp` | `encode_text` / `encode_paste`（≤32KiB、bracketed 事务）/ `encode_key`（DECCKM/应用键区）/ `encode_mouse`（1000/1002/1003+SGR 1006）。 |
+| `encode.cpp` | `encode_text` / `encode_paste`（≤32KiB、bracketed 事务、正文剥 NUL 与内嵌 200~/201~ 标记）/ `encode_key`（DECCKM/应用键区）/ `encode_mouse`（1000/1002/1003+SGR 1006）。 |
 | `renderer/d2d/*` | ISwapChainHost + D2D/DWrite 网格原型；字形 advance 不参与列定位；`caret_rect_px` + 预编辑覆盖层。 |
 | `conpty_transport.cpp` `failStart` | Wait 读线程后 `CloseHandle(reader_)`；正常 close 路径同样释放。 |
 

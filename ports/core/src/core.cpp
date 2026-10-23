@@ -174,6 +174,40 @@ const uint8_t *itcore_event_data(const itcore_event *e, size_t *len) {
 void itcore_event_release(itcore_event *e) { delete e; }
 void itcore_destroy(itcore_core *c) { delete c; }
 
+itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t mode) {
+    if (!c || !c->screen || mode > 0x7fffffffu) return ITCORE_MODE_NOT_RECOGNIZED;
+    return static_cast<itcore_mode_state>(c->screen->dec_mode_state(int(mode)));
+}
+int itcore_selection_start(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row) {
+    if (!c || !c->screen) return 0;
+    uint64_t before = c->screen->sel_serial();
+    c->screen->sel_start(first_row, col, row);
+    if (c->screen->sel_serial() == before) return 0;
+    c->push(ITCORE_EV_RENDER_INVALIDATED);
+    return 1;
+}
+int itcore_selection_extend(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row) {
+    if (!c || !c->screen) return 0;
+    uint64_t before = c->screen->sel_serial();
+    c->screen->sel_extend(first_row, col, row);
+    if (c->screen->sel_serial() == before) return 0;
+    c->push(ITCORE_EV_RENDER_INVALIDATED);
+    return 1;
+}
+void itcore_selection_clear(itcore_core *c) {
+    if (!c || !c->screen || !c->screen->sel_active()) return;
+    c->screen->sel_clear();
+    c->push(ITCORE_EV_RENDER_INVALIDATED);
+}
+int itcore_selection_active(const itcore_core *c) { return c && c->screen && c->screen->sel_active() ? 1 : 0; }
+int itcore_selection_text(itcore_core *c, itcore_buffer **out) {
+    if (out) *out = nullptr;
+    if (!c || !c->screen || !out) return -1;
+    if (!c->screen->sel_active()) return 1;
+    *out = itcore_encode::make_buf(c->screen->sel_text());
+    return *out ? 0 : -1;
+}
+
 int itcore_resize(itcore_core *c, uint16_t columns, uint16_t rows, uint64_t generation) {
     if (!c || !columns || !rows) return -1;
     if (generation && generation < c->resize_gen) return -2;  // 过期

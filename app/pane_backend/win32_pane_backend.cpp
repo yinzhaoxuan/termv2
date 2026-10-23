@@ -98,6 +98,8 @@ public:
     void paste(std::string_view utf8) override;
     uishell::CaretRect caretRect() const override;
     uishell::SessionStatus status() const override;
+    std::string selectedText() const override;
+    void clearSelection() override;
     void requestClose() override;
 
 private:
@@ -117,11 +119,15 @@ private:
     void handleMouse(UINT msg, WPARAM wp, LPARAM lp);
     void applyBounds(const uishell::PixelRect &rc, float dpi);
     void teardown();
+    void startCloser(CloseReason why);
+    void onCloseDone(const CloseOutcome &r);
+    void syncSelection();               // 选区有/无变化 → onSelectionChanged
+    void selectionChanged();            // 选区显示变化：重绘
 
     std::string connId_;
     uishell::PaneEvents ev_;
     std::shared_ptr<const PaneBackendConfig> cfg_;
-    UiDispatchQueue queue_;
+    std::shared_ptr<UiDispatchQueue> queue_ = std::make_shared<UiDispatchQueue>();
     std::atomic<HWND> hwnd_{nullptr};
     HWND parent_ = nullptr;
     std::unique_ptr<iterm_app::HwndSwapChainHost> host_;
@@ -129,11 +135,16 @@ private:
     itren::GridMetrics metrics_{};
     itcore_core *core_ = nullptr;
     itcore_snapshot *snap_ = nullptr;
-    std::unique_ptr<Transport> transport_;
+    // shared：关闭线程持有一份，传输层的阻塞关闭与析构都在那条线程上完成
+    std::shared_ptr<Transport> transport_;
+    SessionCloser closer_;
+    std::optional<CloseOutcome> closeOutcome_;
+    DragSelect drag_;
+    bool selActive_ = false, dragSelStarted_ = false;
     ResizeTracker resize_;
     RateLimiter bell_{1000};
     TitleThrottle title_{100};
-    std::atomic<bool> pumpPending_{false};
+    std::shared_ptr<std::atomic<bool>> pumpPending_ = std::make_shared<std::atomic<bool>>(false);
     mutable std::mutex statusMu_;
     uishell::SessionStatus status_;
     std::optional<SshExitInfo> sshExit_;
@@ -183,7 +194,8 @@ bool Win32PaneBackend::attach(void *parentHwnd, const uishell::PixelRect &rc, fl
     if (!renderer_->init(metrics_, cfg_->fontFamily.c_str(), cfg_->fontSizePt))
         std::fprintf(stderr, "[pane] D2DRenderer::init 失败（设备丢失时 present 内重试）\n");
     // 传输线程的 post 从这里开始能唤醒 UI 线程；attach 之前排队的任务立即补唤醒
-    queue_.setWake([this] { if (HWND w = hwnd_.load()) PostMessageW(w, WM_PANE_WAKE, 0, 0); });
+    // wake 只在队列未 close 时被调用（close 在析构最先执行），故可引用 this
+    queue_->setWake([this] { if (HWND w = hwnd_.load()) PostMessageW(w, WM_PANE_WAKE, 0, 0); });
     SetTimer(h, kTickTimer, kTickMs, nullptr);
     if (!startSession()) return true;  // 窗口已建，状态为 Failed，UI 可显示错误
     return true;
@@ -202,11 +214,15 @@ bool Win32PaneBackend::startSession() {
     renderer_->set_expected_generation(resize_.generation());
 
     GridSize gs{resize_.dims().cols, resize_.dims().rows};
-    auto onState = [this](SessionId, AttemptId, TransportState s, std::optional<TransportFault> f) {
-        queue_.post([this, s, f] { onTransportState(s, f); });
+    // 传输线程回调只捕获共享队列（不捕获 this）：窗格销毁后传输仍可能在关闭线程上回调，
+    // 此时队列已 close，post 被丢弃；被 post 的任务只在 UI 线程 drain 时（对象存活）执行。
+    auto q = queue_;
+    auto pending = pumpPending_;
+    auto onState = [this, q](SessionId, AttemptId, TransportState s, std::optional<TransportFault> f) {
+        q->post([this, s, f] { onTransportState(s, f); });
     };
-    auto onOut = [this](SessionId, AttemptId) {
-        if (!pumpPending_.exchange(true)) queue_.post([this] { pumpPending_ = false; pump(); });
+    auto onOut = [this, q, pending](SessionId, AttemptId) {
+        if (!pending->exchange(true)) q->post([this, pending] { *pending = false; pump(); });
     };
     auto onDiag = [](SessionId, AttemptId, const DiagRecord &d) {
         std::fprintf(stderr, "[pane] diag %s %llums %s\n", d.stage.c_str(), (unsigned long long)d.elapsedMs, d.detail.c_str());
@@ -215,7 +231,7 @@ bool Win32PaneBackend::startSession() {
         TransportCallbacks cb;
         cb.onStateChanged = onState;
         cb.onOutputAvailable = onOut;
-        cb.onExited = [this](SessionId, AttemptId, uint32_t code) { queue_.post([this, code] { localExit_ = code; }); };
+        cb.onExited = [this, q](SessionId, AttemptId, uint32_t code) { q->post([this, code] { localExit_ = code; }); };
         cb.onDiagnostic = onDiag;
         auto lt = std::make_unique<LocalT>();
         lt->t = std::make_unique<ConPtyTransport>(cb);
@@ -238,7 +254,7 @@ bool Win32PaneBackend::startSession() {
         SshCallbacks cb;
         cb.onStateChanged = onState;
         cb.onOutputAvailable = onOut;
-        cb.onFinished = [this](SessionId, AttemptId, const SshExitInfo &x) { queue_.post([this, x] { sshExit_ = x; }); };
+        cb.onFinished = [this, q](SessionId, AttemptId, const SshExitInfo &x) { q->post([this, x] { sshExit_ = x; }); };
         cb.onDiagnostic = onDiag;
         auto st = std::make_unique<SshT>();
         st->t = std::make_unique<SshTransport>(cb);
@@ -267,7 +283,9 @@ void Win32PaneBackend::onTransportState(TransportState s, std::optional<Transpor
         { std::lock_guard l(statusMu_); if (status_.state == uishell::SessionState::Starting) status_.state = uishell::SessionState::Running; }
         publishStatus();
     } else if (s == TransportState::Closed || s == TransportState::Failed) {
-        // 回调排在 onExited/onFinished 之后（同一 closer 线程先后 post），退出信息此时已到
+        // 回调排在 onExited/onFinished 之后（同一 closer 线程先后 post），退出信息此时已到。
+        // 用户关闭中：由关闭线程的结果（onCloseDone）收尾，以便上报超时。
+        if (closer_.started() && !closeOutcome_) return;
         finishSession();
     }
 }
@@ -283,7 +301,10 @@ void Win32PaneBackend::finishSession() {
     {
         std::lock_guard l(statusMu_);
         bool failed = transport_ && transport_->state() == TransportState::Failed && !closing_;
-        if (sshExit_ && sshExit_->error != SshError::None && sshExit_->error != SshError::RemoteExit) {
+        if (closeOutcome_ && closeOutcome_->timedOut) {
+            status_.state = uishell::SessionState::Failed;
+            status_.errorText = closeOutcome_->detail;
+        } else if (sshExit_ && sshExit_->error != SshError::None && sshExit_->error != SshError::RemoteExit) {
             status_.state = uishell::SessionState::Failed;
             status_.errorText = std::string(sshErrorName(sshExit_->error)) + (sshExit_->detail.empty() ? "" : ": " + sshExit_->detail);
             status_.exitCode = int(sshExit_->exitCode);
@@ -353,6 +374,7 @@ void Win32PaneBackend::pump() {
         }
     }
     drainCoreEvents();
+    if (any) syncSelection();  // 输出可能清掉选区（切备用屏 / RIS / ED 3）
     if (any) {
         present();
         if (ev_.onRedrawRequested) ev_.onRedrawRequested();
@@ -407,20 +429,21 @@ void Win32PaneBackend::sendInput(std::string_view utf8) {
 }
 
 void Win32PaneBackend::paste(std::string_view utf8) {
-    if (!transport_ || !core_ || closing_ || finished_) return;
-    // DECSET 2004 状态：核心未单独暴露，用空粘贴探测
-    bool bracketed = false;
-    itcore_buffer *probe = nullptr;
-    if (itcore_encode_paste(core_, "", 0, &probe) == 0 && probe) {
-        bracketed = bracketedFromProbe(std::string_view(reinterpret_cast<const char *>(probe->data), probe->length));
-        itcore_buffer_release(probe);
-    }
-    std::string body = sanitizePasteBody(utf8);
-    if (body.empty()) return;
-    // 走传输的粘贴事务（≤32 KiB，与用户输入不交错；标记由事务补齐）
-    auto r = transport_->beginPaste(body.size(), bracketed);
-    if (r == EnqueueResult::Ok) r = transport_->appendPaste(body);
-    if (r != EnqueueResult::Ok) std::fprintf(stderr, "[pane] paste %d (%zu bytes)\n", int(r), body.size());
+    if (!transport_ || !core_ || closing_ || finished_ || utf8.empty()) return;
+    auto rejected = [&] { if (ev_.onPasteRejected) ev_.onPasteRejected(utf8.size(), kPasteLimitBytes); };
+    // 核心按 DECSET 2004 决定是否加括号标记，并清洗正文（NUL / 内嵌起止标记）
+    itcore_buffer *enc = nullptr;
+    int rc = itcore_encode_paste(core_, utf8.data(), utf8.size(), &enc);
+    if (rc == -2) { rejected(); return; }
+    if (rc != 0 || !enc) return;
+    std::string bytes(reinterpret_cast<const char *>(enc->data), enc->length);
+    itcore_buffer_release(enc);
+    if (bytes.empty()) return;
+    // 走传输的粘贴事务（与用户输入不交错）；标记已在 bytes 里，事务不再补
+    auto r = transport_->beginPaste(bytes.size(), false);
+    if (r == EnqueueResult::Ok) r = transport_->appendPaste(bytes);
+    if (r == EnqueueResult::TooLarge) rejected();
+    else if (r != EnqueueResult::Ok) std::fprintf(stderr, "[pane] paste %d (%zu bytes)\n", int(r), bytes.size());
 }
 
 uishell::CaretRect Win32PaneBackend::caretRect() const {
@@ -443,11 +466,62 @@ uishell::SessionStatus Win32PaneBackend::status() const {
     return s;
 }
 
+// 关闭线程预算：传输层自身 3 s 预算（含强杀）+ 余量；超出即上报 Failed，线程继续等传输结束
+constexpr DWORD kCloserBudgetMs = 5000;
+
+void Win32PaneBackend::startCloser(CloseReason why) {
+    std::shared_ptr<Transport> t = transport_;
+    closer_.start(queue_,
+        [t, why]() {
+            CloseOutcome r;
+            t->close(why);  // T03A §1.4 九步由传输层 closer 线程执行；这里只等它在预算内结束
+            if (!t->waitClosed(kCloserBudgetMs)) { r.ok = false; r.timedOut = true; r.detail = "关闭超时，已强制结束"; }
+            return r;
+        },
+        [this](const CloseOutcome &r) { onCloseDone(r); },
+        [t]() mutable { t->waitClosed(INFINITE); t.reset(); });
+}
+
+void Win32PaneBackend::onCloseDone(const CloseOutcome &r) {
+    closeOutcome_ = r;
+    finishSession();  // UI 线程：排空剩余输出、finish_input、最终快照，onStatus(Exited/Failed)
+}
+
 void Win32PaneBackend::requestClose() {
     if (closing_ || finished_) return;
     closing_ = true;
-    if (transport_) transport_->close(CloseReason::User);  // 非阻塞：Closer 线程按 §1.4 执行
+    if (transport_) startCloser(CloseReason::User);  // 立即返回；结果经 UI 队列回到 onStatus
     else finishSession();
+}
+
+std::string Win32PaneBackend::selectedText() const {
+    if (!core_) return {};
+    itcore_buffer *b = nullptr;
+    if (itcore_selection_text(core_, &b) != 0 || !b) return {};
+    std::string s(reinterpret_cast<const char *>(b->data), b->length);
+    itcore_buffer_release(b);
+    return s;
+}
+
+void Win32PaneBackend::clearSelection() {
+    drag_.cancel();
+    if (!core_ || !itcore_selection_active(core_)) { syncSelection(); return; }
+    itcore_selection_clear(core_);
+    selectionChanged();
+}
+
+void Win32PaneBackend::selectionChanged() {
+    drainCoreEvents();
+    present();
+    if (ev_.onRedrawRequested) ev_.onRedrawRequested();
+    syncSelection();
+}
+
+void Win32PaneBackend::syncSelection() {
+    bool now = core_ && itcore_selection_active(core_);
+    if (now == selActive_) return;
+    selActive_ = now;
+    if (ev_.onSelectionChanged) ev_.onSelectionChanged(now);
 }
 
 void Win32PaneBackend::handleClick(int px, int py) {
@@ -486,16 +560,45 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
         }
         return;
     }
-    if (msg == WM_LBUTTONDOWN) { downCol_ = c; downRow_ = r; }
-    else if (msg == WM_LBUTTONUP) { handleClick(x, y); downCol_ = downRow_ = -1; }
+    // 本地：拖动选择（核心存 (逻辑行, 字符) 端点，跟随滚动/重排），单击清选区并检查链接
+    if (!core_) return;
+    DragSelect::Cell cell{c, r};
+    if (msg == WM_LBUTTONDOWN) { downCol_ = c; downRow_ = r; drag_.down(cell); dragSelStarted_ = false; return; }
+    auto startSel = [&] {
+        auto p = drag_.pressCell();
+        itcore_selection_start(core_, 0, uint16_t(p.col), uint16_t(p.row));
+        dragSelStarted_ = true;
+    };
+    DragSelect::Act act = msg == WM_LBUTTONUP ? drag_.up(cell) : drag_.move(cell);
+    switch (act) {
+    case DragSelect::Act::Start:
+        startSel();
+        itcore_selection_extend(core_, 0, c, r);
+        selectionChanged();
+        break;
+    case DragSelect::Act::Extend:
+        if (itcore_selection_extend(core_, 0, c, r)) selectionChanged();
+        break;
+    case DragSelect::Act::Finish:
+        if (!dragSelStarted_) startSel();
+        itcore_selection_extend(core_, 0, c, r);
+        selectionChanged();
+        break;
+    case DragSelect::Act::Click:
+        if (itcore_selection_active(core_)) { itcore_selection_clear(core_); selectionChanged(); }
+        handleClick(x, y);
+        break;
+    case DragSelect::Act::None: break;
+    }
+    if (msg == WM_LBUTTONUP) downCol_ = downRow_ = -1;
 }
 
 LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     HWND h = hwnd_;
     switch (m) {
-    case WM_PANE_WAKE: queue_.drain(); return 0;
+    case WM_PANE_WAKE: queue_->drain(); return 0;
     case WM_TIMER:
-        if (w == kTickTimer) { queue_.drain(); pump(); flushTitle(); }
+        if (w == kTickTimer) { queue_->drain(); pump(); flushTitle(); }
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -606,12 +709,11 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
 }
 
 void Win32PaneBackend::teardown() {
-    // 析构可能发生在会话仍运行时：先按 §1.4 关闭并等待（Closer 线程会持续读输出，不会死锁）
-    if (transport_) {
-        if (!closing_ && !finished_) transport_->close(CloseReason::User);
-        transport_->waitClosed(3000);
-    }
-    queue_.close();   // 丢弃尚未派发的回调，此后 PaneEvents 不再被调用
+    // 不阻塞 UI：先 close 队列（此后 PaneEvents 不再被调用，传输回调的 post 被丢弃），
+    // 再把传输交给关闭线程（若用户关闭尚未开始），本线程只放掉自己的引用，不 join、不等待。
+    queue_->close();
+    if (transport_ && !closer_.started()) startCloser(CloseReason::User);
+    transport_.reset();
     releaseSnap();
     if (renderer_) { renderer_->shutdown(); renderer_.reset(); }
     if (HWND h = hwnd_.exchange(nullptr)) {
@@ -619,7 +721,6 @@ void Win32PaneBackend::teardown() {
         DestroyWindow(h);
     }
     host_.reset();
-    transport_.reset();  // 传输析构等待清理完成
     if (core_) { itcore_destroy(core_); core_ = nullptr; }
 }
 

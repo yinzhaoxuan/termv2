@@ -1,29 +1,8 @@
 #include "pane_logic.h"
+#include <thread>
 #include <algorithm>
 
 namespace it2app {
-
-std::string sanitizePasteBody(std::string_view body) {
-    std::string s;
-    s.reserve(body.size());
-    for (char c : body) if (c != '\0') s.push_back(c);
-    static const std::string_view marks[] = {"\x1b[200~", "\x1b[201~", "\xc2\x9b" "200~", "\xc2\x9b" "201~"};
-    for (bool changed = true; changed;) {
-        changed = false;
-        for (auto m : marks) {
-            for (std::size_t p; (p = s.find(m)) != std::string::npos;) { s.erase(p, m.size()); changed = true; }
-        }
-    }
-    return s;
-}
-
-std::string buildPaste(std::string_view body, bool bracketed) {
-    std::string clean = sanitizePasteBody(body);
-    if (!bracketed) return clean;
-    return "\x1b[200~" + clean + "\x1b[201~";
-}
-
-bool bracketedFromProbe(std::string_view e) { return e.rfind("\x1b[200~", 0) == 0; }
 
 bool RateLimiter::allow(uint64_t now) {
     if (last_ && now - *last_ < interval_) return false;
@@ -79,5 +58,34 @@ std::size_t UiDispatchQueue::drain() {
 }
 void UiDispatchQueue::close() { std::lock_guard l(mu_); closed_ = true; q_.clear(); }
 std::size_t UiDispatchQueue::size() const { std::lock_guard l(mu_); return q_.size(); }
+
+bool SessionCloser::start(std::shared_ptr<UiDispatchQueue> q, Job job, Done done, std::function<void()> after) {
+    if (started_) return false;
+    started_ = true;
+    std::thread([q = std::move(q), job = std::move(job), done = std::move(done), after = std::move(after)]() mutable {
+        CloseOutcome r = job ? job() : CloseOutcome{};
+        job = nullptr;  // 先释放 job 持有的资源（析构也在本线程）
+        if (q && done) q->post([done = std::move(done), r = std::move(r)] { done(r); });
+        q.reset();
+        if (after) after();
+        after = nullptr;
+    }).detach();
+    return true;
+}
+
+DragSelect::Act DragSelect::move(Cell c) {
+    if (!pressed_) return Act::None;
+    if (dragging_) return Act::Extend;
+    if (c == press_) return Act::None;
+    dragging_ = true;
+    return Act::Start;
+}
+
+DragSelect::Act DragSelect::up(Cell c) {
+    if (!pressed_) return Act::None;
+    bool was = dragging_ || !(c == press_);
+    pressed_ = dragging_ = false;
+    return was ? Act::Finish : Act::Click;
+}
 
 }  // namespace it2app

@@ -55,23 +55,27 @@
 
 ## T08 PaneBackend（uishell/pane_backend.h 实现，架构师）
 
-- `app/pane_backend/pane_logic.*`（平台无关，Linux 单测 PANE-01）：粘贴净化（剥 NUL、ESC[200~/201~、C1 0x9B 形式，循环至不变）、bracketed 包装、bell 1 次/秒限流、标题 100ms 节流、最小网格 20×5、resize generation 追踪、UI 派发队列（空→非空唤醒）。
-- `app/pane_backend/win32_pane_backend.*`：`it2app::makeWin32PaneBackendFactory(PaneBackendConfig)`；空 connectionId→ConPtyTransport（%ComSpec%），否则经 `config.resolveSsh` 得 SshLaunchOptions→SshTransport。attach 建子窗 + HwndSwapChainHost + D2DRenderer；setBounds 先 itcore_resize(gen) 后 transport.resize(gen)；传输回调只投递队列，PaneEvents 仅在 UI 线程（WM_APP+0x41 / 50ms 定时器）派发；requestClose 走 T03A §1.4 异步关闭。
+- `app/pane_backend/pane_logic.*`（平台无关，Linux 单测 PANE-01）：bell 1 次/秒限流、标题 100ms 节流、最小网格 20×5、resize generation 追踪、UI 派发队列（空→非空唤醒）、`SessionCloser`（每会话关闭线程）、`DragSelect`（拖选手势）。粘贴清洗已移入核心。
+- `app/pane_backend/win32_pane_backend.*`：`it2app::makeWin32PaneBackendFactory(PaneBackendConfig)`；空 connectionId→ConPtyTransport（%ComSpec%），否则经 `config.resolveSsh`（仅创建时调用一次）得 SshLaunchOptions→SshTransport。attach 建子窗 + HwndSwapChainHost + D2DRenderer；setBounds 先 itcore_resize(gen) 后 transport.resize(gen)；传输回调只捕获共享队列并投递，PaneEvents 仅在 UI 线程（WM_APP+0x41 / 50ms 定时器）派发。
 - 传输改动：`ConPtyTransport::beginPaste(n, bracketed)` 透传（原先恒为 bracketed）；新增 `activeProcessCount()`（Job 基本记账 ActiveProcesses，加锁防 job_ 关闭竞态）；SshTransport 对应转发。
 
+### T08 评审修复（R1–R4，对齐 UI 头 783435d）
+1. **关闭不阻塞 UI**：`requestClose` 把关闭交给本会话的关闭线程后立即返回。该线程调 `transport.close(User)`，由传输层 closer 执行 T03A §1.4 的 9 步和 3 s 强杀，再 `waitClosed(5 s)`。结果 post 到 UI 队列，UI 线程 `finishSession`（排空输出、finish_input、最终快照）后发 `onStatus(Exited)`，超时发 `onStatus(Failed, "关闭超时，已强制结束")`。超时后线程继续等传输真正结束，并在该线程上析构。析构函数先 close 队列，再把传输交给关闭线程（若尚未开始），只释放自己的引用，**不 join、不等待**。多窗格各自一条线程，并行关闭。单测 PANE-01：立即返回、只经 drain 送达、8 个会话并行（≈单个耗时）、超时路径、关闭中销毁不回调。
+2. **粘贴**：直接 `itcore_encode_paste`，由核心按 DECSET 2004 加标记并清洗 NUL 与内嵌起止标记（7 位 / C1，循环删除），已删除 `bracketedFromProbe`/`buildPaste`/`sanitizePasteBody`。核心返回 -2 或传输返回 TooLarge 时调 `onPasteRejected(bytes, 32768)`。单测 ENC-02。
+3. **`itcore_mode_query(core, mode)`** → `ITCORE_MODE_NOT_RECOGNIZED/SET/RESET`（0/1/2，与 DECRPM Pm 一致），覆盖 1 7 9 25 47 1000 1002 1003 1006 1047 1049 2004。`CSI ? Ps $ p` → `CSI ? Ps ; Pm $ y`。单测 CORE-11。
+4. **选区在核心**：`itcore_selection_start/extend/clear/active/text`。端点存为 (逻辑段 id, 字符序号)，跟随滚动进历史、历史按宽度重排和 resize。起点被历史裁掉时夹到最早一行；切主/备用屏、RIS、ED 3 时清除。复制规则：软换行拼接，硬换行出 `\n`，行尾空白去掉，宽字符只出一次，WIDE 换行补的空格不算内容。快照里选中格带 `ITCORE_CELL_SELECTED` 并翻转 INVERSE，选区变化会 touch 全部行，触发脏行重绘。后端：本地模式（无鼠标报告或按住 Shift）下，移到另一格才开始拖选；单击清除选区并检查链接。`selectedText()`/`clearSelection()` 已实现；选区有/无变化（含被输出清掉）时发 `onSelectionChanged`。单测 CORE-12。
+- 剩余 UI 接口需求：见下“接口问题”。
+
 ### 接口问题（未改头文件，待 UI 定夺）
-1. 工厂仅收 connectionId，SSH 目标解析只能经配置注入 `resolveSsh`。
-2. 头文件无 DECSET 2004 查询：用 `itcore_encode_paste("")` 探测（建议 itcore 增 ABI）。
-3. “UI 翻译按键”与子窗焦点冲突：子窗把 WM_KEY*/WM_CHAR SendMessage 给父窗，IME 留在子窗处理。
-4. 无鼠标/选区 API：后端在子窗内自行处理（鼠标模式→encode_mouse；否则同格单击查超链接→onLinkActivated(url)）。
-5. onRedrawRequested 语义不明：后端自行 present，同时触发该事件。
-6. 粘贴上限 32KiB，超限只记日志，无错误回传通道。
-7. SSH 下 hasForegroundJob 无法看到远端，Running 期间恒为 true。
-8. 析构最多阻塞 3s 等关闭；requestClose 无完成回调（仅 onStatus(Exited)）。
-9. attach 在会话启动失败时仍返回 true（状态 Failed）。
+1. “UI 翻译按键”与子窗焦点冲突：子窗把 WM_KEY*/WM_CHAR SendMessage 给父窗，IME 留在子窗处理。
+2. 视口滚动（看历史）无接口：后端快照恒取 first_row=0；核心选区已支持负 first_row，需 UI 加 `scrollViewport(int lines)` / 滚轮转发约定。
+3. 双击选词 / 三击选行、选区自动滚动无接口与实现（核心按字符；可后续加 `itcore_selection_start` 粒度参数）。
+4. onRedrawRequested 语义不明：后端自行 present，同时触发该事件。
+5. SSH 下 hasForegroundJob 无法看到远端，Running 期间恒为 true（仅供参考）。
+6. attach 在会话启动失败时仍返回 true（状态 Failed）。
 
 ### T08 未实机项
-子窗交换链/DPI、IME 候选窗定位、焦点与按键转发、Job 进程计数（conhost 是否在 Job 内影响 >1 判定）、关闭顺序、链接单击、SSH 实连。
+子窗交换链/DPI、IME 候选窗定位、焦点与按键转发、Job 进程计数（conhost 是否在 Job 内影响 >1 判定）、关闭顺序与多窗格并行关闭耗时、拖选与选区高亮、链接单击、SSH 实连。
 
 ## 未实机项（须 Win11 + 真 ConPTY / D3D 验证）
 

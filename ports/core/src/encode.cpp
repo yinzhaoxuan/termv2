@@ -3,6 +3,7 @@
 #include "encode.h"
 #include <new>
 #include <string>
+#include <string_view>
 
 namespace itcore_encode {
 
@@ -232,6 +233,12 @@ int encode_paste(itcore::Screen *screen, const char *utf8, size_t len, itcore_bu
     std::string body;
     body.reserve(len);
     if (utf8) for (size_t i = 0; i < len; ++i) if (utf8[i]) body.push_back(utf8[i]);
+    static const std::string_view marks[] = {"\x1b[200~", "\x1b[201~", "\xc2\x9b" "200~", "\xc2\x9b" "201~"};
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto m : marks)
+            for (size_t p; (p = body.find(m)) != std::string::npos;) { body.erase(p, m.size()); changed = true; }
+    }
     std::string all;
     if (screen->modes().bracketed_paste) {
         all.reserve(body.size() + 16);

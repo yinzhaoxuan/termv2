@@ -20,7 +20,9 @@ typedef struct { uint32_t abi_version, struct_size; uint16_t columns, rows;
 
 /* 字符格：颜色统一为 0xTTRRGGBB，TT=0 默认/1 调色板索引(RR 为下标)/2 真彩色 */
 enum { ITCORE_CELL_CONTINUATION = 1u << 0, ITCORE_CELL_BOLD = 1u << 1, ITCORE_CELL_ITALIC = 1u << 2,
-       ITCORE_CELL_UNDERLINE = 1u << 3, ITCORE_CELL_INVERSE = 1u << 4 };
+       ITCORE_CELL_UNDERLINE = 1u << 3, ITCORE_CELL_INVERSE = 1u << 4,
+       /* 快照里选区内的格：同时已翻转 INVERSE，渲染器无需额外处理 */
+       ITCORE_CELL_SELECTED = 1u << 5 };
 typedef struct { uint32_t grapheme_id; uint8_t width; uint8_t reserved; uint16_t flags;
                  uint32_t fg, bg, underline_color; uint32_t hyperlink_id; } itcore_cell;
 typedef enum { ITCORE_WRAP_HARD = 0, ITCORE_WRAP_SOFT = 1, ITCORE_WRAP_WIDE = 2 } itcore_wrap;
@@ -86,7 +88,8 @@ enum {
 };
 
 int  itcore_encode_text(itcore_core *c, const char *utf8, size_t len, itcore_buffer **out);
-/* 粘贴：整事务（可选 bracketed 首尾）一次返回；>32KiB 返回 -2，*out=null */
+/* 粘贴：整事务一次返回；DECSET 2004 开启时由核心加 ESC[200~/ESC[201~。正文去掉 NUL 及内嵌的
+   括号粘贴起止标记（7 位与 C1 形式，反复删除），防止伪造结束标记注入。>32KiB 返回 -2，*out=null */
 int  itcore_encode_paste(itcore_core *c, const char *utf8, size_t len, itcore_buffer **out);
 int  itcore_encode_key(itcore_core *c, const itcore_key_event *ev, itcore_buffer **out);
 /* 未启用鼠标模式时返回 1 且 *out=null（留给本地选择）；成功 0 */
@@ -121,6 +124,20 @@ void itcore_snapshot_release(itcore_snapshot *s);
    与核心后续写入并发安全；释放前指针稳定。 */
 int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t hyperlink_id,
                               const char **url, size_t *url_len, const char **id, size_t *id_len);
+/* DEC 私有模式查询，返回值与 DECRQM/DECRPM 的 Pm 对齐 */
+typedef enum { ITCORE_MODE_NOT_RECOGNIZED = 0, ITCORE_MODE_SET = 1, ITCORE_MODE_RESET = 2 } itcore_mode_state;
+/* 至少覆盖 1 7 9 25 47 1000 1002 1003 1006 1047 1049 2004；core 为空返回 NOT_RECOGNIZED */
+itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t dec_private_mode);
+
+/* 本地选区（字符粒度），坐标同 itcore_acquire_snapshot：first_row 相对视口顶部，col/row 为快照内格坐标。
+   端点按 (逻辑段, 字符序号) 存储，跟随滚动历史、重排与 resize；切换主/备用屏、RIS、ED 3 时清除。
+   start/extend 返回 1 表示选区（或其显示）有变化，0 表示无变化或坐标无效。 */
+int  itcore_selection_start(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row);
+int  itcore_selection_extend(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row);
+void itcore_selection_clear(itcore_core *c);
+int  itcore_selection_active(const itcore_core *c);
+/* 复制文本（UTF-8）：软换行拼接、硬换行 '\n'、行尾空白去除、宽字符只出一次。无选区返回 1 且 *out=null */
+int  itcore_selection_text(itcore_core *c, itcore_buffer **out);
 void itcore_destroy(itcore_core *c);
 #ifdef __cplusplus
 }
