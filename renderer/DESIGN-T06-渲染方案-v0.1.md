@@ -61,3 +61,10 @@ IME：UI 负责焦点和组合状态，渲染提供 `caret_rect_px()`（基于 G
 1. 补 `itcore_encode_key`、`itcore_encode_mouse`、鼠标模式和选择所需的行身份查询（目前只有 row_revision）。
 2. 快照是否携带光标形状/闪烁和主备用屏标记。
 3. 渲染线程与执行器之间的快照投递队列放在 app 层还是 renderer 层。
+
+### 4.x 同步输出 ?2026（v0.1 补充）
+- 后端与渲染共用一个常量 `ITREN_SYNC_TIMEOUT_MS = 150`。
+- ?2026 打开期间后端暂停快照，D2D 不 Present，保持上一帧。
+- ?2026 关闭时立即出一帧整帧（DirtyRows::invalidate）。
+- 打开超过 150ms 仍未关闭：后端发一次快照，渲染强制出一帧，避免程序卡死时画面冻结。
+- DECSTR/RIS 清掉 ?2026 时，后端立即发快照，渲染随即出帧。
