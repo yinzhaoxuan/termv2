@@ -151,6 +151,23 @@ private:
 };
 
 // 视口：offset = 离底部的行数（0 = 跟随输出）；first_row = -offset。history = 历史显示行数。
+// sendKey 的平台无关决策。uiMods 为 PaneBackend::KeyMods（Shift1 Alt2 Ctrl4）；translated 为 ToUnicode
+// 在当前修饰键下翻译出的码点（0 无），base 为不带 Ctrl/Alt 时该键的字符（MapVirtualKey，已按 Shift 定大小写，0 无）。
+// - VK_PROCESSKEY（0xE5）：Ignore，交给输入法。
+// - Ctrl+Alt（AltGr 在 Windows 上报成 Ctrl+Alt）且 translated 为可打印字符：Text，按文本发。
+// - 其余：Key，交 itcore_encode_key（coreMods 为 ITCORE_MOD_*：Shift1 Ctrl2 Alt4；带 Ctrl/Alt 的字符键附 base，
+//   核心据此出 Ctrl 控制字符或 Alt 的 ESC 前缀）。
+struct KeyPlan {
+    enum Kind { Ignore, Text, Key } kind = Ignore;
+    std::string text;
+    unsigned vk = 0, coreMods = 0;
+    uint32_t unicode = 0;
+};
+KeyPlan planKey(unsigned vk, unsigned uiMods, uint32_t translated, uint32_t base);
+std::string utf8Encode(uint32_t cp);
+// 旧 attempt 只读文本预算（设计 §15.4：每 Pane 一个，最多 8 MiB）
+inline constexpr std::size_t kPrevAttemptTextBytes = 8u * 1024u * 1024u;
+
 class Viewport {
 public:
     int offset() const { return offset_; }

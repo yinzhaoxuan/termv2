@@ -164,6 +164,28 @@ static void misc() {
     itcore_destroy(c);
 }
 
+// CORE-19：itcore_export_text（重连旧 attempt 文本）：逻辑行、尾部截断不切断 UTF-8
+static void export_text() {
+    auto *c = make(10, 3);
+    feed(c, "one  \r\n0123456789abc\r\n\xE4\xB8\xAD\xE6\x96\x87x\r\nlast");  // 软换行拼回逻辑行
+    itcore_buffer *b = nullptr;
+    CHECK(itcore_export_text(c, 1 << 20, &b) == 0 && b);
+    std::string all((const char *)b->data, b->length); itcore_buffer_release(b);
+    CHECK(all == "one\n0123456789abc\n\xE4\xB8\xAD\xE6\x96\x87x\nlast");
+    for (size_t cap = 0; cap <= all.size(); ++cap) {
+        CHECK(itcore_export_text(c, cap, &b) == 0 && b);
+        std::string t((const char *)b->data, b->length); itcore_buffer_release(b);
+        CHECK(t.size() <= cap);
+        CHECK(all.compare(all.size() - t.size(), t.size(), t) == 0);  // 是尾部
+        CHECK(t.empty() || (static_cast<unsigned char>(t[0]) & 0xC0) != 0x80);
+    }
+    feed(c, "\x1b[?1049hALT");  // 备用屏不影响：导出主屏
+    CHECK(itcore_export_text(c, 1 << 20, &b) == 0 && b);
+    CHECK(std::string((const char *)b->data, b->length) == all); itcore_buffer_release(b);
+    CHECK(itcore_export_text(nullptr, 10, &b) == -1 && !b);
+    itcore_destroy(c);
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "all" || w == "charset") charsets();
@@ -171,6 +193,7 @@ int main(int argc, char **argv) {
     if (w == "all" || w == "sgr") sgr();
     if (w == "all" || w == "modes") modes();
     if (w == "all" || w == "misc") misc();
+    if (w == "all" || w == "export") export_text();
     if (failures) { std::printf("%d failures\n", failures); return 1; }
     std::puts("ok");
     return 0;

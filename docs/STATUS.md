@@ -97,6 +97,11 @@
 - 后端：`PaneBackendConfig::resolveHyperV`，失败文本为 `<类别>: <说明>` 写进 errorText；连接后标题为 “Hyper-V <地址>” 或 “手动地址 <地址>”。
 - 测试 HV-01.resolve_policy。实机（VM-01）未跑。
 
+### PaneBackend 新接口（对齐 UI 头 5397adb / 00f1574）
+- `sendKey(vk, mods)`：`planKey`（PANE-04）决策——VK_PROCESSKEY 忽略；Ctrl+Alt 且 ToUnicode 有可打印字符（AltGr）按文本走 sendInput；其余交 `itcore_encode_key`（DECCKM/DECKPAM/xterm 修饰键，Alt+字符 ESC 前缀、Ctrl+字母控制字符由核心按 base 字符生成）。
+- `reconnect()`：旧 attempt 用 `itcore_export_text` 归档逻辑文本（§15.4：每 Pane 一个、≤8 MiB、尾部保留、不切断 UTF-8，CORE-19），旧传输交给旧共享状态上的关闭线程（旧队列先 close），新 core + 进程，attempt +1（传入 AttemptId）。`previousAttemptId()` / `previousAttemptText()` 返回归档。
+- 门禁：mingw 全量构建含 it2w_shell（以 HEAD 的 ui/ 验证；工作区里 UI 未提交的 main.cpp 当前编不过，非本提交范围）。
+
 ### P0 序列（第 1 批：屏幕本地 + 快照 ABI）
 - SCS `ESC ( / ESC )` + SO/SI，DEC 特殊图形映射；DECSC/DECRC/?1048 一并保存字符集（CORE-14）。
 - 制表位：HTS、TBC 0/3、CHT `CSI I`、CBT `CSI Z`，resize 扩展默认每 8 列，RIS 复位（CORE-15）。

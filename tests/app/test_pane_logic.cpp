@@ -265,11 +265,35 @@ static void drag() {
     d.down({1, 1}); d.cancel();
     CHECK(d.up({1, 1}) == A::None);
 }
+// PANE-04：sendKey 决策（VK_PROCESSKEY 忽略、AltGr 文本、Alt/Ctrl 字符附 base、修饰键位映射）
+static void keys() {
+    using it2app::planKey; using it2app::KeyPlan;
+    CHECK(planKey(0xE5, 0, 'a', 'a').kind == KeyPlan::Ignore);
+    auto g = planKey('Q', 2 | 4, '@', 'q');                 // 德语 AltGr+Q
+    CHECK(g.kind == KeyPlan::Text && g.text == "@");
+    auto e = planKey('E', 2 | 4, 0x20AC, 'e');              // AltGr+E → €
+    CHECK(e.kind == KeyPlan::Text && e.text == "\xE2\x82\xAC");
+    auto ca = planKey('C', 2 | 4, 0, 'c');                  // 真 Ctrl+Alt+C：无翻译 → 按键
+    CHECK(ca.kind == KeyPlan::Key && ca.coreMods == (2u | 4u) && ca.unicode == 'c');
+    auto a = planKey('X', 2, 'x', 'x');
+    CHECK(a.kind == KeyPlan::Key && a.coreMods == 4u && a.unicode == 'x');
+    auto c = planKey('A', 4, 1, 'a');
+    CHECK(c.kind == KeyPlan::Key && c.coreMods == 2u && c.unicode == 'a');
+    auto up = planKey(0x26, 1 | 4, 0, 0);
+    CHECK(up.kind == KeyPlan::Key && up.vk == 0x26 && up.coreMods == (1u | 2u) && up.unicode == 0);
+    auto f = planKey(0x70, 0, 0, 0);
+    CHECK(f.kind == KeyPlan::Key && f.coreMods == 0);
+    CHECK(planKey('A', 0, 'a', 'a').unicode == 0);          // 无修饰的字符键由 WM_CHAR 走 sendInput
+    CHECK(it2app::utf8Encode(0x1F600) == "\xF0\x9F\x98\x80" && it2app::utf8Encode(0xD800).empty());
+    CHECK(it2app::kPrevAttemptTextBytes == 8u * 1024u * 1024u);
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "churn") churn();
     else if (w == "viewport") viewport();
-    else { limits(); grid(); queue(); closer(); drag(); if (w == "all") { churn(); viewport(); } }
+    else if (w == "keys") keys();
+    else { limits(); grid(); queue(); closer(); drag(); if (w == "all") { churn(); viewport(); keys(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

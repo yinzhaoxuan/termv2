@@ -113,6 +113,10 @@ public:
     void setFocused(bool f) override;
     void sendInput(std::string_view utf8) override;
     void paste(std::string_view utf8) override;
+    void sendKey(unsigned vk, unsigned mods) override;
+    std::uint64_t previousAttemptId() const override { return prevAttemptId_; }
+    std::string previousAttemptText() const override { return prevAttemptText_; }
+    void reconnect() override;
     uishell::CaretRect caretRect() const override;
     uishell::SessionStatus status() const override;
     std::string selectedText() const override;
@@ -184,6 +188,9 @@ private:
     std::optional<uint32_t> localExit_;
     bool focused_ = false, closing_ = false, finished_ = false, skipChar_ = false;
     int downCol_ = -1, downRow_ = -1;
+    std::uint64_t attempt_ = 1;          // 当前 attempt；reconnect +1
+    std::uint64_t prevAttemptId_ = 0;    // 0 = 无旧归档
+    std::string prevAttemptText_;        // 旧 attempt 只读逻辑文本（≤ kPrevAttemptTextBytes）
 };
 
 }  // namespace
@@ -283,7 +290,7 @@ bool Win32PaneBackend::startSession() {
         auto *raw = lt->t.get();
         transport_ = std::move(lt);
         shared_->transport = transport_;
-        if (!raw->start(SessionId{1}, AttemptId{1}, spec)) { fail("本地 shell 启动失败"); return false; }
+        if (!raw->start(SessionId{1}, AttemptId{attempt_}, spec)) { fail("本地 shell 启动失败"); return false; }
     } else if (std::string herr; cfg_->resolveHyperV && [&] {
                    auto h = cfg_->resolveHyperV(connId_, &herr);
                    if (!h) return !herr.empty();   // 有错误文本：是 Hyper-V 连接但配置无效
@@ -313,7 +320,7 @@ bool Win32PaneBackend::startSession() {
                    auto *raw = ht->t.get();
                    transport_ = std::move(ht);
                    shared_->transport = transport_;
-                   raw->start(SessionId{1}, AttemptId{1}, std::move(*h));
+                   raw->start(SessionId{1}, AttemptId{attempt_}, std::move(*h));
                    herr.clear();
                    return true;
                }()) {
@@ -335,7 +342,7 @@ bool Win32PaneBackend::startSession() {
         auto *raw = st->t.get();
         transport_ = std::move(st);
         shared_->transport = transport_;
-        if (auto se = raw->start(SessionId{1}, AttemptId{1}, *o)) {
+        if (auto se = raw->start(SessionId{1}, AttemptId{attempt_}, *o)) {
             fail("SSH 配置快照无效：" + se->field + " " + se->reason);
             return false;
         }
@@ -526,6 +533,90 @@ void Win32PaneBackend::paste(std::string_view utf8) {
     if (r == EnqueueResult::Ok) r = transport_->appendPaste(bytes);
     if (r == EnqueueResult::TooLarge) rejected();
     else if (r != EnqueueResult::Ok) std::fprintf(stderr, "[pane] paste %d (%zu bytes)\n", int(r), bytes.size());
+}
+
+// 特殊键：决策在 planKey（Linux 单测），这里只取 ToUnicode / MapVirtualKey 的结果。
+void Win32PaneBackend::sendKey(unsigned vk, unsigned mods) {
+    if (!transport_ || !core_ || closing_ || finished_) return;
+    uint32_t translated = 0, base = 0;
+    if (vk != VK_PROCESSKEY) {
+        BYTE ks[256] = {};
+        if (GetKeyboardState(ks)) {
+            wchar_t buf[4] = {};
+            // 第 4 位标志：不改变内核键盘状态（Win10 1607+），避免吞掉死键
+            int n = ToUnicode(vk, MapVirtualKeyW(vk, MAPVK_VK_TO_VSC), ks, buf, 4, 0x4);
+            if (n == 1) translated = buf[0];
+            else if (n == 2 && IS_HIGH_SURROGATE(buf[0]) && IS_LOW_SURROGATE(buf[1]))
+                translated = 0x10000u + ((uint32_t(buf[0]) - 0xD800u) << 10) + (uint32_t(buf[1]) - 0xDC00u);
+            // 不带 Ctrl/Alt 的字符（Alt+字母的 ESC 前缀、Ctrl+字母的控制字符都基于它）
+            ks[VK_CONTROL] = ks[VK_LCONTROL] = ks[VK_RCONTROL] = 0;
+            ks[VK_MENU] = ks[VK_LMENU] = ks[VK_RMENU] = 0;
+            if (!(mods & uishell::PaneBackend::ModShift)) ks[VK_SHIFT] = ks[VK_LSHIFT] = ks[VK_RSHIFT] = 0;
+            else ks[VK_SHIFT] = 0x80;
+            wchar_t b2[4] = {};
+            if (ToUnicode(vk, MapVirtualKeyW(vk, MAPVK_VK_TO_VSC), ks, b2, 4, 0x4) == 1) base = b2[0];
+        }
+    }
+    KeyPlan plan = planKey(vk, mods, translated, base);
+    if (plan.kind == KeyPlan::Ignore) return;
+    if (plan.kind == KeyPlan::Text) { sendInput(plan.text); return; }
+    itcore_key_event ke{};
+    ke.struct_size = sizeof(ke);
+    ke.vk = plan.vk;
+    ke.modifiers = plan.coreMods;
+    ke.unicode = plan.unicode;
+    itcore_buffer *b = nullptr;
+    if (itcore_encode_key(core_, &ke, &b) == 0 && b) {
+        std::string bytes(reinterpret_cast<const char *>(b->data), b->length);
+        itcore_buffer_release(b);
+        if (!bytes.empty()) {
+            scrollToBottom();
+            auto r = transport_->input(bytes);  // 已编码，不再做 LNM 处理（核心按 LNM 编码 Enter）
+            if (r != EnqueueResult::Ok) std::fprintf(stderr, "[pane] sendKey enqueue %d\n", int(r));
+        }
+    } else if (b) {
+        itcore_buffer_release(b);
+    }
+}
+
+// 12.3 / 15.4：归档旧 attempt 的逻辑文本（只一个、≤8 MiB、不留 core/传输/链接），旧传输交给它自己的
+// 关闭线程（旧队列先 close，旧回调的投递一律丢弃），再用新的共享状态启动新 core + 进程，attempt +1。
+void Win32PaneBackend::reconnect() {
+    HWND h = hwnd_;
+    if (!h || !renderer_) return;
+    if (core_) {
+        itcore_buffer *b = nullptr;
+        if (itcore_export_text(core_, kPrevAttemptTextBytes, &b) == 0 && b) {
+            prevAttemptText_.assign(reinterpret_cast<const char *>(b->data), b->length);
+            itcore_buffer_release(b);
+        } else {
+            prevAttemptText_.clear();
+        }
+        prevAttemptId_ = attempt_;
+    }
+    queue_->close();
+    if (transport_ && !closer_.started()) startCloser(CloseReason::User);
+    transport_.reset();
+    if (!closer_.started()) shared_->transport.reset();
+    releaseSnap();
+    if (core_) { itcore_destroy(core_); core_ = nullptr; }
+
+    shared_ = std::make_shared<SessionShared>();
+    queue_ = shared_->queue;
+    closer_ = SessionCloser{};
+    closeOutcome_.reset(); sshExit_.reset(); hvResult_.reset(); localExit_.reset();
+    closing_ = finished_ = false;
+    selActive_ = dragSelStarted_ = false;
+    drag_.cancel();
+    dragEdge_ = 0;
+    vp_.toBottom();
+    ++attempt_;
+    { std::lock_guard l(statusMu_); status_ = {uishell::SessionState::Starting, 0, false, {}, {}}; }
+    queue_->setWake([h] { PostMessageW(h, WM_PANE_WAKE, 0, 0); });
+    publishStatus();
+    if (startSession()) present();
+    syncViewport(true);
+    syncSelection();
 }
 
 uishell::CaretRect Win32PaneBackend::caretRect() const {

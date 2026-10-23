@@ -1387,9 +1387,9 @@ size_t Screen::history_display_rows() const {
 
 // ---- 选区 ----
 // 段序列：主屏 = 历史逻辑段（淘汰顺序）+ 网格行；备用屏 = 仅网格行。每段的字符不含宽字符尾格。
-std::vector<Screen::Seg> Screen::sel_segments() const {
+std::vector<Screen::Seg> Screen::segments(bool alt) const {
     std::vector<Seg> v;
-    if (!sel_.alt) {
+    if (!alt) {
         for (size_t i = 0; i < scrollback_.logical_count(); ++i) {
             auto &ll = scrollback_.at(i);
             Seg sg{ll.id, {}, ll.hard};
@@ -1397,7 +1397,7 @@ std::vector<Screen::Seg> Screen::sel_segments() const {
             v.push_back(std::move(sg));
         }
     }
-    const Grid &g = sel_.alt ? alt_ : main_;
+    const Grid &g = alt ? alt_ : main_;
     for (int y = 0; y < g.rows(); ++y) {
         auto &r = g.row(y);
         Seg sg{r.id, {}, r.wrap == ITCORE_WRAP_HARD};
@@ -1590,6 +1590,28 @@ std::string Screen::sel_text() const {
     if (b.second >= segs[b.first].chars.size() || segs[b.first].hard) rtrim(line);
     out += line;
     return out;
+}
+
+std::string Screen::export_text(size_t max_bytes) const {
+    auto segs = segments(false);
+    std::string out, line;
+    auto rtrim = [](std::string &t) { while (!t.empty() && t.back() == ' ') t.pop_back(); };
+    for (size_t k = 0; k < segs.size(); ++k) {
+        for (const Cell *c : segs[k].chars) {
+            if (!c->grapheme_id) { line.push_back(' '); continue; }
+            size_t n = 0;
+            const char *t = pool_.get(c->grapheme_id, &n);
+            line.append(t, n);
+        }
+        if (segs[k].hard || k + 1 == segs.size()) { rtrim(line); out += line; out += '\n'; line.clear(); }
+    }
+    while (!out.empty() && out.back() == '\n') out.pop_back();
+    if (out.size() <= max_bytes) return out;
+    size_t from = out.size() - max_bytes;
+    while (from < out.size() && (static_cast<unsigned char>(out[from]) & 0xC0) == 0x80) ++from;  // 不切断 UTF-8
+    size_t nl = out.find('\n', from);
+    if (from > 0 && out[from - 1] != '\n' && nl != std::string::npos && nl + 1 - from <= 4096) from = nl + 1;  // 尽量从行首开始
+    return out.substr(from);
 }
 
 size_t Screen::mem_bytes() const {

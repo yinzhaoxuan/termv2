@@ -110,6 +110,7 @@ add_test(NAME CORE-15.tab_stops COMMAND itcore_test_p0 tabs)
 add_test(NAME CORE-16.sgr_ext_flags COMMAND itcore_test_p0 sgr)
 add_test(NAME CORE-17.decscnm_cursor_style_modes COMMAND itcore_test_p0 modes)
 add_test(NAME CORE-18.decaln_decstr_decdsr COMMAND itcore_test_p0 misc)
+add_test(NAME CORE-19.export_text COMMAND itcore_test_p0 export)
 
 find_package(Threads REQUIRED)
 add_executable(itcore_test_unicode tests/core/test_unicode.cpp)

@@ -289,6 +289,9 @@ public:
     void sel_clear();
     bool sel_active() const { return sel_.active; }
     std::string sel_text() const;
+    // 主屏历史 + 主屏的逻辑纯文本（软换行拼接、行尾空格去掉、末尾空行去掉）；超过 max_bytes 保留尾部，
+    // 截断点落在 UTF-8 字符边界并尽量落在行首
+    std::string export_text(size_t max_bytes) const;
     uint64_t sel_serial() const { return sel_serial_; }
 
     size_t mem_bytes() const;
@@ -351,7 +354,8 @@ private:
     struct Seg { uint64_t id; std::vector<const Cell *> chars; bool hard; };
     Selection sel_;
     uint64_t sel_serial_ = 0;
-    std::vector<Seg> sel_segments() const;
+    std::vector<Seg> sel_segments() const { return segments(sel_.alt); }
+    std::vector<Seg> segments(bool alt) const;
     bool sel_pos_at(int32_t first_row, uint16_t col, uint16_t row, SelPos *out) const;
     // 视口 [first_row, first_row+n) 每行每列的选区坐标
     std::vector<std::vector<SelPos>> view_positions(int32_t first_row, uint16_t n) const;

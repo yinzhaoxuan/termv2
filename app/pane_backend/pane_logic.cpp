@@ -163,4 +163,29 @@ std::string applyNewlineMode(std::string_view in, bool lnm) {
     return std::string(in);
 }
 
+std::string utf8Encode(uint32_t cp) {
+    std::string o;
+    if (cp < 0x80) o.push_back(char(cp));
+    else if (cp < 0x800) { o.push_back(char(0xC0 | (cp >> 6))); o.push_back(char(0x80 | (cp & 0x3F))); }
+    else if (cp < 0x10000) { if (cp >= 0xD800 && cp <= 0xDFFF) return {}; o.push_back(char(0xE0 | (cp >> 12))); o.push_back(char(0x80 | ((cp >> 6) & 0x3F))); o.push_back(char(0x80 | (cp & 0x3F))); }
+    else if (cp <= 0x10FFFF) { o.push_back(char(0xF0 | (cp >> 18))); o.push_back(char(0x80 | ((cp >> 12) & 0x3F))); o.push_back(char(0x80 | ((cp >> 6) & 0x3F))); o.push_back(char(0x80 | (cp & 0x3F))); }
+    return o;
+}
+
+KeyPlan planKey(unsigned vk, unsigned uiMods, uint32_t translated, uint32_t base) {
+    KeyPlan p;
+    if (vk == 0xE5 || vk == 0) return p;  // VK_PROCESSKEY：输入法组字中
+    const bool shift = uiMods & 1, alt = uiMods & 2, ctrl = uiMods & 4;
+    if (ctrl && alt && translated >= 0x20 && translated != 0x7F) {  // AltGr 字符
+        p.text = utf8Encode(translated);
+        if (!p.text.empty()) { p.kind = KeyPlan::Text; return p; }
+    }
+    p.kind = KeyPlan::Key;
+    p.vk = vk;
+    p.coreMods = (shift ? 1u : 0u) | (ctrl ? 2u : 0u) | (alt ? 4u : 0u);
+    if ((ctrl || alt) && base >= 0x20 && base != 0x7F) p.unicode = base;
+    return p;
+}
+
 }  // namespace it2app
+

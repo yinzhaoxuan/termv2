@@ -84,3 +84,4 @@
 - ANSI DECRQM（`CSI Ps $ p`）：对应上游 `VT100Terminal` 的 ANSI 分支，4→IRM、20→LNM，其余 Pm=0。LNM 置位时 LF/VT/FF 兼回车，Enter 编码为 CR LF（上游 newlineMode）；ABI：DEC 私有模式用 `itcore_mode_query`，ANSI 模式用 `itcore_ansi_mode_query`，两个编号空间互不影响（?4 DECSCLM 仅记录状态 vs 4 IRM）。
 - T09 Hyper-V：无上游对应（Windows 专有）。`hyperv_resolve.*` 地址解析策略，`hyperv_query.*` PowerShell 查询，`hyperv_transport.*` 解析后接 SSH。
 - P0 第 1 批：`screen.cpp` 字符集/制表位/SGR 扩展/DECSCNM/DECSCUSR/DECALN/DECSTR/DEC DSR ← 上游 `VT100Terminal.m`、`VT100Screen` 对应处理（setCharacterSet、tab stops、DECALN、softReset、DSR）。
+- `itcore_export_text` / `Screen::export_text`：重连归档用，无上游直接对应（近似上游 `PTYSession` 重启时保留旧内容的做法）。

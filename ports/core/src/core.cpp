@@ -224,6 +224,13 @@ int itcore_selection_text(itcore_core *c, itcore_buffer **out) {
     return *out ? 0 : -1;
 }
 
+int itcore_export_text(const itcore_core *c, size_t max_bytes, itcore_buffer **out) {
+    if (out) *out = nullptr;
+    if (!c || !c->screen || !out) return -1;
+    *out = itcore_encode::make_buf(c->screen->export_text(max_bytes));
+    return *out ? 0 : -1;
+}
+
 int itcore_resize(itcore_core *c, uint16_t columns, uint16_t rows, uint64_t generation) {
     if (!c || !columns || !rows) return -1;
     if (generation && generation < c->resize_gen) return -2;  // 过期

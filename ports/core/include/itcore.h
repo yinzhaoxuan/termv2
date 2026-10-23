@@ -154,6 +154,9 @@ void itcore_selection_clear(itcore_core *c);
 int  itcore_selection_active(const itcore_core *c);
 /* 复制文本（UTF-8）：软换行拼接、硬换行 '\n'、行尾空白去除、宽字符只出一次。无选区返回 1 且 *out=null */
 int  itcore_selection_text(itcore_core *c, itcore_buffer **out);
+/* 主屏历史 + 主屏的逻辑纯文本（UTF-8，行以 \n 分隔，不含 VT 状态/链接）。超过 max_bytes 时保留最新的尾部，
+   截断点不切断 UTF-8 字符（并尽量从行首开始），因此结果 <= max_bytes。供重连保留旧 attempt 只读文本。成功 0 */
+int  itcore_export_text(const itcore_core *c, size_t max_bytes, itcore_buffer **out);
 void itcore_destroy(itcore_core *c);
 #ifdef __cplusplus
 }
