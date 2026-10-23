@@ -47,6 +47,11 @@ public:
   virtual void paste(std::string_view utf8) = 0;                   // bracketed-paste aware
   virtual CaretRect caretRect() const = 0;                         // for IME candidate window
   virtual SessionStatus status() const = 0;
+  // 12.3 reconnect: read-only logical text of the previous attempt (at most one kept, budgeted
+  // per 15.4). previousAttemptId()==0 means none. UI shows it above a separator, not clickable.
+  virtual std::uint64_t previousAttemptId() const = 0;
+  virtual std::string previousAttemptText() const = 0;
+  virtual void reconnect() = 0;   // new core + process, attempt id +1
   // Selection is hit-tested and drawn by the backend (it owns the grid); UI owns the copy command.
   // Mouse (wheel, click, double=word, triple=line, drag edge auto-scroll, mouse modes) is handled
   // entirely by the backend in the pane child window; UI never forwards mouse messages.
