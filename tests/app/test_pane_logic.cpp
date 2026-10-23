@@ -1,6 +1,7 @@
 // T08 PaneBackend 平台无关逻辑单测（PANE-01）
 #include "pane_logic.h"
 #include <atomic>
+#include <climits>
 #include <chrono>
 #include <memory>
 #include <cstdio>
@@ -220,10 +221,24 @@ static void viewport() {
     CHECK(vp.updateHistory(2) && vp.offset() == 2);   // 历史被裁剪
     CHECK(vp.toBottom() && vp.offset() == 0);
     CHECK(!vp.toBottom());
+    CHECK(vp.scroll(INT_MIN) && vp.offset() == 2);   // 一次滚到顶：截断到历史行数
+    CHECK(!vp.scroll(INT_MIN) && vp.offset() == 2);
+    CHECK(vp.scroll(INT_MAX) && vp.offset() == 0);   // 一次滚到底
+    CHECK(!vp.scroll(INT_MAX));
+    vp.updateHistory(INT_MAX);                       // 历史极大时也不溢出
+    CHECK(vp.scroll(INT_MIN) && vp.offset() == INT_MAX);
+    CHECK(!vp.updateHistory(INT_MAX) && vp.offset() == INT_MAX);
+    CHECK(vp.scroll(INT_MAX) && vp.offset() == 0);
+    vp.updateHistory(2);
     CHECK(routeWheel(true, false) == WheelRoute::Forward);
     CHECK(routeWheel(true, true) == WheelRoute::Forward);
     CHECK(routeWheel(false, true) == WheelRoute::Arrows);
     CHECK(routeWheel(false, false) == WheelRoute::Scroll);
+    CHECK(applyNewlineMode("\r", true) == "\r\n");
+    CHECK(applyNewlineMode("\x1b\r", true) == "\x1b\r\n");
+    CHECK(applyNewlineMode("\r", false) == "\r");
+    CHECK(applyNewlineMode("a\rb", true) == "a\rb");
+    CHECK(applyNewlineMode("\x1b[A", true) == "\x1b[A");
     ClickCounter cc;
     CHECK(cc.press(1, 1, 0, 500) == 1);
     CHECK(cc.press(1, 1, 100, 500) == 2);

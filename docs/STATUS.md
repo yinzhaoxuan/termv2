@@ -89,7 +89,7 @@
    - 三击选逻辑行（跨软换行）。双击/三击之后的拖动按同一单位扩展，新 ABI 为 `itcore_selection_start_unit`。
    - 拖出上下边缘时，每 50ms tick 自动滚动 1 行。
    - `pane_logic` 中的 `Viewport`、`ClickCounter`、`routeWheel` 由 PANE-03 覆盖。
-5. **DECRQM ANSI**：`CSI Ps $ p`（不带 ?）与私有模式分开处理，回复 `CSI Ps;Pm$y`。4（IRM）和 20（LNM）回 1 或 2，其余回 0；ANSI 25 与 `?25` 互不相干。新实现 LNM（LF/VT/FF 兼回车）。单测 CORE-13 覆盖 2004、1049、25 的开和关，`?9999`→0、`9999`→0，以及 4 和 20。
+5. **DECRQM ANSI**：`CSI Ps $ p`（不带 ?）与私有模式分开处理，回复 `CSI Ps;Pm$y`。4（IRM）和 20（LNM）回 1 或 2，其余回 0；ANSI 25 与 `?25` 互不相干。新实现 LNM（LF/VT/FF 兼回车）。单测 CORE-13 覆盖 2004、1049、25 的开和关，`?9999`→0、`9999`→0，以及 4 和 20；LF/VT/FF 在 LNM 开和关时的列位置、Enter/Alt+Enter 编码均有对照。Viewport::scroll 用 int64 截断，PANE-03 覆盖 INT_MIN/INT_MAX。
 
 ### 接口问题（未改头文件，待 UI 定夺）
 1. “UI 翻译按键”与子窗焦点冲突：子窗把 WM_KEY*/WM_CHAR SendMessage 给父窗，IME 留在子窗处理。
@@ -97,7 +97,7 @@
 3. Shift+PgUp 等滚动快捷键由 UI 调 `scrollViewport`。后端不处理键盘滚动，因为按键会转发给父窗。
 4. SSH 下 hasForegroundJob 无法看到远端，Running 期间恒为 true（仅供参考）。
 5. attach 在会话启动失败时仍返回 true（状态 Failed）。
-6. 词分隔符目前写死在核心，尚无配置接口。LNM 下回车键是否发 CR LF 未实现（上游 newlineMode），目前只影响输出侧的 LF。
+6. 词分隔符目前写死在核心，尚无配置接口。LNM 下回车键已发 CR LF：编码器 VK_RETURN 看 lnm，后端 sendInput 对恰为 "\r"/"\x1b\r" 的输入按 itcore_mode_query(20) 补 LF（UI 自行翻译按键，只认精确的回车输入，属已知限制）。
 7. `itcore_history_rows` 每次都会重排历史（O(历史)），只在有输出时调用。大历史下的性能留作后续缓存项。
 
 ### T08 未实机项

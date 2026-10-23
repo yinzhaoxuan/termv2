@@ -81,4 +81,4 @@
 - `itcore_selection_start_unit(unit)`：0 字符、1 词、2 逻辑行。词类沿用上游默认 "Characters considered part of a word"：`/-+\~_.`、字母数字、非 ASCII；空白一类，其它标点各自成词。逻辑行沿软换行段向两侧扩展。扩展时按头点与锚点单位范围的先后关系吸附（同上游 `iTermSelection` 的 word/line 模式）。
 - 选区变化：`sel_touch(old)` 只给新旧范围内的网格行取新 revision，全局计数推进一次，历史行随之变脏。
 - `itcore_history_rows`：当前列宽下历史显示行数（备用屏为 0）。快照的 `first_row<0` 显示历史；光标按视口相对行给出，移出视口则不可见。
-- ANSI DECRQM（`CSI Ps $ p`）：对应上游 `VT100Terminal` 的 ANSI 分支，4→IRM、20→LNM，其余 Pm=0。LNM 置位时 LF/VT/FF 兼回车。
+- ANSI DECRQM（`CSI Ps $ p`）：对应上游 `VT100Terminal` 的 ANSI 分支，4→IRM、20→LNM，其余 Pm=0。LNM 置位时 LF/VT/FF 兼回车，Enter 编码为 CR LF（上游 newlineMode）；itcore_mode_query(20) 返回 ANSI LNM 状态。

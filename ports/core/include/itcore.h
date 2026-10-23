@@ -127,6 +127,7 @@ int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t hyperlink_id,
 /* DEC 私有模式查询，返回值与 DECRQM/DECRPM 的 Pm 对齐 */
 typedef enum { ITCORE_MODE_NOT_RECOGNIZED = 0, ITCORE_MODE_SET = 1, ITCORE_MODE_RESET = 2 } itcore_mode_state;
 /* 至少覆盖 1 7 9 25 47 1000 1002 1003 1006 1047 1049 2004；core 为空返回 NOT_RECOGNIZED */
+/* mode 20 返回 ANSI LNM（无同号 DEC 私有模式） */
 itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t dec_private_mode);
 
 /* 本地选区（字符粒度），坐标同 itcore_acquire_snapshot：first_row 相对视口顶部，col/row 为快照内格坐标。

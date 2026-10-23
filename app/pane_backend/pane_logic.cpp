@@ -138,19 +138,29 @@ int ClickCounter::press(int col, int row, uint64_t nowMs, uint32_t intervalMs) {
 }
 
 bool Viewport::set(int off) {
-    off = std::clamp(off, 0, std::max(0, history_));
+    off = std::clamp(off, 0, std::max(0, history_));  // 调用方已在 int64 中算好再收窄
     if (off == offset_) return false;
     offset_ = off;
     return true;
 }
-bool Viewport::scroll(int lines) { return set(offset_ - lines); }
+// lines 可能是 INT_MIN / INT_MAX（UI 一次滚到顶/底）：在 int64 中相减并截断，不取反、不溢出
+bool Viewport::scroll(int lines) {
+    int64_t off = int64_t(offset_) - int64_t(lines);
+    off = std::clamp<int64_t>(off, 0, std::max(0, history_));
+    return set(int(off));
+}
 bool Viewport::updateHistory(int history) {
     history = std::max(0, history);
     int old = history_, oldOff = offset_;
     history_ = history;
-    int off = offset_ > 0 && history > old ? offset_ + (history - old) : offset_;
-    set(off);
+    int64_t off = offset_ > 0 && history > old ? int64_t(offset_) + (int64_t(history) - old) : offset_;
+    set(int(std::clamp<int64_t>(off, 0, history)));
     return history_ != old || offset_ != oldOff;
+}
+
+std::string applyNewlineMode(std::string_view in, bool lnm) {
+    if (lnm && (in == "\r" || in == "\x1b\r")) return std::string(in) + "\n";
+    return std::string(in);
 }
 
 }  // namespace it2app

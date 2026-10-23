@@ -11,6 +11,7 @@
 #include "renderer.h"
 #include "grid_metrics.h"
 #include "itcore.h"
+#include <climits>
 #include <windows.h>
 #include <windowsx.h>
 #include <imm.h>
@@ -449,7 +450,9 @@ void Win32PaneBackend::setFocused(bool f) {
 void Win32PaneBackend::sendInput(std::string_view utf8) {
     if (!transport_ || closing_ || finished_ || utf8.empty()) return;
     scrollToBottom();  // 用户一有输入就回到底部
-    auto r = transport_->input(utf8);
+    const bool lnm = core_ && itcore_mode_query(core_, 20) == ITCORE_MODE_SET;
+    const std::string bytes = applyNewlineMode(utf8, lnm);  // LNM：UI 翻译的 Enter 补 LF
+    auto r = transport_->input(bytes);
     if (r != EnqueueResult::Ok) std::fprintf(stderr, "[pane] enqueueUserInput %d\n", int(r));
 }
 
@@ -520,7 +523,7 @@ void Win32PaneBackend::drainUi() {
 
 void Win32PaneBackend::syncViewport(bool force) {
     if (!core_) return;
-    bool changed = vp_.updateHistory(int(itcore_history_rows(core_)));
+    bool changed = vp_.updateHistory(int(std::min<uint32_t>(itcore_history_rows(core_), INT_MAX)));
     if ((changed || force || !vpNotified_) && ev_.onViewportChanged) {
         vpNotified_ = true;
         ev_.onViewportChanged(vp_.offset(), vp_.history());
@@ -529,7 +532,7 @@ void Win32PaneBackend::syncViewport(bool force) {
 
 void Win32PaneBackend::scrollViewport(int lines) {
     if (!core_ || !lines) return;
-    vp_.updateHistory(int(itcore_history_rows(core_)));
+    vp_.updateHistory(int(std::min<uint32_t>(itcore_history_rows(core_), INT_MAX)));
     if (!vp_.scroll(lines)) return;
     present();
     syncViewport(true);

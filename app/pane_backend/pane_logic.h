@@ -172,4 +172,8 @@ inline WheelRoute routeWheel(bool mouseMode, bool altScreen) {
     return altScreen ? WheelRoute::Arrows : WheelRoute::Scroll;
 }
 
+// LNM（ANSI 20）：UI 已把 Enter 翻成 "\r"（或 Alt+Enter "\x1b\r"）后经 sendInput 送来；
+// LNM 置位时补成 CR LF。只匹配整条输入恰为 Enter 的情况，避免改写其它按键序列 / 文本里的 CR。
+std::string applyNewlineMode(std::string_view in, bool lnm);
+
 }  // namespace it2app

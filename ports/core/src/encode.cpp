@@ -116,7 +116,10 @@ std::string encode_key_impl(const itcore::ScreenModes &modes, const itcore_key_e
         if (mod(mods, ITCORE_MOD_ALT)) return "\x1b\t";
         return "\t";
     case ITCORE_VK_RETURN:
-        return mod(mods, ITCORE_MOD_ALT) ? std::string("\x1b\r") : std::string("\r");
+    {   // LNM（ANSI 20）置位：Enter 发 CR LF（上游 newlineMode）
+        std::string nl = modes.lnm ? "\r\n" : "\r";
+        return mod(mods, ITCORE_MOD_ALT) ? "\x1b" + nl : nl;
+    }
     case ITCORE_VK_ESCAPE: return "\x1b";
     default: break;
     }

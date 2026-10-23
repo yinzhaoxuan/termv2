@@ -260,14 +260,43 @@ static void test_ansi_decrqm() {
     feed(c, "\x1b[20h");
     CHECK(feed(c, "\x1b[20$p") == "\x1b[20;1$y");
     CHECK(feed(c, "\x1b[25$p") == "\x1b[25;0$y");  // ANSI 25 与 DEC ?25 分开
-    // LNM：LF 兼回车
-    feed(c, "\x1b[2J\x1b[Hab\ncd");
-    itcore_snapshot *s = itcore_acquire_snapshot(c, 0, 3);
-    uint16_t col = 9, row = 9; int vis = 0;
-    itcore_snapshot_cursor(s, &col, &row, &vis);
-    CHECK(row == 1 && col == 2);
-    itcore_snapshot_release(s);
+    // LNM：LF / VT / FF 都兼回车；关闭时只换行不回车（对照）
+    auto cursor = [&](uint16_t *col, uint16_t *row) {
+        itcore_snapshot *s = itcore_acquire_snapshot(c, 0, 3);
+        int vis = 0;
+        itcore_snapshot_cursor(s, col, row, &vis);
+        itcore_snapshot_release(s);
+    };
+    auto enter = [&](uint32_t mods) {
+        itcore_key_event ke{};
+        ke.struct_size = sizeof(ke);
+        ke.vk = ITCORE_VK_RETURN;
+        ke.modifiers = mods;
+        itcore_buffer *b = nullptr;
+        std::string out;
+        if (itcore_encode_key(c, &ke, &b) == 0 && b) { out.assign(reinterpret_cast<char *>(b->data), b->length); itcore_buffer_release(b); }
+        return out;
+    };
+    for (const char *ctl : {"\n", "\x0b", "\x0c"}) {
+        uint16_t col = 9, row = 9;
+        feed(c, "\x1b[20h\x1b[2J\x1b[Hab");
+        feed(c, ctl);
+        cursor(&col, &row);
+        CHECK(row == 1 && col == 0);
+        feed(c, "\x1b[20l\x1b[2J\x1b[Hab");
+        feed(c, ctl);
+        cursor(&col, &row);
+        CHECK(row == 1 && col == 2);
+    }
+    // LNM：Enter 发 CR LF；关闭时只发 CR
+    feed(c, "\x1b[20h");
+    CHECK(itcore_mode_query(c, 20) == ITCORE_MODE_SET);
+    CHECK(enter(0) == "\r\n");
+    CHECK(enter(ITCORE_MOD_ALT) == "\x1b\r\n");
     feed(c, "\x1b[20l");
+    CHECK(itcore_mode_query(c, 20) == ITCORE_MODE_RESET);
+    CHECK(enter(0) == "\r");
+    CHECK(enter(ITCORE_MOD_ALT) == "\x1b\r");
     CHECK(feed(c, "\x1b[20$p") == "\x1b[20;2$y");
     itcore_destroy(c);
 }
