@@ -399,31 +399,6 @@ static void font() {
     CHECK(m15.cell_w_px() == 11 && m15.cell_h_px() == 20);
 }
 
-// PASTE-01：粘贴变换（快捷键由 UI e50212f 负责）
-static void paste_transform() {
-    // 换行归一与标记剥离
-    CHECK(transformPaste("a\r\nb\nc\rd", false) == "a\rb\rc\rd");
-    CHECK(transformPaste("x", true) == "\x1b[200~x\x1b[201~");
-    CHECK(transformPaste("a\x1b[201~b", true) == "\x1b[200~ab\x1b[201~");     // 内嵌结束标记
-    CHECK(transformPaste("a\x1b[200~b", false) == "ab");                        // 内嵌开始标记
-    CHECK(transformPaste("\x1b[20\x1b[201~1~z", false) == "z");               // 剥离后拼出的标记也去掉
-    CHECK(transformPaste(std::string("a\0b", 3), false) == "ab");
-    // ?2004 粘贴当时实时查询：开 → 包；RIS 之后 → 不包
-    {
-        itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 20, 5, 100, 1u << 20};
-        itcore_core *c = nullptr; CHECK(itcore_create(&o, &c) == 0 && c);
-        auto feed = [&](const char *t) { itcore_feed(c, reinterpret_cast<const uint8_t *>(t), std::strlen(t));
-                                         while (itcore_event *e = itcore_next_event(c)) itcore_event_release(e); };
-        auto br = [&] { return itcore_mode_query(c, 2004) == ITCORE_MODE_SET; };
-        CHECK(transformPaste("p\n", br()) == "p\r");
-        feed("\x1b[?2004h");
-        CHECK(transformPaste("p\n", br()) == "\x1b[200~p\r\x1b[201~");
-        feed("\x1b" "c");  // RIS
-        CHECK(transformPaste("p\n", br()) == "p\r");
-        itcore_destroy(c);
-    }
-}
-
 // BUG-03：拖动中失去捕获（模态对话框）后，后续鼠标移动不得改变选区；已拖出的选区保留
 static void capture_loss() {
     using C = DragSelect::Cell;
@@ -477,7 +452,7 @@ int main(int argc, char **argv) {
     else if (w == "keys") keys();
     else if (w == "sync") syncfocus();
     else if (w == "font") font();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); paste_transform(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

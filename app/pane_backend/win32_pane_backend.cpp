@@ -591,9 +591,13 @@ void Win32PaneBackend::paste(std::string_view utf8) {
     scrollToBottom();
     auto rejected = [&] { if (ev_.onPasteRejected) ev_.onPasteRejected(utf8.size(), kPasteLimitBytes); };
     if (utf8.size() > kPasteLimitBytes) { rejected(); return; }
-    // ?2004 在粘贴当时向核心实时查询（RIS/DECSTR 后自然失效，外壳侧不缓存）
-    const bool bracketed = itcore_mode_query(core_, 2004) == ITCORE_MODE_SET;
-    std::string bytes = transformPaste(utf8, bracketed);
+    // 唯一来源：核心 encode_paste（实时 ?2004、剥离标记、换行归一、上限）
+    itcore_buffer *buf = nullptr;
+    int er = itcore_encode_paste(core_, utf8.data(), utf8.size(), &buf);
+    if (er == -2) { rejected(); return; }
+    if (er != 0 || !buf) { if (buf) itcore_buffer_release(buf); return; }
+    std::string bytes(reinterpret_cast<const char *>(buf->data), buf->length);
+    itcore_buffer_release(buf);
     if (bytes.empty()) return;
     // 走传输的粘贴事务（与用户输入不交错）；标记已在 bytes 里，事务不再补
     auto r = transport_->beginPaste(bytes.size(), false);

@@ -18,11 +18,6 @@ namespace it2app {
 
 inline constexpr std::size_t kPasteLimitBytes = 32u * 1024u;  // 与核心 / InputScheduler 上限一致
 
-// 粘贴正文变换（平台无关，PASTE-01）：
-// - 去掉内嵌的 ESC[200~ 与 ESC[201~（反复去除，防止拼接出新标记）和 NUL；
-// - CRLF 与单独 LF 都归一为 CR（终端的 Enter）；
-// - bracketed（调用方在粘贴当时用 itcore_mode_query(2004) 实时查询，不缓存）为真时包 ESC[200~ … ESC[201~。
-std::string transformPaste(std::string_view utf8, bool bracketed);
 
 
 // 最小间隔限流：allow() 在距上次放行 ≥ intervalMs 时返回 true。

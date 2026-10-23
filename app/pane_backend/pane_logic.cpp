@@ -200,28 +200,6 @@ std::string utf8Encode(uint32_t cp) {
     return o;
 }
 
-std::string transformPaste(std::string_view in, bool bracketed) {
-    std::string t;
-    t.reserve(in.size());
-    for (char ch : in) if (ch != '\0') t.push_back(ch);
-    static const char *const marks[] = {"\x1b[200~", "\x1b[201~"};
-    for (bool again = true; again;) {  // 去掉一个可能拼出另一个：直到不动点
-        again = false;
-        for (const char *m : marks)
-            for (size_t p; (p = t.find(m)) != std::string::npos;) { t.erase(p, 6); again = true; }
-    }
-    std::string out;
-    out.reserve(t.size() + 12);
-    if (bracketed) out += "\x1b[200~";
-    for (size_t i = 0; i < t.size(); ++i) {
-        if (t[i] == '\r' && i + 1 < t.size() && t[i + 1] == '\n') { out.push_back('\r'); ++i; }
-        else if (t[i] == '\n') out.push_back('\r');
-        else out.push_back(t[i]);
-    }
-    if (bracketed) out += "\x1b[201~";
-    return out;
-}
-
 KeyPlan planKey(unsigned vk, unsigned uiMods, uint32_t translated, uint32_t base) {
     KeyPlan p;
     if (vk == 0xE5 || vk == 0) return p;  // VK_PROCESSKEY：输入法组字中
