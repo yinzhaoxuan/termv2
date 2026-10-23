@@ -15,6 +15,10 @@ struct Preedit {
     uint16_t anchor_col = 0, anchor_row = 0;
 };
 
+// 当前 D3D 设备类型（UI 状态栏显示）
+enum class DeviceKind { None, Hardware, Warp, Stub };
+const char *device_kind_name(DeviceKind k);
+
 class D2DRenderer {
 public:
     explicit D2DRenderer(ISwapChainHost *host);
@@ -45,6 +49,8 @@ public:
     bool device_lost() const { return device_lost_; }
     // 设备丢失后重建（present_frame 内自动调用；宿主也可在 WM_DISPLAYCHANGE 等时机主动调用）
     bool recover_device();
+    // init 成功后为 Hardware 或 WARP；未初始化/失败为 None；非 WIN32 为 Stub
+    DeviceKind device_kind() const { return device_kind_; }
 
 private:
     void shutdown_device();
@@ -56,6 +62,7 @@ private:
     uint64_t last_drawn_revision_ = 0;
     Preedit preedit_{};
     bool device_lost_ = false;
+    DeviceKind device_kind_ = DeviceKind::None;
     std::unique_ptr<Impl> impl_;
 };
 

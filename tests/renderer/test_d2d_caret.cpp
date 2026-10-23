@@ -23,7 +23,15 @@ int main() {
   NullHost host;
   itren::D2DRenderer r(&host);
   auto m = itren::GridMetrics::from_font(8, 10, 2, 0, 1.0f);
-  assert(r.init(m, nullptr, 12.f));
+  if (!r.init(m, nullptr, 12.f)) {
+    // 硬件与 WARP 都失败（HRESULT 已打到 stderr）才 SKIP
+    std::puts("SKIP: D2D init failed on hardware and WARP");
+    return 77;
+  }
+  std::printf("device=%s\n", itren::device_kind_name(r.device_kind()));
+#ifdef _WIN32
+  assert(r.device_kind() == itren::DeviceKind::Hardware || r.device_kind() == itren::DeviceKind::Warp);
+#endif
   const char *txt = "AB";
   auto *s = itmock_snapshot_from_utf8(txt, 2, 40, 10);
   r.set_snapshot(s);

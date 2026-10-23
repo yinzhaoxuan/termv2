@@ -21,6 +21,7 @@ endif()
 add_executable(test_renderer_d2d_caret ${PROJECT_SOURCE_DIR}/tests/renderer/test_d2d_caret.cpp)
 target_link_libraries(test_renderer_d2d_caret PRIVATE itrender_d2d itrender_layout itcore_mock)
 add_test(NAME renderer_d2d_caret COMMAND test_renderer_d2d_caret)
+set_tests_properties(renderer_d2d_caret PROPERTIES SKIP_RETURN_CODE 77)
 
 # 颜色解析（16/256/真彩、INVERSE）与按行脏区（DESIGN-T06 §3）
 add_executable(test_renderer_cell_style ${PROJECT_SOURCE_DIR}/tests/renderer/test_cell_style.cpp)

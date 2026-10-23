@@ -6,6 +6,13 @@
 #include "frame_policy.h"
 #include <vector>
 #include <cstring>
+#include <cstdio>
+
+namespace itren {
+const char *device_kind_name(DeviceKind k) {
+    switch (k) { case DeviceKind::Hardware: return "hardware"; case DeviceKind::Warp: return "warp"; case DeviceKind::Stub: return "stub"; default: return "none"; }
+}
+}  // namespace itren
 
 #ifdef _WIN32
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -60,6 +67,10 @@ namespace {
 D2D1_COLOR_F rgb_f(uint32_t rgb) {
     return D2D1::ColorF(((rgb >> 16) & 0xFF) / 255.f, ((rgb >> 8) & 0xFF) / 255.f, (rgb & 0xFF) / 255.f, 1.f);
 }
+void log_hr(const char *step, HRESULT hr) {
+    std::fprintf(stderr, "[itren] %s 失败 HRESULT=0x%08lX\n", step, (unsigned long)hr);
+}
+bool fail_hr(const char *step, HRESULT hr) { log_hr(step, hr); return false; }
 }  // namespace
 
 bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, float font_size_pt) {
@@ -67,27 +78,32 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
     if (font_family) impl_->family = font_family;
     impl_->size_pt = font_size_pt;
     device_lost_ = false;
+    device_kind_ = DeviceKind::None;
 
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
     D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0};
     D3D_FEATURE_LEVEL got{};
     HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
                                    levels, 2, D3D11_SDK_VERSION, &impl_->d3d, &got, &impl_->ctx);
+    DeviceKind kind = DeviceKind::Hardware;
     if (FAILED(hr)) {
+        log_hr("D3D11CreateDevice(HARDWARE)，改用 WARP", hr);
+        kind = DeviceKind::Warp;
         hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags,
                                levels, 2, D3D11_SDK_VERSION, &impl_->d3d, &got, &impl_->ctx);
     }
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail_hr("D3D11CreateDevice(WARP)", hr);
+    if (kind == DeviceKind::Warp) std::fprintf(stderr, "[itren] 使用 WARP 软件渲染\n");
 
     IDXGIDevice *dxgi_dev = nullptr;
     impl_->d3d->QueryInterface(&dxgi_dev);
     hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &impl_->d2d_factory);
-    if (FAILED(hr)) { if (dxgi_dev) dxgi_dev->Release(); return false; }
+    if (FAILED(hr)) { if (dxgi_dev) dxgi_dev->Release(); return fail_hr("D2D1CreateFactory", hr); }
     hr = impl_->d2d_factory->CreateDevice(dxgi_dev, &impl_->d2d_device);
     if (dxgi_dev) dxgi_dev->Release();
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail_hr("ID2D1Factory1::CreateDevice", hr);
     hr = impl_->d2d_device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &impl_->d2d);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail_hr("CreateDeviceContext", hr);
 
     IDXGIFactory2 *factory = nullptr;
     {
@@ -106,9 +122,10 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
     desc.BufferCount = 2;
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
     desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    if (!factory) std::fprintf(stderr, "[itren] init：取 IDXGIFactory2 失败\n");
     impl_->swap = host_->create_swap_chain(factory, impl_->d3d, desc);
     if (factory) factory->Release();
-    if (!impl_->swap) return false;
+    if (!impl_->swap) { std::fprintf(stderr, "[itren] init 失败：host->create_swap_chain 返回 nullptr\n"); return false; }
 
     IDXGISurface *surf = nullptr;
     impl_->swap->GetBuffer(0, IID_PPV_ARGS(&surf));
@@ -117,16 +134,16 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
     hr = impl_->d2d->CreateBitmapFromDxgiSurface(surf, &bp, &impl_->target);
     if (surf) surf->Release();
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail_hr("CreateBitmapFromDxgiSurface", hr);
     impl_->d2d->SetTarget(impl_->target);
 
     hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                              reinterpret_cast<IUnknown **>(&impl_->dwrite));
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail_hr("DWriteCreateFactory", hr);
     hr = impl_->dwrite->CreateTextFormat(impl_->family.c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL,
                                          DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
                                          impl_->size_pt * (96.f / 72.f), L"en-us", &impl_->format);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail_hr("CreateTextFormat(regular)", hr);
     impl_->format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     impl_->formats[0] = impl_->format; impl_->format->AddRef();
     for (int i = 1; i < 4; ++i) {
@@ -135,9 +152,10 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
                                              (i & 2) ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
                                              DWRITE_FONT_STRETCH_NORMAL, impl_->size_pt * (96.f / 72.f), L"en-us",
                                              &impl_->formats[i]);
-        if (FAILED(hr)) return false;
+        if (FAILED(hr)) return fail_hr("CreateTextFormat(bold/italic)", hr);
         impl_->formats[i]->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     }
+    device_kind_ = kind;
     impl_->saved_metrics = metrics_;
     impl_->dirty.invalidate(); impl_->layout.reset(); impl_->last_vis = -1;
 
@@ -148,6 +166,7 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
 }
 
 void D2DRenderer::shutdown() {
+    device_kind_ = DeviceKind::None;
 #ifdef _WIN32
     auto rel = [](auto *&p) { if (p) { p->Release(); p = nullptr; } };
     if (impl_) {
@@ -348,6 +367,7 @@ bool D2DRenderer::present_frame() {
 
 bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *, float) {
     metrics_ = metrics;
+    device_kind_ = DeviceKind::Stub;
     return true;  // 编译门闸：逻辑路径可测 caret_rect
 }
 void D2DRenderer::shutdown() { snap_ = nullptr; }
