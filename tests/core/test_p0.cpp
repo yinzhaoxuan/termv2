@@ -2,6 +2,7 @@
 #include "itcore.h"
 #include <cstdio>
 #include <string>
+#include <vector>
 
 static int failures = 0;
 #define CHECK(x) do { if (!(x)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #x); ++failures; } } while (0)
@@ -186,6 +187,79 @@ static void export_text() {
     itcore_destroy(c);
 }
 
+// 收集指定类型事件的负载
+static std::vector<std::string> feed_ev(itcore_core *c, const std::string &s, int kind) {
+    itcore_feed(c, reinterpret_cast<const uint8_t *>(s.data()), s.size());
+    std::vector<std::string> out;
+    while (itcore_event *e = itcore_next_event(c)) {
+        if (itcore_event_type(e) == kind) { size_t n; auto *d = itcore_event_data(e, &n); out.emplace_back((const char *)d, n); }
+        itcore_event_release(e);
+    }
+    return out;
+}
+
+// CORE-20：DA2、CSI 18/14/16 t（像素尺寸由后端提供）、CSI 22/23 t 标题栈、OSC 1
+static void winops() {
+    auto *c = make(20, 5);
+    CHECK(feed(c, "\x1b[>c") == "\x1b[>64;2500;0c");
+    CHECK(feed(c, "\x1b[>0c") == "\x1b[>64;2500;0c");
+    CHECK(feed(c, "\x1b[18t") == "\x1b[8;5;20t");
+    CHECK(feed(c, "\x1b[14t\x1b[16t").empty());          // 尺寸未知：不应答
+    itcore_set_cell_pixel_size(c, 9, 18);
+    CHECK(feed(c, "\x1b[14t") == "\x1b[4;90;180t");
+    CHECK(feed(c, "\x1b[16t") == "\x1b[6;18;9t");
+    CHECK(feed(c, "\x1b[8;50;100t\x1b[21t\x1b[20t").empty());  // 改尺寸 / 回报标题：忽略
+    CHECK((feed_ev(c, "\x1b]0;A\x07", ITCORE_EV_ICON_TITLE) == std::vector<std::string>{"A"}));
+    CHECK((feed_ev(c, "\x1b]1;I\x07", ITCORE_EV_ICON_TITLE) == std::vector<std::string>{"I"}));
+    CHECK(feed_ev(c, "\x1b]1;I2\x07", ITCORE_EV_TITLE).empty());   // OSC 1 不改窗口标题
+    feed(c, "\x1b]2;W\x07\x1b]1;I\x07\x1b[22t\x1b]2;W2\x07\x1b]1;I2\x07\x1b[22;2t\x1b]2;W3\x07");
+    CHECK((feed_ev(c, "\x1b[23;2t", ITCORE_EV_TITLE) == std::vector<std::string>{"W2"}));
+    CHECK((feed_ev(c, "\x1b[23;2t", ITCORE_EV_TITLE) == std::vector<std::string>{"W"}));
+    CHECK(feed_ev(c, "\x1b[23;2t", ITCORE_EV_TITLE).empty());   // 窗口标题栈已空
+    feed(c, "\x1b]1;X\x07");
+    CHECK((feed_ev(c, "\x1b[23t", ITCORE_EV_ICON_TITLE) == std::vector<std::string>{"I"}));  // 图标栈仍有一项
+    CHECK(feed_ev(c, "\x1b[23t", ITCORE_EV_TITLE).empty());   // 空栈
+    for (int i = 0; i < 15; ++i) feed(c, "\x1b]2;T" + std::to_string(i) + "\x07\x1b[22;2t");
+    int pops = 0;
+    while (!feed_ev(c, "\x1b[23;2t", ITCORE_EV_TITLE).empty()) ++pops;
+    CHECK(pops == 10);                                        // 栈上限 10
+    itcore_destroy(c);
+}
+
+// CORE-21：OSC 4/10/11/12/104/110–112 与配置色
+static void colors() {
+    auto *c = make();
+    itcore_colors d; itcore_default_colors(&d);
+    CHECK(d.palette[1] == 0xCD0000 && d.palette[16] == 0 && d.palette[231] == 0xFFFFFF && d.palette[232] == 0x080808 && d.palette[255] == 0xEEEEEE);
+    itcore_colors cfg = d; cfg.foreground = 0x112233; cfg.background = 0x445566; cfg.palette[2] = 0x010203;
+    CHECK(itcore_set_colors(c, &cfg) == 0);
+    CHECK(feed(c, "\x1b]10;?\x07") == "\x1b]10;rgb:1111/2222/3333\x1b\\");
+    CHECK(feed(c, "\x1b]11;?\x1b\\") == "\x1b]11;rgb:4444/5555/6666\x1b\\");
+    CHECK(feed(c, "\x1b]10;?;?\x07") == "\x1b]10;rgb:1111/2222/3333\x1b\\\x1b]11;rgb:4444/5555/6666\x1b\\");
+    CHECK(feed(c, "\x1b]4;2;?\x07") == "\x1b]4;2;rgb:0101/0202/0303\x1b\\");
+    auto s0 = itcore_acquire_snapshot(c, 0, 1); itcore_wrap w; uint64_t r0; itcore_snapshot_row(s0, 0, &w, &r0);
+    feed(c, "\x1b]4;2;#ff8000;3;rgb:f/80/0000\x07\x1b]10;#abc\x07\x1b]11;rgb:ffff/0/0\x07\x1b]12;#010203\x07\x1b]4;300;#fff\x07\x1b]10;bogus\x07");
+    auto s1 = itcore_acquire_snapshot(c, 0, 1); uint64_t r1; itcore_snapshot_row(s1, 0, &w, &r1);
+    CHECK(r1 > r0);
+    itcore_colors k; itcore_snapshot_colors(s1, &k);
+    CHECK(k.palette[2] == 0xFF8000 && k.palette[3] == 0xFF8000);
+    CHECK(k.foreground == 0xAABBCC && k.background == 0xFF0000 && k.cursor == 0x010203);
+    itcore_colors k0; itcore_snapshot_colors(s0, &k0);
+    CHECK(k0.foreground == 0x112233 && k0.palette[2] == 0x010203);  // 旧快照不变
+    itcore_snapshot_release(s0); itcore_snapshot_release(s1);
+    feed(c, "\x1b]104;2\x07\x1b]110\x07\x1b]112\x07");
+    auto s2 = itcore_acquire_snapshot(c, 0, 1); itcore_snapshot_colors(s2, &k); itcore_snapshot_release(s2);
+    CHECK(k.palette[2] == 0x010203 && k.palette[3] == 0xFF8000 && k.foreground == 0x112233 && k.background == 0xFF0000 && k.cursor == cfg.cursor);
+    feed(c, "\x1b]104\x07\x1b]111\x07");
+    auto s3 = itcore_acquire_snapshot(c, 0, 1); itcore_snapshot_colors(s3, &k); itcore_snapshot_release(s3);
+    CHECK(k.palette[3] == d.palette[3] && k.background == 0x445566);
+    feed(c, "\x1b]4;5;#123456\x07\x1b" "c");                       // RIS 恢复配置
+    auto s4 = itcore_acquire_snapshot(c, 0, 1); itcore_snapshot_colors(s4, &k); itcore_snapshot_release(s4);
+    CHECK(k.palette[5] == d.palette[5]);
+    itcore_colors bad{}; CHECK(itcore_set_colors(c, &bad) == -1);
+    itcore_destroy(c);
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "all" || w == "charset") charsets();
@@ -194,6 +268,8 @@ int main(int argc, char **argv) {
     if (w == "all" || w == "modes") modes();
     if (w == "all" || w == "misc") misc();
     if (w == "all" || w == "export") export_text();
+    if (w == "all" || w == "winops") winops();
+    if (w == "all" || w == "colors") colors();
     if (failures) { std::printf("%d failures\n", failures); return 1; }
     std::puts("ok");
     return 0;

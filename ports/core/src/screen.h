@@ -248,6 +248,7 @@ public:
     GraphemePool &pool() { return pool_; }
     const GraphemePool &pool() const { return pool_; }
     const ScreenModes &modes() const { return modes_; }
+    void invalidate_all() { touch_all(); }  // 调色板 / 默认色变化：整屏重画
     Pen &pen() { return pen_; }
     uint64_t revision() const { return revision_; }
     // OSC 8：params 为 "k=v:k=v"，url 为空表示结束链接。

@@ -111,6 +111,8 @@ add_test(NAME CORE-16.sgr_ext_flags COMMAND itcore_test_p0 sgr)
 add_test(NAME CORE-17.decscnm_cursor_style_modes COMMAND itcore_test_p0 modes)
 add_test(NAME CORE-18.decaln_decstr_decdsr COMMAND itcore_test_p0 misc)
 add_test(NAME CORE-19.export_text COMMAND itcore_test_p0 export)
+add_test(NAME CORE-20.da2_winops_title_stack COMMAND itcore_test_p0 winops)
+add_test(NAME CORE-21.osc_colors COMMAND itcore_test_p0 colors)
 
 find_package(Threads REQUIRED)
 add_executable(itcore_test_unicode tests/core/test_unicode.cpp)

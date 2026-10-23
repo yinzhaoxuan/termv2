@@ -10,6 +10,7 @@
 |------|------|
 | `9d7f716` | T05 屏幕模型 Grid/Cell/Scrollback；CSI 默认参数与 SGR；快照 ABI；CORE-03/04/05、MEM-01 子集 |
 | `aab3c7e` | T06+T05 评审：`encode_*`、D2D/DWrite 原型、宽字孤儿与 `wrap_pending` 组合、快照 `generation`、ConPTY `failStart` 清 reader |
+| P0 第 2 批 | DA2、CSI t 窗口查询与标题栈、OSC 1 图标标题、OSC 4/10/11/12/104/110–112 配置色 ABI；CORE-20/21 |
 | `c8e9264` | T06 集成：`app/win32_term/` 最小 WIN32 实验窗串联 itcore + ConPTY + `itrender_d2d`；`docs/STATUS.md` |
 
 ## 模块状态
@@ -108,7 +109,13 @@
 - SGR 2/5/6/8/9 与 22/25/28/29：`ITCORE_CELL_DIM/BLINK/HIDDEN/STRIKE` 占 bit 6–9，与既有 bit 0–5（含 SELECTED=5）无冲突，沿用渲染临时位；`#define ITCORE_HAS_SGR_EXT_FLAGS`（CORE-16）。
 - ?5 DECSCNM：`itcore_mode_query(5)` 可查，切换推进全部行 revision，`itcore_snapshot_reverse_screen`；DECSCUSR Ps 0–6 → `itcore_snapshot_cursor_style`；?1004 / ?2026 可置位可查（CORE-17）。
 - DECALN `ESC # 8`、DECSTR `CSI ! p`、DEC 私有 DSR `CSI ? 6/15/25/26/53/55 n`（原先解析后不执行）（CORE-18）。
-- 待办：DA2、CSI t（18/14/16/22/23）、OSC 1、OSC 10/11/12/4/104 配置色；后端焦点事件、?2026 暂停快照、D2D 接 cursor_geometry / cell_style。
+
+### P0 序列（第 2 批：应答 + 标题 + 配置色）
+- DA2 `CSI > c` → `\e[>64;2500;0c`（上游 VT100Output.m，emulation level 500）。
+- CSI t：18t 恒应答 `8;rows;cols`；14t/16t 仅在后端调用 `itcore_set_cell_pixel_size` 后应答；22/23t 窗口/图标标题栈（各上限 10，23t 重发标题事件）；21t/20t 回报标题有注入风险，不实现；8t 等改窗口尺寸忽略（CORE-20）。
+- OSC 0/1/2：新事件 `ITCORE_EV_ICON_TITLE = 6`（OSC 0 同时发 TITLE 与 ICON_TITLE；ABI-01 已更新）。
+- 配置色：`itcore_colors` + `itcore_default_colors`（xterm 调色板）/`itcore_set_colors`/`itcore_snapshot_colors`；OSC 4、10/11/12 设置与 `?` 查询（应答 `rgb:rrrr/gggg/bbbb`，统一以 ST 结尾），OSC 104、110/111/112 恢复配置；变更全行失效 + RENDER_INVALIDATED；RIS 恢复配置色并清标题栈（CORE-21）。
+- 待办（第 3 批）：后端 ?1004 焦点事件、?2026 暂停快照（≤1 s）、GridMetrics → `itcore_set_cell_pixel_size`、配置色下发、D2D 接 cursor_style / reverse_screen / glyph cache。
 
 ### 接口问题（未改头文件，待 UI 定夺）
 8. T09：UI 无“启动并连接”按钮、多地址选择器、“正在解析/等待 VM 地址”状态；目前分别以 Failed 文本（VmNotRunning / AddressAmbiguous 含候选列表）和 Starting 状态表达。

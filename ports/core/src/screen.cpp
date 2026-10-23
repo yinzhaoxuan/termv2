@@ -1255,6 +1255,8 @@ void Screen::apply_one(const Token &t, std::string *reply) {
                 *reply += buf;
             }
         }
+        else if (cmd == "DA2" && reply && param_or(t2, 0, 0) == 0)
+            *reply += "\x1b[>64;2500;0c";  // 上游默认 VT500 级（64）+ xtermVersion 2500（VT100Output.m reportSecondaryDeviceAttribute）
         else if (cmd == "DA" && reply && param_or(t2, 0, 0) == 0)
             *reply += "\x1b[?1;2c";  // VT100+AVO 拟定身份（设计 14.3）；未冻结
         else if (cmd == "REP" && has_last_) {

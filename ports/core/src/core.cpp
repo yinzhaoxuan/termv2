@@ -4,7 +4,12 @@
 #include "vt_parser.h"
 #include "screen.h"
 #include "encode.h"
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
+#include <iterator>
 #include <memory>
 #include <new>
 #include <string>
@@ -19,6 +24,7 @@ struct itcore_snapshot {
     itcore::Screen::SnapshotData data;
     // ABI 行缓存（与 data.rows_data 平行）
     std::vector<std::vector<itcore_cell>> rows;
+    itcore_colors colors{};
 };
 
 namespace {
@@ -48,8 +54,147 @@ struct itcore_core final : itcore::TokenSink {
     uint64_t incomplete = 0;
     uint64_t resize_gen = 0;
 
+    uint16_t cell_w = 0, cell_h = 0;                 // CSI 14/16 t
+    std::string win_title, icon_title;               // CSI 22/23 t 标题栈
+    std::vector<std::string> win_stack, icon_stack;  // 各最多 kTitleStackMax 项（xterm 同为 10）
+    itcore_colors cfg{}, cur{};                      // 配置色 / 生效色（OSC 覆盖）
+
     itcore_core(uint16_t cols, uint16_t rows, uint32_t sb, uint64_t mem)
-        : screen(std::make_unique<itcore::Screen>(cols, rows, sb, mem)) {}
+        : screen(std::make_unique<itcore::Screen>(cols, rows, sb, mem)) {
+        itcore_default_colors(&cfg);
+        cur = cfg;
+    }
+    static constexpr size_t kTitleStackMax = 10;
+
+    static int pnum(const itcore::Token &t, size_t i, int def) {
+        if (i >= t.params.size() || t.params[i].empty() || !t.params[i][0]) return def;
+        return *t.params[i][0];
+    }
+    // CSI Ps t（XTWINOPS 的只读与标题栈部分；改窗口大小/位置的操作一律忽略）
+    void winops(const itcore::Token &t, std::string *reply) {
+        const auto &g = screen->grid();
+        switch (pnum(t, 0, 0)) {
+        case 18: *reply += "\x1b[8;" + std::to_string(g.rows()) + ";" + std::to_string(g.cols()) + "t"; break;
+        case 14:
+            if (cell_w && cell_h)
+                *reply += "\x1b[4;" + std::to_string(unsigned(g.rows()) * cell_h) + ";" + std::to_string(unsigned(g.cols()) * cell_w) + "t";
+            break;
+        case 16:
+            if (cell_w && cell_h) *reply += "\x1b[6;" + std::to_string(cell_h) + ";" + std::to_string(cell_w) + "t";
+            break;
+        case 22: {
+            int w = pnum(t, 1, 0);
+            auto pushs = [](std::vector<std::string> &st, const std::string &v) {
+                if (st.size() >= kTitleStackMax) st.erase(st.begin());
+                st.push_back(v);
+            };
+            if (w == 0 || w == 1) pushs(icon_stack, icon_title);
+            if (w == 0 || w == 2) pushs(win_stack, win_title);
+            break;
+        }
+        case 23: {
+            int w = pnum(t, 1, 0);
+            if ((w == 0 || w == 1) && !icon_stack.empty()) {
+                icon_title = std::move(icon_stack.back()); icon_stack.pop_back();
+                push(ITCORE_EV_ICON_TITLE, icon_title);
+            }
+            if ((w == 0 || w == 2) && !win_stack.empty()) {
+                win_title = std::move(win_stack.back()); win_stack.pop_back();
+                push(ITCORE_EV_TITLE, win_title);
+            }
+            break;
+        }
+        default: break;  // 21t/20t（回报标题）有注入风险，不实现；其余改窗口的操作忽略
+        }
+    }
+
+    // 颜色规格：rgb:h/h/h（每分量 1–4 位十六进制）、#rgb #rrggbb #rrrgggbbb #rrrrggggbbbb
+    static bool parse_color(const std::string &s, uint32_t *out) {
+        auto hexv = [](const std::string &h, uint32_t *v) {
+            if (h.empty() || h.size() > 4) return false;
+            uint32_t x = 0;
+            for (char ch : h) {
+                int d = std::isxdigit(static_cast<unsigned char>(ch)) ? (std::isdigit(static_cast<unsigned char>(ch)) ? ch - '0' : (std::tolower(ch) - 'a' + 10)) : -1;
+                if (d < 0) return false;
+                x = x * 16 + uint32_t(d);
+            }
+            uint32_t maxv = (1u << (4 * h.size())) - 1;
+            *v = (x * 255 + maxv / 2) / maxv;
+            return true;
+        };
+        uint32_t r, g, b;
+        if (s.rfind("rgb:", 0) == 0) {
+            auto a = s.find('/', 4), z = a == std::string::npos ? a : s.find('/', a + 1);
+            if (z == std::string::npos) return false;
+            if (!hexv(s.substr(4, a - 4), &r) || !hexv(s.substr(a + 1, z - a - 1), &g) || !hexv(s.substr(z + 1), &b)) return false;
+        } else if (!s.empty() && s[0] == '#' && (s.size() - 1) % 3 == 0 && s.size() > 1 && s.size() <= 13) {
+            size_t n = (s.size() - 1) / 3;
+            if (!hexv(s.substr(1, n), &r) || !hexv(s.substr(1 + n, n), &g) || !hexv(s.substr(1 + 2 * n, n), &b)) return false;
+        } else {
+            return false;
+        }
+        *out = (r << 16) | (g << 8) | b;
+        return true;
+    }
+    static std::string color_spec(uint32_t v) {
+        char buf[32];
+        unsigned r = (v >> 16) & 0xFF, g = (v >> 8) & 0xFF, b = v & 0xFF;
+        std::snprintf(buf, sizeof buf, "rgb:%02x%02x/%02x%02x/%02x%02x", r, r, g, g, b, b);
+        return buf;
+    }
+    void colors_changed() { screen->invalidate_all(); push(ITCORE_EV_RENDER_INVALIDATED); }
+
+    // OSC 4 ; idx ; spec [; idx ; spec ...]
+    void osc4(const std::string &arg, std::string *reply) {
+        size_t pos = 0;
+        bool changed = false;
+        while (pos <= arg.size()) {
+            size_t a = arg.find(';', pos);
+            if (a == std::string::npos) break;
+            size_t b = arg.find(';', a + 1);
+            std::string is = arg.substr(pos, a - pos), spec = arg.substr(a + 1, b == std::string::npos ? std::string::npos : b - a - 1);
+            char *end = nullptr;
+            long idx = std::strtol(is.c_str(), &end, 10);
+            if (!is.empty() && *end == 0 && idx >= 0 && idx < 256) {
+                if (spec == "?") *reply += "\x1b]4;" + std::to_string(idx) + ";" + color_spec(cur.palette[idx]) + "\x1b\\";
+                else if (uint32_t v; parse_color(spec, &v)) { cur.palette[idx] = v; changed = true; }
+            }
+            if (b == std::string::npos) break;
+            pos = b + 1;
+        }
+        if (changed) colors_changed();
+    }
+    // OSC 10/11/12 ; spec [; spec ...]（依次作用于 10、11、12）
+    void osc_dyn(int first, const std::string &arg, std::string *reply) {
+        uint32_t *slot[3] = {&cur.foreground, &cur.background, &cur.cursor};
+        bool changed = false;
+        size_t pos = 0;
+        for (int n = first; n <= 12; ++n) {
+            size_t b = arg.find(';', pos);
+            std::string spec = arg.substr(pos, b == std::string::npos ? std::string::npos : b - pos);
+            if (spec == "?") *reply += "\x1b]" + std::to_string(n) + ";" + color_spec(*slot[n - 10]) + "\x1b\\";
+            else if (uint32_t v; parse_color(spec, &v)) { *slot[n - 10] = v; changed = true; }
+            if (b == std::string::npos) break;
+            pos = b + 1;
+        }
+        if (changed) colors_changed();
+    }
+    // OSC 104 [; idx ...]：无参数恢复全部
+    void osc104(const std::string &arg, bool has_arg) {
+        if (!has_arg || arg.empty()) { std::copy(std::begin(cfg.palette), std::end(cfg.palette), cur.palette); colors_changed(); return; }
+        bool changed = false;
+        size_t pos = 0;
+        while (true) {
+            size_t b = arg.find(';', pos);
+            std::string is = arg.substr(pos, b == std::string::npos ? std::string::npos : b - pos);
+            char *end = nullptr;
+            long idx = std::strtol(is.c_str(), &end, 10);
+            if (!is.empty() && *end == 0 && idx >= 0 && idx < 256) { cur.palette[idx] = cfg.palette[idx]; changed = true; }
+            if (b == std::string::npos) break;
+            pos = b + 1;
+        }
+        if (changed) colors_changed();
+    }
     ~itcore_core() override { for (auto *e : events) delete e; }
 
     void push(itcore_event_kind k, std::string d = {}) {
@@ -75,12 +220,18 @@ struct itcore_core final : itcore::TokenSink {
             break;
         case TokenType::Csi: {
             std::string reply;
-            screen->apply(t, &reply);
+            if (t.final == 't' && !t.priv && t.inter.empty()) winops(t, &reply);
+            else screen->apply(t, &reply);
             if (!reply.empty()) push(ITCORE_EV_REPLY_BYTES, std::move(reply));
             push(ITCORE_EV_RENDER_INVALIDATED);
             break;
         }
         case TokenType::Esc:
+            if (t.final == 'c' && t.inter.empty()) {  // RIS：颜色恢复配置，清标题栈
+                win_stack.clear(); icon_stack.clear();
+                cur = cfg;
+                screen->invalidate_all();
+            }
             screen->apply(t, nullptr);
             push(ITCORE_EV_RENDER_INVALIDATED);
             break;
@@ -88,7 +239,18 @@ struct itcore_core final : itcore::TokenSink {
             auto semi = t.text.find(';');
             std::string num = t.text.substr(0, semi);
             std::string arg = semi == std::string::npos ? std::string() : t.text.substr(semi + 1);
-            if (num == "0" || num == "2") push(ITCORE_EV_TITLE, sanitize_title(arg));
+            std::string reply;
+            if (num == "0" || num == "1" || num == "2") {
+                std::string v = sanitize_title(arg);
+                if (num != "1") { win_title = v; push(ITCORE_EV_TITLE, v); }
+                if (num != "2") { icon_title = v; push(ITCORE_EV_ICON_TITLE, v); }
+            }
+            else if (num == "4") osc4(arg, &reply);
+            else if (num == "10" || num == "11" || num == "12") osc_dyn(std::stoi(num), arg, &reply);
+            else if (num == "104") osc104(arg, semi != std::string::npos);
+            else if (num == "110") { cur.foreground = cfg.foreground; colors_changed(); }
+            else if (num == "111") { cur.background = cfg.background; colors_changed(); }
+            else if (num == "112") { cur.cursor = cfg.cursor; colors_changed(); }
             else if (num == "8") {
                 auto sc = arg.find(';');
                 if (sc != std::string::npos)
@@ -96,6 +258,7 @@ struct itcore_core final : itcore::TokenSink {
             }
             else if (num == "52")
                 push(ITCORE_EV_CLIPBOARD_REQUEST, arg.substr(0, arg.find(';')));
+            if (!reply.empty()) push(ITCORE_EV_REPLY_BYTES, std::move(reply));
             break;
         }
         case TokenType::Incomplete: ++incomplete; break;
@@ -224,6 +387,37 @@ int itcore_selection_text(itcore_core *c, itcore_buffer **out) {
     return *out ? 0 : -1;
 }
 
+void itcore_set_cell_pixel_size(itcore_core *c, uint16_t w, uint16_t h) {
+    if (c) { c->cell_w = w; c->cell_h = h; }
+}
+void itcore_default_colors(itcore_colors *o) {
+    if (!o) return;
+    *o = {};
+    o->struct_size = sizeof(itcore_colors);
+    static const uint32_t base[16] = {0x000000, 0xCD0000, 0x00CD00, 0xCDCD00, 0x0000EE, 0xCD00CD, 0x00CDCD, 0xE5E5E5,
+                                      0x7F7F7F, 0xFF0000, 0x00FF00, 0xFFFF00, 0x5C5CFF, 0xFF00FF, 0x00FFFF, 0xFFFFFF};
+    for (int i = 0; i < 16; ++i) o->palette[i] = base[i];
+    for (int i = 0; i < 216; ++i) {
+        auto lv = [](int v) { return uint32_t(v ? 55 + v * 40 : 0); };
+        o->palette[16 + i] = (lv(i / 36) << 16) | (lv(i / 6 % 6) << 8) | lv(i % 6);
+    }
+    for (int i = 0; i < 24; ++i) { uint32_t v = uint32_t(8 + i * 10); o->palette[232 + i] = (v << 16) | (v << 8) | v; }
+    o->foreground = o->cursor = 0xC7C7C7;
+    o->background = 0x000000;
+}
+int itcore_set_colors(itcore_core *c, const itcore_colors *cfg) {
+    if (!c || !cfg || cfg->struct_size < sizeof(itcore_colors)) return -1;
+    c->cfg = *cfg;
+    c->cur = *cfg;  // 新配置覆盖 OSC 临时改动
+    c->colors_changed();
+    return 0;
+}
+void itcore_snapshot_colors(const itcore_snapshot *s, itcore_colors *out) {
+    if (!out) return;
+    if (s) *out = s->colors; else itcore_default_colors(out);
+    out->struct_size = sizeof(itcore_colors);
+}
+
 int itcore_export_text(const itcore_core *c, size_t max_bytes, itcore_buffer **out) {
     if (out) *out = nullptr;
     if (!c || !c->screen || !out) return -1;
@@ -263,6 +457,7 @@ itcore_snapshot *itcore_acquire_snapshot(itcore_core *c, int32_t first_row, uint
     auto *s = new (std::nothrow) itcore_snapshot;
     if (!s) return nullptr;
     s->data = c->screen->take_snapshot(first_row, row_count);
+    s->colors = c->cur;
     s->data.generation = c->resize_gen;
     s->rows.resize(s->data.rows_data.size());
     for (size_t i = 0; i < s->data.rows_data.size(); ++i) {

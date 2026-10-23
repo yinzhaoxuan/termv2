@@ -52,6 +52,11 @@ static void test_title_cap() {
     std::string t; for (int i = 0; i < 300; ++i) t += "中";
     feed(c, "\x1b]0;" + t + "\x07");
     auto v = drain(c);
+    // OSC 0 同时设置窗口标题与图标标题（ITCORE_EV_ICON_TITLE），两者都截断到 256 字符
+    CHECK(v.size() == 2 && v[0].k == ITCORE_EV_TITLE && v[0].d.size() == 256 * 3);
+    CHECK(v.size() == 2 && v[1].k == ITCORE_EV_ICON_TITLE && v[1].d.size() == 256 * 3);
+    feed(c, "\x1b]2;" + t + "\x07");
+    v = drain(c);
     CHECK(v.size() == 1 && v[0].k == ITCORE_EV_TITLE && v[0].d.size() == 256 * 3);
     itcore_destroy(c);
 }
