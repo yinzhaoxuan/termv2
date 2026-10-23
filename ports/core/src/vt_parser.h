@@ -36,6 +36,7 @@ struct Token {
     // 每个参数：[值, 子参数...]；std::nullopt 表示省略
     std::vector<std::vector<std::optional<int32_t>>> params;
     bool trunc = false;    // 参数个数/数值/负载被截断或饱和
+    bool bel_term = false; // OSC 以 BEL 结尾（应答沿用相同结尾符）；不进 JSON
     std::string error;     // Error
 };
 
@@ -68,7 +69,7 @@ private:
     void csi_finish(uint8_t final, TokenSink &sink);
     void str_begin(TokenType ty);
     void str_append(uint8_t b, TokenSink &sink);
-    void str_finish(TokenSink &sink);
+    void str_finish(TokenSink &sink, bool bel = false);
 
     State state_ = State::Ground;
     std::string text_;

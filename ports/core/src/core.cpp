@@ -73,14 +73,15 @@ struct itcore_core final : itcore::TokenSink {
     // CSI Ps t（XTWINOPS 的只读与标题栈部分；改窗口大小/位置的操作一律忽略）
     void winops(const itcore::Token &t, std::string *reply) {
         const auto &g = screen->grid();
+        // 像素尺寸未设置时按 8x16 估算应答（后端应在首次 feed 前 itcore_set_cell_pixel_size）
+        const unsigned cell_w = this->cell_w ? this->cell_w : 8u, cell_h = this->cell_h ? this->cell_h : 16u;
         switch (pnum(t, 0, 0)) {
         case 18: *reply += "\x1b[8;" + std::to_string(g.rows()) + ";" + std::to_string(g.cols()) + "t"; break;
         case 14:
-            if (cell_w && cell_h)
-                *reply += "\x1b[4;" + std::to_string(unsigned(g.rows()) * cell_h) + ";" + std::to_string(unsigned(g.cols()) * cell_w) + "t";
+            *reply += "\x1b[4;" + std::to_string(unsigned(g.rows()) * cell_h) + ";" + std::to_string(unsigned(g.cols()) * cell_w) + "t";
             break;
         case 16:
-            if (cell_w && cell_h) *reply += "\x1b[6;" + std::to_string(cell_h) + ";" + std::to_string(cell_w) + "t";
+            *reply += "\x1b[6;" + std::to_string(cell_h) + ";" + std::to_string(cell_w) + "t";
             break;
         case 22: {
             int w = pnum(t, 1, 0);
@@ -145,7 +146,7 @@ struct itcore_core final : itcore::TokenSink {
     void colors_changed() { screen->invalidate_all(); push(ITCORE_EV_RENDER_INVALIDATED); }
 
     // OSC 4 ; idx ; spec [; idx ; spec ...]
-    void osc4(const std::string &arg, std::string *reply) {
+    void osc4(const std::string &arg, std::string *reply, const char *st) {
         size_t pos = 0;
         bool changed = false;
         while (pos <= arg.size()) {
@@ -156,7 +157,7 @@ struct itcore_core final : itcore::TokenSink {
             char *end = nullptr;
             long idx = std::strtol(is.c_str(), &end, 10);
             if (!is.empty() && *end == 0 && idx >= 0 && idx < 256) {
-                if (spec == "?") *reply += "\x1b]4;" + std::to_string(idx) + ";" + color_spec(cur.palette[idx]) + "\x1b\\";
+                if (spec == "?") *reply += "\x1b]4;" + std::to_string(idx) + ";" + color_spec(cur.palette[idx]) + st;
                 else if (uint32_t v; parse_color(spec, &v)) { cur.palette[idx] = v; changed = true; }
             }
             if (b == std::string::npos) break;
@@ -165,14 +166,14 @@ struct itcore_core final : itcore::TokenSink {
         if (changed) colors_changed();
     }
     // OSC 10/11/12 ; spec [; spec ...]（依次作用于 10、11、12）
-    void osc_dyn(int first, const std::string &arg, std::string *reply) {
+    void osc_dyn(int first, const std::string &arg, std::string *reply, const char *st) {
         uint32_t *slot[3] = {&cur.foreground, &cur.background, &cur.cursor};
         bool changed = false;
         size_t pos = 0;
         for (int n = first; n <= 12; ++n) {
             size_t b = arg.find(';', pos);
             std::string spec = arg.substr(pos, b == std::string::npos ? std::string::npos : b - pos);
-            if (spec == "?") *reply += "\x1b]" + std::to_string(n) + ";" + color_spec(*slot[n - 10]) + "\x1b\\";
+            if (spec == "?") *reply += "\x1b]" + std::to_string(n) + ";" + color_spec(*slot[n - 10]) + st;
             else if (uint32_t v; parse_color(spec, &v)) { *slot[n - 10] = v; changed = true; }
             if (b == std::string::npos) break;
             pos = b + 1;
@@ -229,6 +230,8 @@ struct itcore_core final : itcore::TokenSink {
         case TokenType::Esc:
             if (t.final == 'c' && t.inter.empty()) {  // RIS：颜色恢复配置，清标题栈
                 win_stack.clear(); icon_stack.clear();
+                if (!win_title.empty()) { win_title.clear(); push(ITCORE_EV_TITLE, std::string()); }
+                if (!icon_title.empty()) { icon_title.clear(); push(ITCORE_EV_ICON_TITLE, std::string()); }
                 cur = cfg;
                 screen->invalidate_all();
             }
@@ -245,8 +248,8 @@ struct itcore_core final : itcore::TokenSink {
                 if (num != "1") { win_title = v; push(ITCORE_EV_TITLE, v); }
                 if (num != "2") { icon_title = v; push(ITCORE_EV_ICON_TITLE, v); }
             }
-            else if (num == "4") osc4(arg, &reply);
-            else if (num == "10" || num == "11" || num == "12") osc_dyn(std::stoi(num), arg, &reply);
+            else if (num == "4") osc4(arg, &reply, t.bel_term ? "\x07" : "\x1b\\");
+            else if (num == "10" || num == "11" || num == "12") osc_dyn(std::stoi(num), arg, &reply, t.bel_term ? "\x07" : "\x1b\\");
             else if (num == "104") osc104(arg, semi != std::string::npos);
             else if (num == "110") { cur.foreground = cfg.foreground; colors_changed(); }
             else if (num == "111") { cur.background = cfg.background; colors_changed(); }

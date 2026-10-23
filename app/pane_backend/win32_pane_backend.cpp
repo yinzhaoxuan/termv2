@@ -130,6 +130,7 @@ private:
     LRESULT onMessage(UINT, WPARAM, LPARAM);
     bool startSession();
     void fail(std::string text);
+    void pushCellPixelSize();          // GridMetrics → itcore_set_cell_pixel_size
     void pump();                       // UI 线程：取输出 → 喂核心 → 事件 → present
     void drainCoreEvents();
     void present();
@@ -251,6 +252,9 @@ bool Win32PaneBackend::startSession() {
     opt.memory_limit_bytes = cfg_->memoryLimitBytes;
     if (itcore_create(&opt, &core_) != 0 || !core_) { core_ = nullptr; fail("itcore_create 失败"); return false; }
     itcore_resize(core_, resize_.dims().cols, resize_.dims().rows, resize_.generation());
+    // 首次 feed 前：GridMetrics 单元格像素尺寸（CSI 14/16 t）与配置色（OSC 10/11/12/4 查询与 104/110–112 恢复）
+    pushCellPixelSize();
+    if (cfg_->colors) itcore_set_colors(core_, &*cfg_->colors);
     renderer_->set_expected_generation(resize_.generation());
 
     GridSize gs{resize_.dims().cols, resize_.dims().rows};
@@ -476,6 +480,12 @@ void Win32PaneBackend::present() {
     renderer_->present_frame();  // 设备丢失在 present_frame 内 recover_device
 }
 
+void Win32PaneBackend::pushCellPixelSize() {
+    if (!core_) return;
+    auto clamp16 = [](int v) { return uint16_t(v < 0 ? 0 : v > 65535 ? 65535 : v); };
+    itcore_set_cell_pixel_size(core_, clamp16(metrics_.cell_w_px()), clamp16(metrics_.cell_h_px()));
+}
+
 void Win32PaneBackend::applyBounds(const uishell::PixelRect &rc, float dpi) {
     HWND h = hwnd_;
     if (!h) return;
@@ -484,6 +494,7 @@ void Win32PaneBackend::applyBounds(const uishell::PixelRect &rc, float dpi) {
     float scale = dpi > 0 ? dpi : host_->dpi_scale();
     if (scale != metrics_.dpi_scale) metrics_ = itren::GridMetrics::from_font(7.2f, 10.f, 3.f, 0.f, scale);
     renderer_->metrics() = metrics_;
+    pushCellPixelSize();
     uint16_t c = 0, r = 0;
     metrics_.grid_size(rc.w, rc.h, c, r);  // 已钳到 ≥20×5；ResizeTracker 再兜底
     if (auto gen = resize_.update(c, r)) {

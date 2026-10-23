@@ -158,11 +158,11 @@ int  itcore_selection_active(const itcore_core *c);
 int  itcore_selection_text(itcore_core *c, itcore_buffer **out);
 /* 主屏历史 + 主屏的逻辑纯文本（UTF-8，行以 \n 分隔，不含 VT 状态/链接）。超过 max_bytes 时保留最新的尾部，
    截断点不切断 UTF-8 字符（并尽量从行首开始），因此结果 <= max_bytes。供重连保留旧 attempt 只读文本。成功 0 */
-/* CSI 14 t / 16 t 用的单元格像素尺寸（后端从 GridMetrics 传入；0 表示未知，此时 14t/16t 不应答）。
+/* CSI 14 t / 16 t 用的单元格像素尺寸（后端从 GridMetrics 传入，须在首次 feed 前调用；0 表示未知，此时按 8x16 估算应答）。
    14 t 报文本区 rows*h;cols*w，16 t 报单元格 h;w，18 t 报行列（总是应答）。 */
 void itcore_set_cell_pixel_size(itcore_core *c, uint16_t width_px, uint16_t height_px);
 /* 颜色配置：值为 0x00RRGGBB。OSC 10/11/12 与 OSC 4 可在运行时覆盖、OSC 110/111/112 与 104 恢复为这里的配置值，
-   查询（"?"）按当前值以 rgb:rrrr/gggg/bbbb 应答（ST 结尾）。修改会推进全部行 revision。 */
+   查询（"?"）按当前值以 rgb:rrrr/gggg/bbbb 应答，结尾符与请求一致（BEL 或 ST）。修改会推进全部行 revision。 */
 typedef struct {
     uint32_t struct_size;
     uint32_t foreground, background, cursor;
@@ -170,6 +170,8 @@ typedef struct {
 } itcore_colors;
 /* 默认配置：xterm 16 色 + 6x6x6 + 24 级灰，前景 0xC7C7C7、背景 0x000000、光标 0xC7C7C7 */
 void itcore_default_colors(itcore_colors *out);
+/* 线程：itcore_core 不加锁，所有调用（feed/set_colors/set_cell_pixel_size/resize/encode/selection）须在同一线程；
+   Win32 后端里传输线程只投递字节，喂核心与改配置都在 UI 线程。快照可跨线程读。 */
 int  itcore_set_colors(itcore_core *c, const itcore_colors *cfg);
 /* 快照时刻的生效颜色（配置 + OSC 覆盖）；渲染用它解析 TT=0 默认色与 TT=1 调色板索引 */
 void itcore_snapshot_colors(const itcore_snapshot *s, itcore_colors *out);

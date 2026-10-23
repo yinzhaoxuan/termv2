@@ -1,6 +1,7 @@
 // T08：uishell::PaneBackend 的 Win32 实现（itcore + ConPtyTransport/SshTransport + D2DRenderer）。仅 WIN32。
 // 未实机验证：子窗口/交换链、IME、焦点与键盘转发、Job 进程计数、关闭时序均待 DESKTOP-HOODQAJ。
 #pragma once
+#include "itcore.h"
 #ifndef _WIN32
 #error "win32_pane_backend 仅用于 Windows"
 #endif
@@ -24,6 +25,8 @@ struct PaneBackendConfig {
     float fontSizePt = 12.f;
     uint32_t scrollbackLines = 5000;
     uint64_t memoryLimitBytes = 32ull << 20;
+    // 配置色（前景/背景/光标/256 色）；空则用 itcore_default_colors。首次 feed 前经 itcore_set_colors 下发
+    std::optional<itcore_colors> colors;
 };
 
 uishell::PaneBackendFactory makeWin32PaneBackendFactory(PaneBackendConfig cfg);

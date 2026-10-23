@@ -118,8 +118,8 @@ void Parser::str_append(uint8_t b, TokenSink &sink) {
         state_ = State::Dead;
     }
 }
-void Parser::str_finish(TokenSink &sink) {
-    Token t; t.type = str_type_; t.text.swap(payload_); t.trunc = discarded_ > 0;
+void Parser::str_finish(TokenSink &sink, bool bel) {
+    Token t; t.type = str_type_; t.text.swap(payload_); t.trunc = discarded_ > 0; t.bel_term = bel;
     state_ = State::Ground;
     emit(std::move(t), sink);
 }
@@ -236,7 +236,7 @@ void Parser::step(uint8_t b, TokenSink &sink) {
         case State::Str:
             if (b == ESC) { state_ = State::StrEsc; return; }
             if (b == CAN || b == SUB) { emit_simple(TokenType::Invalid, sink); payload_.clear(); state_ = State::Ground; return; }
-            if (b == BEL && str_type_ == TokenType::Osc) { str_finish(sink); return; }
+            if (b == BEL && str_type_ == TokenType::Osc) { str_finish(sink, true); return; }
             if (b < 0x20) return;  // 负载中其余 C0 忽略
             str_append(b, sink);
             return;

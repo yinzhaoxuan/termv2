@@ -213,7 +213,8 @@ static void winops() {
     CHECK(feed(c, "\x1b[>c") == "\x1b[>64;2500;0c");
     CHECK(feed(c, "\x1b[>0c") == "\x1b[>64;2500;0c");
     CHECK(feed(c, "\x1b[18t") == "\x1b[8;5;20t");
-    CHECK(feed(c, "\x1b[14t\x1b[16t").empty());          // 尺寸未知：不应答
+    CHECK(feed(c, "\x1b[14t") == "\x1b[4;80;160t");     // 尺寸未设：按 8x16 估算
+    CHECK(feed(c, "\x1b[16t") == "\x1b[6;16;8t");
     itcore_set_cell_pixel_size(c, 9, 18);
     CHECK(feed(c, "\x1b[14t") == "\x1b[4;90;180t");
     CHECK(feed(c, "\x1b[16t") == "\x1b[6;18;9t");
@@ -232,20 +233,30 @@ static void winops() {
     int pops = 0;
     while (!feed_ev(c, "\x1b[23;2t", ITCORE_EV_TITLE).empty()) ++pops;
     CHECK(pops == 10);                                        // 栈上限 10
+    // RIS 清当前标题；之后 22t 压入空标题，23t 弹出为空
+    feed(c, "\x1b]2;Before\x07\x1b]1;BeforeI\x07");
+    CHECK((feed_ev(c, "\x1b" "c", ITCORE_EV_TITLE) == std::vector<std::string>{""}));
+    CHECK((feed_ev(c, "\x1b[22t\x1b[23t", ITCORE_EV_TITLE) == std::vector<std::string>{""}));
+    feed(c, "\x1b]1;Z\x07\x1b" "c");
+    CHECK((feed_ev(c, "\x1b[22t\x1b[23t", ITCORE_EV_ICON_TITLE) == std::vector<std::string>{""}));
     itcore_destroy(c);
 }
 
 // CORE-21：OSC 4/10/11/12/104/110–112 与配置色
 static void colors() {
     auto *c = make();
+    // 应答结尾符与请求一致
+    CHECK(feed(c, "\x1b]10;?\x07") == "\x1b]10;rgb:c7c7/c7c7/c7c7\x07");
+    CHECK(feed(c, "\x1b]10;?\x1b\\") == "\x1b]10;rgb:c7c7/c7c7/c7c7\x1b\\");
+    CHECK(feed(c, "\x1b]4;1;?\x07") == "\x1b]4;1;rgb:cdcd/0000/0000\x07");
     itcore_colors d; itcore_default_colors(&d);
     CHECK(d.palette[1] == 0xCD0000 && d.palette[16] == 0 && d.palette[231] == 0xFFFFFF && d.palette[232] == 0x080808 && d.palette[255] == 0xEEEEEE);
     itcore_colors cfg = d; cfg.foreground = 0x112233; cfg.background = 0x445566; cfg.palette[2] = 0x010203;
     CHECK(itcore_set_colors(c, &cfg) == 0);
-    CHECK(feed(c, "\x1b]10;?\x07") == "\x1b]10;rgb:1111/2222/3333\x1b\\");
-    CHECK(feed(c, "\x1b]11;?\x1b\\") == "\x1b]11;rgb:4444/5555/6666\x1b\\");
-    CHECK(feed(c, "\x1b]10;?;?\x07") == "\x1b]10;rgb:1111/2222/3333\x1b\\\x1b]11;rgb:4444/5555/6666\x1b\\");
-    CHECK(feed(c, "\x1b]4;2;?\x07") == "\x1b]4;2;rgb:0101/0202/0303\x1b\\");
+    CHECK(feed(c, "\x1b]10;?\x07") == "\x1b]10;rgb:1111/2222/3333\x07");
+    CHECK(feed(c, "\x1b]11;?\x07") == "\x1b]11;rgb:4444/5555/6666\x07");
+    CHECK(feed(c, "\x1b]10;?;?\x07") == "\x1b]10;rgb:1111/2222/3333\x07\x1b]11;rgb:4444/5555/6666\x07");
+    CHECK(feed(c, "\x1b]4;2;?\x07") == "\x1b]4;2;rgb:0101/0202/0303\x07");
     auto s0 = itcore_acquire_snapshot(c, 0, 1); itcore_wrap w; uint64_t r0; itcore_snapshot_row(s0, 0, &w, &r0);
     feed(c, "\x1b]4;2;#ff8000;3;rgb:f/80/0000\x07\x1b]10;#abc\x07\x1b]11;rgb:ffff/0/0\x07\x1b]12;#010203\x07\x1b]4;300;#fff\x07\x1b]10;bogus\x07");
     auto s1 = itcore_acquire_snapshot(c, 0, 1); uint64_t r1; itcore_snapshot_row(s1, 0, &w, &r1);
