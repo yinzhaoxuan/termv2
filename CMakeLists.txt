@@ -4,6 +4,12 @@ project(iterm2_win LANGUAGES C CXX)
 if((MINGW OR CMAKE_CROSSCOMPILING) AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
 endif()
+# 去掉全局 -DNDEBUG（改为按目标定义，见文件末尾）
+foreach(_lang C CXX)
+  foreach(_cfg RELEASE RELWITHDEBINFO MINSIZEREL)
+    string(REGEX REPLACE "(^| )[-/]DNDEBUG( |$)" " " CMAKE_${_lang}_FLAGS_${_cfg} "${CMAKE_${_lang}_FLAGS_${_cfg}}")
+  endforeach()
+endforeach()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -161,7 +167,9 @@ endif()
 # T08：PaneBackend（uishell 接口实现）；需在 it2w_ssh 之后
 add_subdirectory(app/pane_backend)
 
-# 所有测试目标 -UNDEBUG：Release/RelWithDebInfo 真机包里 assert 必须生效
+# NDEBUG 按目标决定：全局 *_FLAGS_<CONFIG> 已去掉 -DNDEBUG（见文件头）；
+# 非测试目标在优化配置下定义 NDEBUG，测试目标不定义（assert 在 Release/RelWithDebInfo 真机包里也生效）。
+# 不用 -UNDEBUG：它依赖命令行顺序（-DNDEBUG 在 CMAKE_CXX_FLAGS_<CONFIG> 里，可能排在其后），不可靠。
 function(it2w_collect_targets dir out)
   get_property(_t DIRECTORY ${dir} PROPERTY BUILDSYSTEM_TARGETS)
   get_property(_s DIRECTORY ${dir} PROPERTY SUBDIRECTORIES)
@@ -174,7 +182,10 @@ endfunction()
 it2w_collect_targets(${CMAKE_CURRENT_SOURCE_DIR} _all_targets)
 foreach(_tg ${_all_targets})
   get_target_property(_ty ${_tg} TYPE)
-  if(_ty STREQUAL "EXECUTABLE" AND _tg MATCHES "test")
-    target_compile_options(${_tg} PRIVATE -UNDEBUG)
+  if(_ty STREQUAL "INTERFACE_LIBRARY" OR _ty STREQUAL "UTILITY")
+    continue()
+  endif()
+  if(NOT (_ty STREQUAL "EXECUTABLE" AND _tg MATCHES "test"))
+    target_compile_definitions(${_tg} PRIVATE $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:NDEBUG>)
   endif()
 endforeach()
