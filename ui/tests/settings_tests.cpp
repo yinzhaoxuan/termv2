@@ -30,6 +30,12 @@ int main() {
   CHECK(r.status == LoadStatus::Ok && r.data.keybindings.at("newTab") == "Ctrl+T");
   CHECK(r.data.keybindings.at("closePane") == "Ctrl+Shift+W");  // 缺省补齐
 
+  CHECK(!r.data.wordChars);  // 未设置 = 后端默认
+  r.data.wordChars = "/-_.";
+  CHECK(saveSettings(f, r.data, false, &err));
+  { auto r2 = loadSettings(f); CHECK(r2.data.wordChars && *r2.data.wordChars == "/-_."); }
+  CHECK(r.data.keybindings.at("pasteCtrlV") == "Ctrl+V");
+
   resetKeybindings(r.data);
   CHECK(r.data.keybindings.at("newTab") == "Ctrl+Shift+T");
 

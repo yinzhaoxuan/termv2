@@ -46,6 +46,7 @@ Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
     SettingsFile f; f.schemaVersion = v; f.revision = j.value("revision", 0LL);
     f.fontSize = j.value("fontSize", 12.0);
     f.fontFamily = j.value("fontFamily", "Cascadia Mono");
+    if (j.contains("wordChars") && j["wordChars"].is_string()) f.wordChars = j["wordChars"].get<std::string>();
     if (j.contains("keybindings") && j.at("keybindings").is_object()) {
       for (auto it = j.at("keybindings").begin(); it != j.at("keybindings").end(); ++it)
         f.keybindings[it.key()] = it.value().get<std::string>();
@@ -124,6 +125,7 @@ bool saveSettings(const fs::path& file, SettingsFile& data, bool readOnly, std::
   json j{{"schemaVersion", kSchemaVersion}, {"revision", data.revision + 1},
          {"fontSize", data.fontSize}, {"fontFamily", data.fontFamily},
          {"keybindings", kb}};
+  if (data.wordChars) j["wordChars"] = *data.wordChars;
   fs::path tmp = file; tmp += ".tmp";
   if (!writeDurable(tmp, j.dump(2), error)) { std::error_code ec; fs::remove(tmp, ec); return false; }
   std::error_code ec;

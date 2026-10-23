@@ -881,6 +881,7 @@ uishell::PaneBackendFactory makeFactory() {
   cfg.resolveSsh = resolveSsh;
   cfg.fontFamily = W(g->settings.fontFamily);
   cfg.fontSizePt = (float)g->settings.fontSize;
+  cfg.wordChars = g->settings.wordChars;  // 非法值由后端打日志并退回默认
   return it2app::makeWin32PaneBackendFactory(std::move(cfg));
 #endif
 }

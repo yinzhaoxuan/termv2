@@ -1,6 +1,7 @@
 #pragma once
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 #include "uicfg/store.h"
@@ -15,6 +16,8 @@ struct SettingsFile {
   std::map<std::string, std::string> keybindings;
   double fontSize = 12.0;
   std::string fontFamily = "Cascadia Mono";
+  // 双击选词的额外词字符（ASCII 可见标点）；空 = 后端默认 /-+\~_.；新建窗格生效
+  std::optional<std::string> wordChars;
 };
 
 struct SettingsLoadResult {
