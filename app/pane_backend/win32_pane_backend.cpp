@@ -907,7 +907,8 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
 void Win32PaneBackend::endDragOnCaptureLoss() {
     drag_.captureLost();
     dragSelStarted_ = false;
-    dragEdge_ = 0;
+    dragEdge_ = 0;  // 自动滚动没有独立定时器（共用 kTickTimer 驱动输出/呈现，不能 KillTimer）：
+                    // autoScrollTick 以 dragEdge_ 与 drag_.pressed() 为门，这里清零即停止
     downCol_ = downRow_ = -1;
 }
 

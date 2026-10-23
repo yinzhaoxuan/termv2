@@ -153,7 +153,8 @@ private:
 class ActivationClickGate {
 public:
     void onMouseActivate(bool wasInactive) { armed_ = wasInactive; }
-    bool allowDown() { if (armed_) { armed_ = false; swallowing_ = true; return false; } return true; }
+    // 非激活点击的按下清掉 swallowing_：被吞的按下若在窗格外松开（收不到 WM_LBUTTONUP），不能吃掉下一次正常松开
+    bool allowDown() { if (armed_) { armed_ = false; swallowing_ = true; return false; } swallowing_ = false; return true; }
     bool allowUp() { if (swallowing_) { swallowing_ = false; return false; } return true; }
     bool allowMove() const { return !swallowing_; }
     void reset() { armed_ = swallowing_ = false; }

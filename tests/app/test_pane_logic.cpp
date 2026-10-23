@@ -422,6 +422,11 @@ static void capture_loss() {
     g.onMouseActivate(true);
     CHECK(!g.allowDown()); CHECK(!g.allowMove()); CHECK(!g.allowUp());
     CHECK(g.allowDown() && g.allowMove() && g.allowUp());  // 下一次点击正常
+    // 被吞的按下在窗格外松开（没收到 UP）：下一次正常按下/松开不受影响
+    g.onMouseActivate(true);
+    CHECK(!g.allowDown());                                  // 激活点击，UP 落在窗格外丢失
+    g.onMouseActivate(false);
+    CHECK(g.allowDown() && g.allowMove() && g.allowUp());
     g.onMouseActivate(false);                               // 已激活窗口内的点击照常
     CHECK(g.allowDown() && g.allowUp());
 }
