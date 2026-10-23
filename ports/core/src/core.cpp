@@ -406,6 +406,10 @@ uint32_t itcore_history_rows(const itcore_core *c) {
     if (!c || !c->screen) return 0;
     return static_cast<uint32_t>(c->screen->history_display_rows());
 }
+// 测试钩子（不在公开头文件）：history_display_rows 实际重排次数（B2 缓存命中验证）
+extern "C" uint64_t itcore_debug_history_recomputes(const itcore_core *c) {
+    return (c && c->screen) ? c->screen->hist_rows_recompute_count : 0;
+}
 int itcore_selection_extend(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row) {
     if (!c || !c->screen) return 0;
     uint64_t before = c->screen->sel_serial();

@@ -202,7 +202,9 @@ public:
     // 以当前宽度重排：返回显示行列表（Row 形态），并填充 wrap。
     void reflow_into(uint16_t cols, std::vector<Row> &out) const;
     void clear();
-    template <class F> void for_each_line(F f) { for (auto &l : lines_) f(l); }
+    template <class F> void for_each_line(F f) { ++gen_; for (auto &l : lines_) f(l); }
+    // 内容代数：push/淘汰/clear/可写遍历都 +1（history_display_rows 缓存键，B2）
+    uint64_t generation() const { return gen_; }
     // 绝对显示行（从最旧开始）→ (逻辑行下标, 行内列偏移)；失败返回 false。
     bool map_display_row(uint16_t cols, size_t display_row, size_t *logic_i, size_t *cell_off) const;
     size_t display_rows(uint16_t cols) const;
@@ -212,6 +214,7 @@ private:
     uint32_t max_lines_;
     uint64_t max_bytes_;
     size_t bytes_ = 0;
+    uint64_t gen_ = 0;
 };
 
 struct ScreenModes {
@@ -372,6 +375,14 @@ private:
     // 选区变化：新旧选区覆盖到的网格行全部取新 revision（全局计数器），历史行随计数器一起变
     void sel_touch(const Selection &old);
     size_t sel_hist_segments_ = 0;
+    // B2：history_display_rows 缓存（键 = 回滚代数 + 列宽）；后端每帧查询，避免每次整段重排
+    mutable uint64_t hist_rows_gen_ = ~0ull;
+    mutable uint16_t hist_rows_cols_ = 0;
+    mutable size_t hist_rows_cache_ = 0;
+public:
+    // 测试用：缓存未命中（真正重排）的次数
+    mutable uint64_t hist_rows_recompute_count = 0;
+private:
 };
 
 }  // namespace itcore

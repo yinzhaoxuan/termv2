@@ -407,6 +407,7 @@ size_t Grid::mem_bytes() const {
 // ---- Scrollback ----
 void Scrollback::push(LogicalLine &&line) {
     bytes_ += line.mem_bytes();
+    ++gen_;
     lines_.push_back(std::move(line));
     trim();
 }
@@ -417,7 +418,7 @@ void Scrollback::trim() {
         lines_.pop_front();
     }
 }
-void Scrollback::clear() { lines_.clear(); bytes_ = 0; }
+void Scrollback::clear() { ++gen_; lines_.clear(); bytes_ = 0; }
 
 static void reflow_line(const LogicalLine &ll, uint16_t cols, std::vector<Row> &out, bool last_hard,
                         const std::vector<SelPos> *src = nullptr, std::vector<std::vector<SelPos>> *opos = nullptr,
@@ -1387,9 +1388,15 @@ int Screen::ansi_mode_state(int mode) const {
 
 size_t Screen::history_display_rows() const {
     if (modes_.alt) return 0;
+    const uint16_t cols = grid().cols();
+    if (hist_rows_gen_ == scrollback_.generation() && hist_rows_cols_ == cols) return hist_rows_cache_;
     std::vector<Row> hist;
-    reflow_merged(scrollback_, grid().cols(), hist);
-    return hist.size();
+    reflow_merged(scrollback_, cols, hist);
+    ++hist_rows_recompute_count;
+    hist_rows_gen_ = scrollback_.generation();
+    hist_rows_cols_ = cols;
+    hist_rows_cache_ = hist.size();
+    return hist_rows_cache_;
 }
 
 // ---- 选区 ----

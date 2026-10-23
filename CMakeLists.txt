@@ -113,6 +113,7 @@ add_test(NAME CORE-03.utf8_width COMMAND itcore_test_screen core03)
 add_test(NAME CORE-04.alt_scroll_query COMMAND itcore_test_screen core04)
 add_test(NAME CORE-05.reflow COMMAND itcore_test_screen core05)
 add_test(NAME MEM-01.history_budget COMMAND itcore_test_screen mem01)
+add_test(NAME B2.history_rows_cache COMMAND itcore_test_screen histcache)
 
 # T06：输入编码 encode_*（键盘/粘贴/鼠标）
 add_executable(itcore_test_encode tests/core/test_encode.cpp)

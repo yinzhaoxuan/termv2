@@ -384,6 +384,36 @@ static void test_csi_defaults() {
     itcore_destroy(c);
 }
 
+// B2：itcore_history_rows 缓存——内容/列宽不变时不重排；push、resize、ED3、切屏都正确失效
+extern "C" uint64_t itcore_debug_history_recomputes(const itcore_core *c);
+static void test_history_cache() {
+    itcore_core *c = make(10, 3, 1000);
+    auto feed = [&](const char *t) { itcore_feed(c, reinterpret_cast<const uint8_t *>(t), std::strlen(t)); drain(c); };
+    CHECK(itcore_history_rows(c) == 0);
+    feed("1\r\n2\r\n3\r\n4\r\n");               // 2 行进历史
+    uint32_t h = itcore_history_rows(c);
+    CHECK(h == 2);
+    uint64_t n0 = itcore_debug_history_recomputes(c);
+    for (int i = 0; i < 100; ++i) CHECK(itcore_history_rows(c) == h);
+    CHECK(itcore_debug_history_recomputes(c) == n0);   // 命中缓存
+    feed("x");                                          // 只改网格，不改历史
+    CHECK(itcore_history_rows(c) == h && itcore_debug_history_recomputes(c) == n0);
+    feed("\r\n5\r\n");                                // 新行进历史 → 失效
+    CHECK(itcore_history_rows(c) == h + 2);
+    feed("\r\n0123456789ABCDEFGHIJ\r\n\r\n\r\n");     // 一条 20 字符的软换行逻辑行入历史
+    uint32_t w10 = itcore_history_rows(c);
+    CHECK(itcore_resize(c, 20, 3, 1) == 0); drain(c);       // 列宽变化 → 失效并按新宽重排
+    uint32_t w20 = itcore_history_rows(c);
+    CHECK(w20 < w10);
+    feed("\x1b[?1049h");
+    CHECK(itcore_history_rows(c) == 0);                 // 备用屏
+    feed("\x1b[?1049l");
+    CHECK(itcore_history_rows(c) == w20);
+    feed("\x1b[3J");                                   // ED3 清历史 → 失效
+    CHECK(itcore_history_rows(c) == 0);
+    itcore_destroy(c);
+}
+
 int main(int argc, char **argv) {
     std::string which = argc > 1 ? argv[1] : "all";
     if (which == "all" || which == "core03") test_core03();
@@ -391,6 +421,7 @@ int main(int argc, char **argv) {
     if (which == "all" || which == "core05") test_core05();
     if (which == "all" || which == "mem01") test_mem01();
     if (which == "all" || which == "csi") test_csi_defaults();
+    if (which == "all" || which == "histcache") test_history_cache();
     if (failures) std::printf("%d failure(s)\n", failures);
     else std::printf("ok\n");
     return failures ? 1 : 0;
