@@ -18,6 +18,9 @@ const std::pair<const char*, const char*> kDefaults[] = {
     {"focusPane", "Alt+Arrow"},  // Alt+方向键
     {"copy", "Ctrl+Shift+C"},
     {"paste", "Ctrl+Shift+V"},
+    {"pasteCtrlV", "Ctrl+V"},          // 设为 "" 则 Ctrl+V 原样发 0x16（vim 块选择）
+    {"pasteShiftInsert", "Shift+Insert"},
+    {"copyOrInterrupt", "Ctrl+C"},     // 有选区复制并清除，无选区照常发 0x03
     {"searchHistory", "Ctrl+Shift+F"},
     {"searchConnections", "Ctrl+Shift+L"},
     {"fontBigger", "Ctrl+Plus"},

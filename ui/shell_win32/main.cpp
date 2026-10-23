@@ -527,6 +527,12 @@ bool runAction(const KeyMatch& m) {
   if (auto fsz = fontSizeFor(a, g->settings.fontSize)) { applyFontSize(*fsz); return true; }
   if (a == "copy") { copySelection(); return true; }
   if (a == "paste") { pasteClipboard(); return true; }
+  if (a == "pasteCtrlV" || a == "pasteShiftInsert") { pasteClipboard(); return true; }
+  if (a == "copyOrInterrupt") {
+    PaneHost* p = activePane();
+    if (!p || !p->backend || p->backend->selectedText().empty()) return false;  // 无选区：交给后端发 ^C
+    copySelection(); p->backend->clearSelection(); return true;
+  }
   if (a == "searchConnections") { SetFocus(g->search); SendMessageW(g->search, EM_SETSEL, 0, -1); return true; }
   if (p && p->backend) {
     auto sc = scrollCommandFor(a, estimateRows(*p));
