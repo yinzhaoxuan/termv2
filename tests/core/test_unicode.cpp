@@ -109,6 +109,12 @@ static void test_text_clusters() {
     CHECK(itcore_text_clusters(c, nullptr, 3, nullptr, nullptr, 0) == 0);
     CHECK(itcore_text_clusters(c, "\u200b\u00ad", strlen("\u200b\u00ad"), nullptr, nullptr, 0) == 0);
     uint8_t one[1]; CHECK(itcore_text_clusters(c, "abc", 3, one, nullptr, 1) == 3 && one[0] == 1);
+    {  // 超过 32 个码点的组合序列：仍是 1 簇（超出丢弃，同 join_cluster），字节全计入；后续字符另起簇
+      std::string t = "e"; for (int k = 0; k < 40; ++k) t += "\u0301"; t += "x";
+      uint8_t w2[4] = {}; uint32_t b2[4] = {};
+      CHECK(itcore_text_clusters(c, t.data(), t.size(), w2, b2, 4) == 2);
+      CHECK(w2[0] == 1 && b2[0] == 1 + 40 * 2 && w2[1] == 1 && b2[1] == 1);
+    }
     itcore_destroy(c);
 }
 

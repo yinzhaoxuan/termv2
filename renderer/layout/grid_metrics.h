@@ -7,11 +7,14 @@
 
 namespace itren {
 // 主字体度量（DIP）：DirectWrite 实测（D2DRenderer::font_metrics）或无设备时按字号估算
-struct FontMetricsDip { float advance = 7.2f, ascent = 10.f, descent = 3.f, line_gap = 0.f; };
+struct FontMetricsDip {
+  float advance = 7.2f, ascent = 10.f, descent = 3.f, line_gap = 0.f;
+  bool measured = false;  // true = DirectWrite 实测；false = 按字号估算（无设备/字体族找不到）
+};
 // 估算：12 pt 时为 7.2 / 10 / 3 / 0（与改动前的固定值一致），按字号线性缩放
 inline FontMetricsDip estimate_font_metrics(float size_pt) {
   float k = (size_pt > 0 ? size_pt : 12.f) / 12.f;
-  return {7.2f * k, 10.f * k, 3.f * k, 0.f};
+  return {7.2f * k, 10.f * k, 3.f * k, 0.f, false};
 }
 struct GridMetrics {
   float dpi_scale = 1.0f;     // 96 DPI = 1.0
@@ -28,6 +31,8 @@ struct GridMetrics {
   static GridMetrics from_font(const FontMetricsDip &f, float dpi_scale) {
     return from_font(f.advance, f.ascent, f.descent, f.line_gap, dpi_scale);
   }
+  // 基线（自格顶的物理像素）：round(ascent×scale)；与 TextFormat 的 UNIFORM 行距 baseline 一致（BUG-01）
+  static float baseline_px(const FontMetricsDip &f, float dpi_scale) { return std::round(f.ascent * dpi_scale); }
   int cell_w_px() const { return int(std::lround(cell_w_dip * dpi_scale)); }
   int cell_h_px() const { return int(std::lround(cell_h_dip * dpi_scale)); }
   int pad_x_px() const { return int(std::lround(pad_x_dip * dpi_scale)); }

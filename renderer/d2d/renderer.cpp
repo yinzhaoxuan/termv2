@@ -59,6 +59,8 @@ struct D2DRenderer::Impl {
     ID2D1SolidColorBrush *brush_caret = nullptr;
     std::wstring family = L"Consolas";
     float size_pt = 12.f;
+    mutable FontMetricsDip fm_cache; mutable bool fm_valid = false;  // font_metrics 缓存（create_formats 时失效）
+    float fmt_scale = 0.f; int fmt_cell_h = 0; float fmt_baseline = 0.f;  // TextFormat 当前对应的 DPI/行高/基线
     std::vector<uint64_t> row_rev_cache;
     std::unordered_map<std::wstring, float> advance[4];  // 字形 advance 缓存（按样式），字体变化时清空
     int last_reverse = -1;
@@ -125,25 +127,29 @@ bool fail_hr(const char *step, HRESULT hr) { log_hr(step, hr); return false; }
 }  // namespace
 
 // 4 个样式 TextFormat 全部建成才替换 Impl 里的旧格式（失败保持旧字体）
-bool D2DRenderer::create_formats(Impl &I, const std::wstring &family, float size_pt) {
+bool D2DRenderer::create_formats(Impl &I, const std::wstring &family, float size_pt, float scale, int cell_h_px, float baseline_px) {
     if (!I.dwrite) return false;
     IDWriteTextFormat *f[4] = {};
     for (int i = 0; i < 4; ++i) {
         HRESULT hr = I.dwrite->CreateTextFormat(family.c_str(), nullptr,
                                                 (i & 1) ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
                                                 (i & 2) ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
-                                                DWRITE_FONT_STRETCH_NORMAL, size_pt * (96.f / 72.f), L"en-us", &f[i]);
+                                                DWRITE_FONT_STRETCH_NORMAL, size_pt * (96.f / 72.f) * (scale > 0 ? scale : 1.f), L"en-us", &f[i]);
         if (FAILED(hr)) {
             for (auto *&x : f) if (x) { x->Release(); x = nullptr; }
             return fail_hr("CreateTextFormat", hr);
         }
         f[i]->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        // 画布按物理像素绘制：字号已乘 DPI；固定行高=格高、基线=round(ascent×scale)，回退字体不再把基线挤出格子（BUG-01）
+        if (cell_h_px > 0) f[i]->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, float(cell_h_px), baseline_px);
     }
     for (int i = 0; i < 4; ++i) { if (I.formats[i]) I.formats[i]->Release(); I.formats[i] = f[i]; }
     if (I.format) I.format->Release();
     I.format = f[0]; I.format->AddRef();
     for (auto &a : I.advance) a.clear();
     I.family = family; I.size_pt = size_pt;
+    I.fm_valid = false;
+    I.fmt_scale = scale; I.fmt_cell_h = cell_h_px; I.fmt_baseline = baseline_px;
     return true;
 }
 
@@ -254,6 +260,7 @@ bool D2DRenderer::set_font(const wchar_t *font_family, float font_size_pt) {
 }
 
 FontMetricsDip D2DRenderer::font_metrics() const {
+    if (impl_->fm_valid) return impl_->fm_cache;
     FontMetricsDip est = estimate_font_metrics(impl_->size_pt);
     if (!impl_->dwrite || !impl_->format) return est;
     IDWriteFontCollection *col = nullptr;
@@ -270,14 +277,16 @@ FontMetricsDip D2DRenderer::font_metrics() const {
             float em = impl_->size_pt * (96.f / 72.f), k = fm.designUnitsPerEm ? em / fm.designUnitsPerEm : 0.f;
             UINT32 cp = 'M'; UINT16 gi = 0; DWRITE_GLYPH_METRICS gm{};
             if (k > 0 && SUCCEEDED(face->GetGlyphIndices(&cp, 1, &gi)) && SUCCEEDED(face->GetDesignGlyphMetrics(&gi, 1, &gm, FALSE)))
-                out = {gm.advanceWidth * k, fm.ascent * k, fm.descent * k, fm.lineGap * k};
+                out = {gm.advanceWidth * k, fm.ascent * k, fm.descent * k, fm.lineGap * k, true};
         }
         if (face) face->Release();
         if (font) font->Release();
         if (fam) fam->Release();
     }
     col->Release();
-    return out.advance > 0 ? out : est;
+    if (out.advance <= 0) out = est;
+    impl_->fm_cache = out; impl_->fm_valid = true;
+    return out;
 }
 
 bool D2DRenderer::resize_surface() {
@@ -358,6 +367,15 @@ bool D2DRenderer::present_frame() {
         I.dirty.invalidate();
     }
     bool full = L.layout_changed;
+    {  // DPI / 格高变化（含首帧、setFont 之后）：按实测度量重建 TextFormat 的字号与行距，整屏重画
+        const float sc = metrics_.dpi_scale > 0 ? metrics_.dpi_scale : 1.f;
+        const int ch = metrics_.cell_h_px();
+        const float bl = GridMetrics::baseline_px(font_metrics(), sc);
+        if (sc != I.fmt_scale || ch != I.fmt_cell_h || bl != I.fmt_baseline) {
+            if (!create_formats(I, I.family, I.size_pt, sc, ch, bl)) return false;
+            full = true;
+        }
+    }
     // DECSCNM 切换：默认色全部翻转 → 整屏重画
     const int rev = itcore_snapshot_reverse_screen(snap_) ? 1 : 0;
     if (rev != I.last_reverse) { full = true; I.last_reverse = rev; }

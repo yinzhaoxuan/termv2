@@ -99,6 +99,19 @@ void present(TermApp *a) {
     release_snap(a);
     a->snap = itcore_acquire_snapshot(a->core, 0, a->rows);
     if (!a->snap) return;
+    {  // 格尺寸改用 DirectWrite 实测度量（BUG-01），行列数随之重算
+        const auto fm = a->renderer->font_metrics();
+        if (!fm.measured) std::fprintf(stderr, "[win32_term] DirectWrite 字体度量失败，格尺寸按字号估算\n");
+        a->metrics = itren::GridMetrics::from_font(fm, a->host->dpi_scale());
+        a->renderer->metrics() = a->metrics;
+        RECT rc{}; GetClientRect(a->hwnd, &rc);
+        uint16_t c = a->cols, r = a->rows;
+        a->metrics.grid_size(rc.right - rc.left, rc.bottom - rc.top, c, r);
+        if (c != a->cols || r != a->rows) {
+            a->cols = c; a->rows = r; ++a->generation;
+            itcore_resize(a->core, a->cols, a->rows, a->generation);
+        }
+    }
     a->renderer->set_expected_generation(a->generation);
     a->renderer->set_snapshot(a->snap);
     if (a->renderer->device_lost()) {
@@ -193,8 +206,7 @@ bool start_session(TermApp *a) {
     itcore_resize(a->core, a->cols, a->rows, a->generation);
 
     a->host = std::make_unique<HwndSwapChainHost>(a->hwnd);
-    a->metrics = itren::GridMetrics::from_font(/*advance*/ 7.2f, /*ascent*/ 10.f, /*descent*/ 3.f,
-                                               /*gap*/ 0.f, a->host->dpi_scale());
+    a->metrics = itren::GridMetrics::from_font(itren::estimate_font_metrics(12.f), a->host->dpi_scale());
     a->renderer = std::make_unique<itren::D2DRenderer>(a->host.get());
     if (!a->renderer->init(a->metrics, L"Consolas", 12.f)) {
         std::fprintf(stderr, "[win32_term] D2DRenderer::init 失败\n");
@@ -295,7 +307,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         RECT rc{};
         GetClientRect(hwnd, &rc);
         // 先用默认格度量估行列，再 start
-        a->metrics = itren::GridMetrics::from_font(7.2f, 10.f, 3.f, 0.f, 1.f);
+        a->metrics = itren::GridMetrics::from_font(itren::estimate_font_metrics(12.f), 1.f);  // 仅用于 start 前粗估，init 后按实测重算
         a->metrics.grid_size(rc.right - rc.left, rc.bottom - rc.top, a->cols, a->rows);
         if (!start_session(a)) {
             PostQuitMessage(1);

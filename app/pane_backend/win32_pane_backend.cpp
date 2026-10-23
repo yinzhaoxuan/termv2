@@ -249,7 +249,11 @@ bool Win32PaneBackend::attach(void *parentHwnd, const uishell::PixelRect &rc, fl
     if (!renderer_->init(metrics_, font_.family.c_str(), font_.sizePt))
         std::fprintf(stderr, "[pane] D2DRenderer::init 失败（设备丢失时 present 内重试）\n");
     // 格尺寸取 DirectWrite 实测主字体度量（init 失败时为按字号估算）
-    metrics_ = itren::GridMetrics::from_font(renderer_->font_metrics(), scale);
+    // init 之后一定实测；实测失败（无设备/字体族找不到）才退回估算并记日志
+    const auto fm = renderer_->font_metrics();
+    if (!fm.measured)
+        std::fprintf(stderr, "[pane] DirectWrite 字体度量失败（%ls %.1fpt），格尺寸按字号估算\n", font_.family.c_str(), double(font_.sizePt));
+    metrics_ = itren::GridMetrics::from_font(fm, scale);
     renderer_->metrics() = metrics_;
     sized_ = true;
     uint16_t c = 80, r = 24;

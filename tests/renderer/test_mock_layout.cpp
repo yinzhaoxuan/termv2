@@ -3,6 +3,7 @@
 #include "grid_metrics.h"
 #include <cassert>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 
 int main() {
@@ -34,6 +35,30 @@ int main() {
       assert(hc == c && hr == r);
     }
     uint16_t cols, rows; m.grid_size(100, 50, cols, rows); assert(cols == 20 && rows == 5);
+  }
+  // BUG-01：常见等宽字体（设计单位取近似值，口径同 DirectWrite GetMetrics / GetDesignGlyphMetrics("M")）在
+  // 96/144/192 DPI 下：格高 >= ceil((ascent+descent)×scale)，格宽 = round(advance×scale)，基线落在格内且留出 descent
+  {
+    struct F { const char *name; float upem, asc, desc, gap, adv_m; } fonts[] = {
+        {"Consolas", 2048, 1884, 514, 0, 1126}, {"Cascadia Mono", 2048, 1900, 480, 0, 1200},
+        {"Courier New", 2048, 1705, 615, 0, 1229}, {"Lucida Console", 2048, 1616, 432, 0, 1234},
+        {"Sarasa Mono SC", 1000, 880, 120, 0, 500}};
+    for (float pt : {10.f, 12.f, 14.f})
+      for (auto &f : fonts) {
+        const float k = pt * (96.f / 72.f) / f.upem;
+        itren::FontMetricsDip fm{f.adv_m * k, f.asc * k, f.desc * k, f.gap * k, true};
+        for (float sc : {1.f, 1.5f, 2.f}) {
+          auto m = itren::GridMetrics::from_font(fm, sc);
+          const int need = int(std::ceil((fm.ascent + fm.descent) * sc - 1e-3f));
+          assert(m.cell_h_px() >= need);
+          assert(m.cell_h_px() > 10);  // 旧的写死 10 DIP 行高在 96 DPI 下必然裁字
+          assert(m.cell_w_px() == int(std::lround(fm.advance * sc)));
+          const float bl = itren::GridMetrics::baseline_px(fm, sc);
+          assert(bl > 0 && bl + fm.descent * sc <= m.cell_h_px() + 1.f);
+        }
+      }
+    // 估算值标记为未实测（后端据此打日志）
+    assert(!itren::estimate_font_metrics(12.f).measured);
   }
   puts("renderer mock/layout tests passed");
 }

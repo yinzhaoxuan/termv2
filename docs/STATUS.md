@@ -161,3 +161,4 @@ cmake --build build-mingw -j   # 全量通过
 实机：将 `win32_term.exe` 与依赖（若非 `-static`）拷到 Win11，直接运行；默认启动 `C:\Windows\System32\cmd.exe`。
 - VS16 按屏幕（itcore_text_clusters 取 core 当前屏，alt 屏 VS16 不加宽）+ SEL-01 drag_end 纯函数（空选区状态、按下格内回拖不误判反向）+ BLINK-03 present_frame 路径测试 + cell_style 注释位置修正；Linux 85/85 ×3（plain/ASan/TSan），mingw 含 it2w_shell 通过。
 - PANE-06 setFont/cellSize：FontSpec + resolveFontChange（空字体名保留、6–72pt 夹取、NaN 保留）、renderer set_font/font_metrics（DWrite designUnits）、经 UiDispatchQueue 异步 applyFont→applyBounds→publishStatus，未定尺寸时 cellSize={0,0}；修 mingw create_formats 声明；Linux 86/86 ×3，mingw 含 it2w_shell 通过。
+- BUG-01 行高热修：5f5c2b6 的 pane/win32_term 写死 7.2×10 DIP 而字体按 12pt=16 DIP 建 → 按格裁剪截字、fit_glyph 压窄。现：首次创建即按 DirectWrite 实测（失败打日志）；TextFormat 字号乘 DPI，SetLineSpacing(UNIFORM, 格高, round(ascent×scale))，DPI/格高变化时重建；win32_term 去掉写死值；text_clusters 加 kMaxClusterCps=32。Linux 86/86 ×3，mingw 通过。

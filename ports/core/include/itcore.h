@@ -149,7 +149,8 @@ uint64_t itcore_sync_end_count(const itcore_core *c);
    屏幕状态从 c 读取，调用方不传；c 为 NULL 返回 0。与 itcore_feed 同线程调用。
    widths[i]（1/2）与 byte_lens[i]（该簇 UTF-8 字节数，含并入的可忽略码点）各可为 NULL；
    返回簇总数（可大于 cap，只写前 cap 个）。与写网格的差异：
-   - 一个簇不像写网格那样限制在 32 个码点以内（超长组合序列在网格里会被截断/拆开）；
+   - 与写网格一样单簇最多 32 个码点（kMaxClusterCps），超出的码点丢弃、不另起簇，但其字节计入该簇 byte_lens；
+   - 不模拟写网格时“tx+1<cols 且光标紧随其后才扩宽”的限制（行尾/光标位置导致网格不扩宽时，这里仍报 2）；
    - 只含可忽略码点的输入返回 0 个簇（其字节不计入任何簇）；
    - 输入不应含 C0 控制字符（网格里是控制功能，这里按宽 1 的普通簇计）。 */
 size_t itcore_text_clusters(const itcore_core *c, const char *utf8, size_t length, uint8_t *widths, uint32_t *byte_lens, size_t cap);

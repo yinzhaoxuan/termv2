@@ -80,7 +80,7 @@ public:
 private:
     void shutdown_device();
     struct Impl;
-    static bool create_formats(Impl &I, const std::wstring &family, float size_pt);
+    static bool create_formats(Impl &I, const std::wstring &family, float size_pt, float scale = 0.f, int cell_h_px = 0, float baseline_px = 0.f);
     ISwapChainHost *host_ = nullptr;
     GridMetrics metrics_{};
     const itcore_snapshot *snap_ = nullptr;  // 非拥有
