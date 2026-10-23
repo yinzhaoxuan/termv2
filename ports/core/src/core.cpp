@@ -197,6 +197,44 @@ struct itcore_core final : itcore::TokenSink {
         }
         if (changed) colors_changed();
     }
+    // B4 OSC 52
+    bool clip_write = false, clip_read = false;
+    size_t clip_max = ITCORE_CLIPBOARD_DEFAULT_MAX;
+    static bool b64_decode(std::string_view in, size_t cap, std::string *out) {
+        out->clear();
+        uint32_t acc = 0; int bits = 0; size_t pad = 0;
+        for (char ch : in) {
+            int v;
+            if (ch >= 'A' && ch <= 'Z') v = ch - 'A';
+            else if (ch >= 'a' && ch <= 'z') v = ch - 'a' + 26;
+            else if (ch >= '0' && ch <= '9') v = ch - '0' + 52;
+            else if (ch == '+') v = 62;
+            else if (ch == '/') v = 63;
+            else if (ch == '=') { ++pad; continue; }
+            else return false;
+            if (pad) return false;  // '=' 之后不得再有数据
+            acc = (acc << 6) | uint32_t(v); bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                if (out->size() >= cap) return false;
+                out->push_back(char((acc >> bits) & 0xFF));
+            }
+        }
+        return pad <= 2 && (in.size() % 4 == 0 || pad == 0);
+    }
+    void osc52(const std::string &arg) {
+        auto sc = arg.find(';');
+        std::string sel = arg.substr(0, sc);
+        if (sc == std::string::npos) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }
+        std::string_view data = std::string_view(arg).substr(sc + 1);
+        if (data == "?") { push(clip_read ? ITCORE_EV_CLIPBOARD_READ : ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }
+        std::string dec;
+        if (!clip_write || data.size() > (clip_max / 3 + 1) * 4 || !b64_decode(data, clip_max, &dec)) {
+            push(ITCORE_EV_CLIPBOARD_REQUEST, sel);
+            return;
+        }
+        push(ITCORE_EV_CLIPBOARD_WRITE, std::move(dec));
+    }
     ~itcore_core() override { for (auto *e : events) delete e; }
 
     void push(itcore_event_kind k, std::string d = {}) {
@@ -260,8 +298,7 @@ struct itcore_core final : itcore::TokenSink {
                 if (sc != std::string::npos)
                     screen->set_hyperlink(std::string_view(arg).substr(0, sc), std::string_view(arg).substr(sc + 1));
             }
-            else if (num == "52")
-                push(ITCORE_EV_CLIPBOARD_REQUEST, arg.substr(0, arg.find(';')));
+            else if (num == "52") osc52(arg);
             if (!reply.empty()) push(ITCORE_EV_REPLY_BYTES, std::move(reply));
             break;
         }
@@ -432,6 +469,35 @@ int itcore_selection_text(itcore_core *c, itcore_buffer **out) {
     return *out ? 0 : -1;
 }
 
+int itcore_set_clipboard_policy(itcore_core *c, const itcore_clipboard_policy *cfg) {
+    if (!c) return -1;
+    if (!cfg) { c->clip_write = c->clip_read = false; c->clip_max = ITCORE_CLIPBOARD_DEFAULT_MAX; return 0; }
+    if (cfg->struct_size < sizeof(itcore_clipboard_policy)) return -1;
+    c->clip_write = cfg->allow_write != 0;
+    c->clip_read = cfg->allow_read != 0;
+    c->clip_max = cfg->max_bytes ? cfg->max_bytes : ITCORE_CLIPBOARD_DEFAULT_MAX;
+    return 0;
+}
+int itcore_encode_clipboard_reply(itcore_core *c, const char *utf8, size_t len, itcore_buffer **out) {
+    if (out) *out = nullptr;
+    if (!c || !out || (!utf8 && len)) return -1;
+    if (!c->clip_read) return 1;
+    if (len > c->clip_max) return -2;
+    static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string s = "\x1b]52;c;";
+    s.reserve(10 + (len + 2) / 3 * 4 + 2);
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t v = uint32_t(uint8_t(utf8[i])) << 16;
+        if (i + 1 < len) v |= uint32_t(uint8_t(utf8[i + 1])) << 8;
+        if (i + 2 < len) v |= uint8_t(utf8[i + 2]);
+        s.push_back(T[(v >> 18) & 63]); s.push_back(T[(v >> 12) & 63]);
+        s.push_back(i + 1 < len ? T[(v >> 6) & 63] : '=');
+        s.push_back(i + 2 < len ? T[v & 63] : '=');
+    }
+    s += "\x1b\\";
+    *out = itcore_encode::make_buf(std::move(s));
+    return *out ? 0 : -1;
+}
 int itcore_set_word_chars(itcore_core *c, const char *chars, size_t len) {
     if (!c || !c->screen) return -1;
     if (!chars) { c->screen->set_word_chars(itcore::Screen::kDefaultWordChars); return 0; }

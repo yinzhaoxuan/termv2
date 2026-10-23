@@ -140,6 +140,8 @@ private:
     void pushCellPixelSize();          // GridMetrics → itcore_set_cell_pixel_size
     void pump();                       // UI 线程：取输出 → 喂核心 → 事件 → present
     void drainCoreEvents();
+    void setClipboardUtf8(std::string_view u8);
+    std::string getClipboardUtf8();
     void present(bool force = false);  // force：绕过 SyncGate（改尺寸）
     void releaseSnap();
     void onTransportState(TransportState, std::optional<TransportFault>);
@@ -283,6 +285,7 @@ bool Win32PaneBackend::startSession() {
     // 首次 feed 前：GridMetrics 单元格像素尺寸（CSI 14/16 t）与配置色（OSC 10/11/12/4 查询与 104/110–112 恢复）
     pushCellPixelSize();
     if (cfg_->colors) itcore_set_colors(core_, &*cfg_->colors);
+    applyOsc52(core_, cfg_->osc52);
     if (applyWordChars(core_, cfg_->wordChars) != 0) std::fprintf(stderr, "[pane] wordChars 非法，使用默认\n");
     renderer_->set_expected_generation(resize_.generation());
 
@@ -446,6 +449,31 @@ void Win32PaneBackend::releaseSnap() {
     }
 }
 
+// B4：OSC 52 剪贴板读写（UI 线程；失败静默，不阻塞输出）
+void Win32PaneBackend::setClipboardUtf8(std::string_view u8) {
+    int n = u8.empty() ? 0 : MultiByteToWideChar(CP_UTF8, 0, u8.data(), int(u8.size()), nullptr, 0);
+    if (!OpenClipboard(hwnd_)) return;
+    EmptyClipboard();
+    if (HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, (size_t(n) + 1) * sizeof(wchar_t))) {
+        if (auto *w = static_cast<wchar_t *>(GlobalLock(g))) {
+            if (n) MultiByteToWideChar(CP_UTF8, 0, u8.data(), int(u8.size()), w, n);
+            w[n] = 0;
+            GlobalUnlock(g);
+            if (!SetClipboardData(CF_UNICODETEXT, g)) GlobalFree(g);
+        } else GlobalFree(g);
+    }
+    CloseClipboard();
+}
+
+std::string Win32PaneBackend::getClipboardUtf8() {
+    std::string out;
+    if (!OpenClipboard(hwnd_)) return out;
+    if (HANDLE h = GetClipboardData(CF_UNICODETEXT))
+        if (auto *w = static_cast<const wchar_t *>(GlobalLock(h))) { out = toUtf8(w); GlobalUnlock(h); }
+    CloseClipboard();
+    return out;
+}
+
 void Win32PaneBackend::drainCoreEvents() {
     if (!core_) return;
     while (itcore_event *e = itcore_next_event(core_)) {
@@ -462,6 +490,18 @@ void Win32PaneBackend::drainCoreEvents() {
             if (auto t = title_.offer(std::string(reinterpret_cast<const char *>(p), p ? n : 0), nowMs())) {
                 { std::lock_guard l(statusMu_); status_.title = *t; }
                 publishStatus();
+            }
+            break;
+        case ITCORE_EV_CLIPBOARD_WRITE:
+            setClipboardUtf8(std::string_view(reinterpret_cast<const char *>(p), p ? n : 0));
+            break;
+        case ITCORE_EV_CLIPBOARD_READ:
+            if (transport_) {
+                itcore_buffer *b = nullptr;
+                std::string cur = getClipboardUtf8();
+                if (itcore_encode_clipboard_reply(core_, cur.data(), cur.size(), &b) == 0 && b)
+                    transport_->reply(std::string_view(reinterpret_cast<const char *>(b->data), b->length));
+                if (b) itcore_buffer_release(b);
             }
             break;
         default: break;

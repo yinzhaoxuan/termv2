@@ -111,7 +111,72 @@ static void test_bad_args() {
     CHECK(itcore_feed(nullptr, nullptr, 0).status == ITCORE_FATAL);
 }
 
+// B4：OSC 52 —— 默认全关；写需 allow_write、读另需 allow_read；解码后大小上限
+static Ev only(itcore_core *c, const std::string &s) {
+    feed(c, s);
+    Ev r{ITCORE_EV_BELL, "<none>"}; int n = 0;
+    for (auto &e : drain(c)) if (e.k != ITCORE_EV_RENDER_INVALIDATED) { r = e; ++n; }
+    CHECK(n == 1);
+    return r;
+}
+static void test_osc52() {
+    itcore_core *c = make();
+    itcore_buffer *b = nullptr;
+    auto isReq = [](const Ev &e, const char *sel) { return e.k == ITCORE_EV_CLIPBOARD_REQUEST && e.d == sel; };
+    // 默认：写、读都拒绝；读应答编码也拒绝
+    CHECK(isReq(only(c, "\x1b]52;c;aGk=\x07"), "c"));
+    CHECK(isReq(only(c, "\x1b]52;c;?\x07"), "c"));
+    CHECK(itcore_encode_clipboard_reply(c, "x", 1, &b) == 1 && !b);
+    // 只开写
+    itcore_clipboard_policy p{sizeof(p), 1, 0, 8};
+    CHECK(itcore_set_clipboard_policy(c, &p) == 0);
+    Ev w = only(c, "\x1b]52;c;aGk=\x07");
+    CHECK(w.k == ITCORE_EV_CLIPBOARD_WRITE && w.d == "hi");
+    w = only(c, "\x1b]52;p;5Lit\x1b\\");  // ST 结尾、UTF-8
+    CHECK(w.k == ITCORE_EV_CLIPBOARD_WRITE && w.d == "\xe4\xb8\xad");
+    CHECK(only(c, "\x1b]52;c;aGk\x07").d == "hi");  // 无填充也接受
+    w = only(c, "\x1b]52;c;\x07");                  // 空 → 清空剪贴板
+    CHECK(w.k == ITCORE_EV_CLIPBOARD_WRITE && w.d.empty());
+    CHECK(isReq(only(c, "\x1b]52;c;MTIzNDU2Nzg=\x07"), "c") == false);  // 恰 8 字节：允许
+    CHECK(isReq(only(c, "\x1b]52;c;MTIzNDU2Nzg5\x07"), "c"));          // 9 字节：超上限
+    CHECK(isReq(only(c, "\x1b]52;c;" + std::string(4096, 'A') + "\x07"), "c"));  // 远超：不解码直接拒
+    CHECK(isReq(only(c, "\x1b]52;c;a$k=\x07"), "c"));   // 非法字符
+    CHECK(isReq(only(c, "\x1b]52;c;aG=k\x07"), "c"));   // 填充后有数据
+    CHECK(isReq(only(c, "\x1b]52;c\x07"), "c"));        // 缺数据段
+    CHECK(isReq(only(c, "\x1b]52;c;?\x07"), "c"));      // 写开 ≠ 读开
+    CHECK(itcore_encode_clipboard_reply(c, "x", 1, &b) == 1);
+    // 再开读
+    p = {sizeof(p), 1, 1, 8};
+    CHECK(itcore_set_clipboard_policy(c, &p) == 0);
+    Ev r = only(c, "\x1b]52;c;?\x07");
+    CHECK(r.k == ITCORE_EV_CLIPBOARD_READ && r.d == "c");
+    CHECK(itcore_encode_clipboard_reply(c, "hi", 2, &b) == 0 && b);
+    CHECK(std::string(reinterpret_cast<char *>(b->data), b->length) == "\x1b]52;c;aGk=\x1b\\");
+    itcore_buffer_release(b); b = nullptr;
+    CHECK(itcore_encode_clipboard_reply(c, "", 0, &b) == 0 && std::string(reinterpret_cast<char *>(b->data), b->length) == "\x1b]52;c;\x1b\\");
+    itcore_buffer_release(b); b = nullptr;
+    CHECK(itcore_encode_clipboard_reply(c, "123456789", 9, &b) == -2 && !b);  // 读也受上限
+    // 只开读不开写
+    p = {sizeof(p), 0, 1, 0};
+    CHECK(itcore_set_clipboard_policy(c, &p) == 0);
+    CHECK(isReq(only(c, "\x1b]52;c;aGk=\x07"), "c"));
+    CHECK(only(c, "\x1b]52;c;?\x07").k == ITCORE_EV_CLIPBOARD_READ);
+    // NULL 恢复全关；struct_size 过小拒绝
+    CHECK(itcore_set_clipboard_policy(c, nullptr) == 0);
+    CHECK(isReq(only(c, "\x1b]52;c;?\x07"), "c"));
+    itcore_clipboard_policy bad{4, 1, 1, 0};
+    CHECK(itcore_set_clipboard_policy(c, &bad) == -1);
+    CHECK(isReq(only(c, "\x1b]52;c;aGk=\x07"), "c"));
+    itcore_destroy(c);
+}
+
 int main(int argc, char **argv) {
+    if (argc > 1 && std::strcmp(argv[1], "osc52") == 0) {
+        test_osc52();
+        if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
+        std::printf("osc52 ok\n");
+        return 0;
+    }
     if (argc > 1 && std::strcmp(argv[1], "big_osc") == 0) {
         // 1.5 MiB OSC：截断但可恢复，后续 BEL 正常
         itcore_core *c = make();

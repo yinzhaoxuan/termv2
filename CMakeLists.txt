@@ -72,6 +72,7 @@ add_executable(itcore_test_abi tests/core/test_abi.cpp)
 target_link_libraries(itcore_test_abi PRIVATE itcore)
 add_test(NAME ABI-01.contract COMMAND itcore_test_abi)
 add_test(NAME PARSE-01.oversized_osc COMMAND itcore_test_abi big_osc)
+add_test(NAME B4.osc52_clipboard COMMAND itcore_test_abi osc52)
 
 # T03A：Windows 平台层。跨平台纯逻辑（SSH 快照、命令行与环境、输入调度、输出水位）在所有平台编译并单测；
 # ConPTY 传输与 t03a_probe 只在 Windows（含 mingw-w64 交叉编译）构建。

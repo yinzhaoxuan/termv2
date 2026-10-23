@@ -1,6 +1,7 @@
 // T08：uishell::PaneBackend 的 Win32 实现（itcore + ConPtyTransport/SshTransport + D2DRenderer）。仅 WIN32。
 // 未实机验证：子窗口/交换链、IME、焦点与键盘转发、Job 进程计数、关闭时序均待 DESKTOP-HOODQAJ。
 #pragma once
+#include "pane_logic.h"
 #include "itcore.h"
 #ifndef _WIN32
 #error "win32_pane_backend 仅用于 Windows"
@@ -29,6 +30,8 @@ struct PaneBackendConfig {
     std::optional<itcore_colors> colors;
     // B3：双击选词时额外算作单词字符的 ASCII 标点；nullopt 用核心默认 "/-+\\~_."
     std::optional<std::string> wordChars;
+    // B4：OSC 52 剪贴板（默认关；读要单独打开，会把本机剪贴板交给远端程序）
+    Osc52Config osc52;
 };
 
 uishell::PaneBackendFactory makeWin32PaneBackendFactory(PaneBackendConfig cfg);

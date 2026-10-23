@@ -417,6 +417,22 @@ static void wordchars() {
     CHECK(applyWordChars(c, std::string("x")) == -1 && word(3) == "cd");   // 非法不改
     CHECK(applyWordChars(c, std::nullopt) == 0 && word(3) == "cd/e");
     CHECK(applyWordChars(nullptr, std::nullopt) == -1);
+    // B4：OSC 52 配置下发（默认关，读写分开）
+    auto osc = [&](const char *seq) {
+        itcore_feed(c, reinterpret_cast<const uint8_t *>(seq), std::strlen(seq));
+        int k = 0;
+        while (itcore_event *e = itcore_next_event(c)) { if (itcore_event_type(e) != ITCORE_EV_RENDER_INVALIDATED) k = itcore_event_type(e); itcore_event_release(e); }
+        return k;
+    };
+    CHECK(applyOsc52(c, Osc52Config{}) == 0);
+    CHECK(osc("\x1b]52;c;aGk=\x07") == ITCORE_EV_CLIPBOARD_REQUEST);
+    CHECK(applyOsc52(c, Osc52Config{true, false, 0}) == 0);
+    CHECK(osc("\x1b]52;c;aGk=\x07") == ITCORE_EV_CLIPBOARD_WRITE);
+    CHECK(osc("\x1b]52;c;?\x07") == ITCORE_EV_CLIPBOARD_REQUEST);
+    CHECK(applyOsc52(c, Osc52Config{true, true, 1}) == 0);
+    CHECK(osc("\x1b]52;c;?\x07") == ITCORE_EV_CLIPBOARD_READ);
+    CHECK(osc("\x1b]52;c;aGk=\x07") == ITCORE_EV_CLIPBOARD_REQUEST);   // 2 字节 > 上限 1
+    CHECK(applyOsc52(nullptr, Osc52Config{}) == -1);
     itcore_destroy(c);
 }
 

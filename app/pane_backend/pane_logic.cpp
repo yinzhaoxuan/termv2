@@ -6,6 +6,12 @@
 
 namespace it2app {
 
+int applyOsc52(itcore_core *core, const Osc52Config &cfg) {
+    if (!core) return -1;
+    itcore_clipboard_policy p{sizeof(p), cfg.allowWrite ? 1 : 0, cfg.allowRead ? 1 : 0, cfg.maxBytes};
+    return itcore_set_clipboard_policy(core, &p);
+}
+
 int applyWordChars(itcore_core *core, const std::optional<std::string> &wc) {
     if (!core) return -1;
     return wc ? itcore_set_word_chars(core, wc->data(), wc->size()) : itcore_set_word_chars(core, nullptr, 0);

@@ -21,6 +21,10 @@ namespace it2app {
 // B3：把配置的分词字符下发给核心。nullopt → 核心默认；非法（字母数字/空白/非 ASCII）返回 -1，核心保持原设置。
 int applyWordChars(itcore_core *core, const std::optional<std::string> &wordChars);
 
+// B4：OSC 52 配置下发（默认全关；读与写分别授权；maxBytes 0 用核心默认）。UI 线程调用。
+struct Osc52Config { bool allowWrite = false; bool allowRead = false; uint32_t maxBytes = 0; };
+int applyOsc52(itcore_core *core, const Osc52Config &cfg);
+
 inline constexpr std::size_t kPasteLimitBytes = 32u * 1024u;  // 与核心 / InputScheduler 上限一致
 
 
