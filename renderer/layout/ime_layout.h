@@ -14,7 +14,10 @@ struct ImeLayout {
   std::vector<PreeditCell> cells;               // 每个 cluster 的位置
   std::vector<GridMetrics::Rect> underlines;    // 每行按属性合并
   GridMetrics::Rect caret{};                    // 预编辑内光标（竖线）
-  GridMetrics::Rect anchor{};                   // 候选窗锚点（ImmSetCandidateWindow / TSF GetTextExt），始终在网格内
+  GridMetrics::Rect anchor{};                   // 预编辑内光标所在格（cursor_index 处；缺省为预编辑末尾），始终在网格内
+  // 候选窗锚点（ImmSetCandidateWindow / TSF GetTextExt 按 Windows 惯例用此值）：第一个 Target 子句 cluster 的格矩形，
+  // 无 Target 时为第一个 cluster（组合起点）；空预编辑为光标格。与 anchor 同样夹在网格内（越过底行 → 末行末列单格）。
+  GridMetrics::Rect composition_anchor{};
   bool overflow = false;                        // 预编辑超出底行
 };
 
@@ -56,6 +59,17 @@ inline ImeLayout ime_layout(const GridMetrics &m, uint16_t caret_row, uint16_t c
   L.caret = {cr.x, cr.y, std::max(1, int(std::lround(2 * d))), cr.h};
   int ar = std::min<int>(pr, rows - 1), ac = pr >= rows ? cols - 1 : std::min<int>(pc, cols - 1);
   L.anchor = m.cell_rect(uint16_t(ac), uint16_t(ar));
+  size_t ti = 0;
+  for (size_t i = 0; i < L.cells.size() && i < attrs.size(); ++i)
+    if (attrs[i] == ClauseAttr::Target) { ti = i; break; }
+  if (ti < L.cells.size() && L.cells[ti].row < rows) {
+    auto &tc = L.cells[ti];
+    L.composition_anchor = m.cell_rect(tc.col, tc.row, tc.width);
+  } else {
+    int qr, qc; pos_at(ti, qr, qc);  // 空预编辑 → 光标格
+    int zr = std::min<int>(qr, rows - 1), zc = qr >= rows ? cols - 1 : std::min<int>(qc, cols - 1);
+    L.composition_anchor = m.cell_rect(uint16_t(zc), uint16_t(zr));
+  }
   return L;
 }
 

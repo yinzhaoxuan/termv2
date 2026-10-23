@@ -60,5 +60,23 @@ int main() {
   GridMetrics m2 = m; m2.dpi_scale = 1.5f;
   L = ime_layout(m2, 0, 0, {1, 1}, {ClauseAttr::Input, ClauseAttr::Target}, 0, 10, 5);
   assert(L.underlines[0].h == 2 && L.underlines[1].h == 3);
+  // composition_anchor：Target 在中间
+  {
+    using A = ClauseAttr;
+    auto c = [&](int col, int row, int w = 1) { return m.cell_rect(uint16_t(col), uint16_t(row), uint8_t(w)); };
+    auto eq = [](GridMetrics::Rect a, GridMetrics::Rect b) { return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h; };
+    auto L1 = ime_layout(m, 0, 2, {2, 2, 2}, {A::Converted, A::Target, A::Input}, 3, 10, 5);
+    assert(eq(L1.composition_anchor, c(4, 0, 2)) && eq(L1.anchor, c(8, 0)));  // anchor 不变（末尾）
+    // 无 Target → 组合起点
+    L1 = ime_layout(m, 1, 3, {1, 2}, {}, 2, 10, 5); assert(eq(L1.composition_anchor, c(3, 1, 1)));
+    // 折行：Target 落在下一行
+    L1 = ime_layout(m, 0, 7, {1, 2, 2}, {A::Input, A::Input, A::Target}, 0, 10, 5);
+    assert(L1.cells[2].row == 1 && eq(L1.composition_anchor, c(0, 1, 2)));
+    // 溢出：Target 越过底行 → 夹到末行末列
+    L1 = ime_layout(m, 4, 8, {2, 2}, {A::Input, A::Target}, 0, 10, 5);
+    assert(L1.overflow && eq(L1.composition_anchor, c(9, 4)));
+    // 空预编辑 → 光标格
+    L1 = ime_layout(m, 2, 5, {}, {}, 0, 10, 5); assert(eq(L1.composition_anchor, c(5, 2)));
+  }
   std::puts("selection_ime ok");
 }
