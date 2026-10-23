@@ -121,7 +121,31 @@ void log_hr(const char *step, HRESULT hr) {
     std::fprintf(stderr, "[itren] %s 失败 HRESULT=0x%08lX\n", step, (unsigned long)hr);
 }
 bool fail_hr(const char *step, HRESULT hr) { log_hr(step, hr); return false; }
+
 }  // namespace
+
+// 4 个样式 TextFormat 全部建成才替换 Impl 里的旧格式（失败保持旧字体）
+bool D2DRenderer::create_formats(Impl &I, const std::wstring &family, float size_pt) {
+    if (!I.dwrite) return false;
+    IDWriteTextFormat *f[4] = {};
+    for (int i = 0; i < 4; ++i) {
+        HRESULT hr = I.dwrite->CreateTextFormat(family.c_str(), nullptr,
+                                                (i & 1) ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
+                                                (i & 2) ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
+                                                DWRITE_FONT_STRETCH_NORMAL, size_pt * (96.f / 72.f), L"en-us", &f[i]);
+        if (FAILED(hr)) {
+            for (auto *&x : f) if (x) { x->Release(); x = nullptr; }
+            return fail_hr("CreateTextFormat", hr);
+        }
+        f[i]->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    }
+    for (int i = 0; i < 4; ++i) { if (I.formats[i]) I.formats[i]->Release(); I.formats[i] = f[i]; }
+    if (I.format) I.format->Release();
+    I.format = f[0]; I.format->AddRef();
+    for (auto &a : I.advance) a.clear();
+    I.family = family; I.size_pt = size_pt;
+    return true;
+}
 
 bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, float font_size_pt) {
     metrics_ = metrics;
@@ -190,22 +214,7 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
     hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                              reinterpret_cast<IUnknown **>(&impl_->dwrite));
     if (FAILED(hr)) return fail_hr("DWriteCreateFactory", hr);
-    hr = impl_->dwrite->CreateTextFormat(impl_->family.c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-                                         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                                         impl_->size_pt * (96.f / 72.f), L"en-us", &impl_->format);
-    if (FAILED(hr)) return fail_hr("CreateTextFormat(regular)", hr);
-    impl_->format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-    impl_->formats[0] = impl_->format; impl_->format->AddRef();
-    for (auto &a : impl_->advance) a.clear();
-    for (int i = 1; i < 4; ++i) {
-        hr = impl_->dwrite->CreateTextFormat(impl_->family.c_str(), nullptr,
-                                             (i & 1) ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
-                                             (i & 2) ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
-                                             DWRITE_FONT_STRETCH_NORMAL, impl_->size_pt * (96.f / 72.f), L"en-us",
-                                             &impl_->formats[i]);
-        if (FAILED(hr)) return fail_hr("CreateTextFormat(bold/italic)", hr);
-        impl_->formats[i]->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-    }
+    if (!create_formats(*impl_, impl_->family, impl_->size_pt)) return false;
     device_kind_ = kind;
     impl_->saved_metrics = metrics_;
     impl_->dirty.invalidate(); impl_->layout.reset(); impl_->last_vis = -1;
@@ -235,6 +244,41 @@ void D2DRenderer::shutdown() {
 }
 
 void D2DRenderer::set_snapshot(const itcore_snapshot *snap) { snap_ = snap; }
+
+bool D2DRenderer::set_font(const wchar_t *font_family, float font_size_pt) {
+    std::wstring fam = font_family && *font_family ? std::wstring(font_family) : impl_->family;
+    if (!impl_->dwrite) { impl_->family = fam; impl_->size_pt = font_size_pt; return true; }  // init 前/失败：下次 init 生效
+    if (!create_formats(*impl_, fam, font_size_pt)) return false;
+    impl_->dirty.invalidate(); impl_->layout.reset(); impl_->last_vis = -1; impl_->blink_rows.clear();
+    return true;
+}
+
+FontMetricsDip D2DRenderer::font_metrics() const {
+    FontMetricsDip est = estimate_font_metrics(impl_->size_pt);
+    if (!impl_->dwrite || !impl_->format) return est;
+    IDWriteFontCollection *col = nullptr;
+    impl_->format->GetFontCollection(&col);
+    if (!col) return est;
+    UINT32 idx = 0; BOOL exists = FALSE;
+    FontMetricsDip out = est;
+    if (SUCCEEDED(col->FindFamilyName(impl_->family.c_str(), &idx, &exists)) && exists) {
+        IDWriteFontFamily *fam = nullptr; IDWriteFont *font = nullptr; IDWriteFontFace *face = nullptr;
+        if (SUCCEEDED(col->GetFontFamily(idx, &fam)) &&
+            SUCCEEDED(fam->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &font)) &&
+            SUCCEEDED(font->CreateFontFace(&face))) {
+            DWRITE_FONT_METRICS fm{}; face->GetMetrics(&fm);
+            float em = impl_->size_pt * (96.f / 72.f), k = fm.designUnitsPerEm ? em / fm.designUnitsPerEm : 0.f;
+            UINT32 cp = 'M'; UINT16 gi = 0; DWRITE_GLYPH_METRICS gm{};
+            if (k > 0 && SUCCEEDED(face->GetGlyphIndices(&cp, 1, &gi)) && SUCCEEDED(face->GetDesignGlyphMetrics(&gi, 1, &gm, FALSE)))
+                out = {gm.advanceWidth * k, fm.ascent * k, fm.descent * k, fm.lineGap * k};
+        }
+        if (face) face->Release();
+        if (font) font->Release();
+        if (fam) fam->Release();
+    }
+    col->Release();
+    return out.advance > 0 ? out : est;
+}
 
 bool D2DRenderer::resize_surface() {
 #ifdef _WIN32
@@ -502,13 +546,16 @@ bool D2DRenderer::present_frame() {
 
 #else  // !_WIN32
 
-bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *, float) {
+bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *, float font_size_pt) {
     metrics_ = metrics;
+    stub_size_pt_ = font_size_pt;
     device_kind_ = DeviceKind::Stub;
     return true;  // 编译门闸：逻辑路径可测 caret_rect
 }
 void D2DRenderer::shutdown() { snap_ = nullptr; }
 void D2DRenderer::set_snapshot(const itcore_snapshot *snap) { snap_ = snap; }
+bool D2DRenderer::set_font(const wchar_t *, float font_size_pt) { stub_size_pt_ = font_size_pt; return true; }
+FontMetricsDip D2DRenderer::font_metrics() const { return estimate_font_metrics(stub_size_pt_); }
 bool D2DRenderer::resize_surface() { return true; }
 GridMetrics::Rect D2DRenderer::caret_rect_px() const {
     uint16_t col = 0, row = 0; int vis = 0;

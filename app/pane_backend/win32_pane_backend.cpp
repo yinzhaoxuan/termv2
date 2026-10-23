@@ -128,8 +128,11 @@ public:
     void requestClose() override;
     void scrollViewport(int lines) override;
     void scrollToBottom() override;
+    void setFont(std::string_view family, float sizePt) override;
+    uishell::CellSize cellSize() const override;
 
 private:
+    void applyFont(FontSpec f);         // UI 线程：重建字体 → GridMetrics → 像素尺寸 → 网格 → generation
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
     LRESULT onMessage(UINT, WPARAM, LPARAM);
     bool startSession();
@@ -168,6 +171,9 @@ private:
     std::unique_ptr<iterm_app::HwndSwapChainHost> host_;
     std::unique_ptr<itren::D2DRenderer> renderer_;
     itren::GridMetrics metrics_{};
+    FontSpec font_;                     // 当前字体（attach 时取 cfg_，setFont 改）
+    uishell::PixelRect bounds_{0, 0, 0, 0};
+    bool sized_ = false;                // 已知格尺寸（attach 成功后）
     SyncGate sync_{ITREN_SYNC_TIMEOUT_MS};   // ?2026 暂停快照（与 D2D 共用常量）
     FocusReporter focusRep_;                 // ?1004
     void reportFocus();
@@ -236,13 +242,19 @@ bool Win32PaneBackend::attach(void *parentHwnd, const uishell::PixelRect &rc, fl
     hwnd_ = h;
     host_ = std::make_unique<iterm_app::HwndSwapChainHost>(h);
     float scale = dpi > 0 ? dpi : host_->dpi_scale();
-    metrics_ = itren::GridMetrics::from_font(7.2f, 10.f, 3.f, 0.f, scale);
+    font_ = {cfg_->fontFamily, cfg_->fontSizePt};
+    bounds_ = rc;
+    renderer_ = std::make_unique<itren::D2DRenderer>(host_.get());
+    metrics_ = itren::GridMetrics::from_font(itren::estimate_font_metrics(font_.sizePt), scale);
+    if (!renderer_->init(metrics_, font_.family.c_str(), font_.sizePt))
+        std::fprintf(stderr, "[pane] D2DRenderer::init 失败（设备丢失时 present 内重试）\n");
+    // 格尺寸取 DirectWrite 实测主字体度量（init 失败时为按字号估算）
+    metrics_ = itren::GridMetrics::from_font(renderer_->font_metrics(), scale);
+    renderer_->metrics() = metrics_;
+    sized_ = true;
     uint16_t c = 80, r = 24;
     metrics_.grid_size(rc.w, rc.h, c, r);
     resize_ = ResizeTracker({c, r});
-    renderer_ = std::make_unique<itren::D2DRenderer>(host_.get());
-    if (!renderer_->init(metrics_, cfg_->fontFamily.c_str(), cfg_->fontSizePt))
-        std::fprintf(stderr, "[pane] D2DRenderer::init 失败（设备丢失时 present 内重试）\n");
     // 传输线程的 post 从这里开始能唤醒 UI 线程；attach 之前排队的任务立即补唤醒
     // wake 在队列锁内调用、close 时清空，只捕获窗口句柄（不捕获 this）
     queue_->setWake([h] { PostMessageW(h, WM_PANE_WAKE, 0, 0); });
@@ -493,9 +505,10 @@ void Win32PaneBackend::applyBounds(const uishell::PixelRect &rc, float dpi) {
     HWND h = hwnd_;
     if (!h) return;
     SetWindowPos(h, nullptr, rc.x, rc.y, rc.w, rc.h, SWP_NOZORDER | SWP_NOACTIVATE);
+    bounds_ = rc;
     if (!renderer_) return;
     float scale = dpi > 0 ? dpi : host_->dpi_scale();
-    if (scale != metrics_.dpi_scale) metrics_ = itren::GridMetrics::from_font(7.2f, 10.f, 3.f, 0.f, scale);
+    if (scale != metrics_.dpi_scale) metrics_ = itren::GridMetrics::from_font(renderer_->font_metrics(), scale);
     renderer_->metrics() = metrics_;
     pushCellPixelSize();
     uint16_t c = 0, r = 0;
@@ -512,6 +525,32 @@ void Win32PaneBackend::applyBounds(const uishell::PixelRect &rc, float dpi) {
 }
 
 void Win32PaneBackend::setBounds(const uishell::PixelRect &rc, float dpi) { applyBounds(rc, dpi); }
+
+// 异步：只投递到 UI 队列，下一次 drain 时 applyFont（不在调用栈里重建 DWrite / 改网格）
+void Win32PaneBackend::setFont(std::string_view family, float sizePt) {
+    FontSpec next;
+    if (!resolveFontChange(font_, family, sizePt, &next)) return;
+    queue_->postOwner([next](void *o) { if (o) static_cast<Win32PaneBackend *>(o)->applyFont(next); });
+}
+
+void Win32PaneBackend::applyFont(FontSpec f) {
+    if (!renderer_ || !hwnd_) return;
+    if (f.family == font_.family && f.sizePt == font_.sizePt) return;
+    if (!renderer_->set_font(f.family.c_str(), f.sizePt)) {
+        std::fprintf(stderr, "[pane] setFont 失败，保持当前字体\n");
+        return;
+    }
+    font_ = f;
+    metrics_ = itren::GridMetrics::from_font(renderer_->font_metrics(), metrics_.dpi_scale);
+    // 同 applyBounds 顺序：metrics → itcore_set_cell_pixel_size → grid → generation → itcore_resize → transport.resize
+    applyBounds(bounds_, metrics_.dpi_scale);
+    publishStatus();  // 网格变化经 onStatus 通知 UI（UI 随后读 cellSize()）
+}
+
+uishell::CellSize Win32PaneBackend::cellSize() const {
+    if (!sized_) return {0, 0};
+    return {metrics_.cell_w_px(), metrics_.cell_h_px()};
+}
 
 void Win32PaneBackend::setFocused(bool f) {
     focused_ = f;

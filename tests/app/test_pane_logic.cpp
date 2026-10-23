@@ -1,12 +1,14 @@
 // T08 PaneBackend 平台无关逻辑单测（PANE-01）
 #include "pane_logic.h"
 #include "frame_pump.h"
+#include "grid_metrics.h"
 #include <deque>
 #include <optional>
 #include "frame_policy.h"
 #include "itcore.h"
 #include <atomic>
 #include <climits>
+#include <limits>
 #include <chrono>
 #include <memory>
 #include <cstdio>
@@ -373,13 +375,37 @@ static void syncfocus() {
     CHECK(f.update(false, false).empty());
 }
 
+// FONT-01：setFont 参数归一与格尺寸随字号变化
+static void font() {
+    using namespace it2app;
+    FontSpec cur{L"Consolas", 12.f}, n;
+    CHECK(!resolveFontChange(cur, "", 12.f, &n) && n.family == L"Consolas");       // 无变化
+    CHECK(resolveFontChange(cur, "", 14.f, &n) && n.family == L"Consolas" && n.sizePt == 14.f);  // 空 family 保持
+    CHECK(resolveFontChange(cur, "Cascadia Mono", 12.f, &n) && n.family == L"Cascadia Mono");
+    CHECK(resolveFontChange(cur, "\xE7\xAD\x89\xE7\xBA\xBF", 12.f, &n) && n.family == L"\u7b49\u7ebf");  // UTF-8 → wide
+    CHECK(resolveFontChange(cur, "", 2.f, &n) && n.sizePt == 6.f);
+    CHECK(resolveFontChange(cur, "", 200.f, &n) && n.sizePt == 72.f);
+    CHECK(!resolveFontChange(cur, "", std::numeric_limits<float>::quiet_NaN(), &n) && n.sizePt == 12.f);
+    // 12 pt 估算与改动前固定值相同：1x 格 7×13 px
+    auto m12 = itren::GridMetrics::from_font(itren::estimate_font_metrics(12.f), 1.f);
+    CHECK(m12.cell_w_px() == 7 && m12.cell_h_px() == 13);
+    auto m24 = itren::GridMetrics::from_font(itren::estimate_font_metrics(24.f), 1.f);
+    CHECK(m24.cell_w_px() == 14 && m24.cell_h_px() == 26);
+    uint16_t c1 = 0, r1 = 0, c2 = 0, r2 = 0;
+    m12.grid_size(800, 600, c1, r1); m24.grid_size(800, 600, c2, r2);
+    CHECK(c2 < c1 && r2 < r1 && c2 >= 20 && r2 >= 5);
+    auto m15 = itren::GridMetrics::from_font(itren::estimate_font_metrics(12.f), 1.5f);
+    CHECK(m15.cell_w_px() == 11 && m15.cell_h_px() == 20);
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "churn") churn();
     else if (w == "viewport") viewport();
     else if (w == "keys") keys();
     else if (w == "sync") syncfocus();
-    else { limits(); grid(); queue(); closer(); drag(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); } }
+    else if (w == "font") font();
+    else { limits(); grid(); queue(); closer(); drag(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

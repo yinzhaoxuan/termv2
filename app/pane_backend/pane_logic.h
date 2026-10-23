@@ -41,6 +41,10 @@ private:
     std::optional<std::string> pending_;
 };
 
+// setFont 参数归一：空 family 保持当前；字号钳 6..72（UI 已钳，后端再兜底）；无变化返回 false
+struct FontSpec { std::wstring family; float sizePt = 12.f; };
+bool resolveFontChange(const FontSpec &cur, std::string_view familyUtf8, float sizePt, FontSpec *out);
+
 struct GridDims { uint16_t cols = 80, rows = 24; };
 inline constexpr uint16_t kMinCols = 20, kMinRows = 5;
 GridDims clampGrid(int cols, int rows);

@@ -5,6 +5,34 @@
 
 namespace it2app {
 
+namespace {
+std::wstring utf8ToWide(std::string_view s) {
+    std::wstring w;
+    for (size_t i = 0; i < s.size();) {
+        unsigned char c = (unsigned char)s[i];
+        uint32_t cp = 0xFFFD; size_t n = 1;
+        if (c < 0x80) cp = c;
+        else if ((c >> 5) == 6 && i + 1 < s.size()) { cp = ((c & 31u) << 6) | (s[i + 1] & 63u); n = 2; }
+        else if ((c >> 4) == 14 && i + 2 < s.size()) { cp = ((c & 15u) << 12) | ((s[i + 1] & 63u) << 6) | (s[i + 2] & 63u); n = 3; }
+        else if ((c >> 3) == 30 && i + 3 < s.size()) {
+            cp = ((c & 7u) << 18) | ((s[i + 1] & 63u) << 12) | ((s[i + 2] & 63u) << 6) | (s[i + 3] & 63u); n = 4; }
+        i += n;
+        if (cp >= 0x10000 && sizeof(wchar_t) == 2) {
+            cp -= 0x10000; w.push_back(wchar_t(0xD800 + (cp >> 10))); w.push_back(wchar_t(0xDC00 + (cp & 0x3FF)));
+        } else w.push_back(wchar_t(cp));
+    }
+    return w;
+}
+}  // namespace
+
+bool resolveFontChange(const FontSpec &cur, std::string_view familyUtf8, float sizePt, FontSpec *out) {
+    FontSpec n = cur;
+    if (!familyUtf8.empty()) n.family = utf8ToWide(familyUtf8);
+    if (sizePt == sizePt) n.sizePt = sizePt < 6.f ? 6.f : sizePt > 72.f ? 72.f : sizePt;  // NaN 保持当前
+    if (out) *out = n;
+    return n.family != cur.family || n.sizePt != cur.sizePt;
+}
+
 bool RateLimiter::allow(uint64_t now) {
     if (last_ && now - *last_ < interval_) return false;
     last_ = now;

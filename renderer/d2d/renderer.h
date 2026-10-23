@@ -43,6 +43,10 @@ public:
     bool init(const GridMetrics &metrics, const wchar_t *font_family, float font_size_pt);
     // 客户区尺寸变化：ResizeBuffers + 重建 D2D target（保留设备与字体）
     bool resize_surface();
+    // 运行时换字体：重建 4 个 TextFormat、清 advance 缓存、整屏重画。失败保持旧字体并返回 false
+    bool set_font(const wchar_t *font_family, float font_size_pt);
+    // 当前主字体度量（DIP）；无 DWrite 时按字号估算
+    FontMetricsDip font_metrics() const;
     void shutdown();
 
     // 只读快照；generation 不匹配时保持旧布局、多出区域填背景
@@ -76,6 +80,7 @@ public:
 private:
     void shutdown_device();
     struct Impl;
+    static bool create_formats(Impl &I, const std::wstring &family, float size_pt);
     ISwapChainHost *host_ = nullptr;
     GridMetrics metrics_{};
     const itcore_snapshot *snap_ = nullptr;  // 非拥有
@@ -85,6 +90,7 @@ private:
     bool focused_ = true, animating_ = false;
     uint64_t last_input_ms_ = 0, now_ms_ = 0;
     bool device_lost_ = false;
+    float stub_size_pt_ = 12.f;  // 非 WIN32 桩：font_metrics 估算用
     DeviceKind device_kind_ = DeviceKind::None;
     std::unique_ptr<Impl> impl_;
 };
