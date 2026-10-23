@@ -50,6 +50,37 @@ static void test_text_paste() {
     itcore_destroy(c);
 }
 
+static std::string paste(itcore_core *c, const std::string &in) {
+    itcore_buffer *b = nullptr;
+    CHECK(itcore_encode_paste(c, in.data(), in.size(), &b) == 0);
+    std::string r = buf_str(b);
+    itcore_buffer_release(b);
+    return r;
+}
+
+static void test_paste_sanitize() {
+    itcore_core *c = make();
+    const std::string O = "\x1b[200~", C = "\x1b[201~";
+    // 换行规范化
+    CHECK(paste(c, "a\r\nb\nc\rd") == "a\rb\rc\rd");
+    CHECK(paste(c, "\n\r\n\r") == "\r\r\r");
+    // 剥离标记（非 bracketed 也剥离）
+    CHECK(paste(c, "a" + O + "b") == "ab");
+    CHECK(paste(c, "a" + C + "b") == "ab");
+    CHECK(paste(c, "a\xc2\x9b" "200~b\xc2\x9b" "201~c") == "abc");  // 8-bit CSI
+    CHECK(paste(c, "x\x1b[20\x1b[201~1~y") == "xy");                 // 拼接标记
+    CHECK(paste(c, "x\x1b[2\x1b[200~01~y") == "xy");                 // 剥离后再拼出的标记
+    feed(c, "\x1b[?2004h");
+    CHECK(paste(c, "a" + C + "\nb") == O + "a\rb" + C);
+    // DECSTR 不复位 ?2004：仍然包裹
+    feed(c, "\x1b[!p");
+    CHECK(paste(c, "q") == O + "q" + C);
+    // RIS 复位：不再包裹
+    feed(c, "\x1b" "c");
+    CHECK(paste(c, "q\n") == "q\r");
+    itcore_destroy(c);
+}
+
 static void test_key() {
     itcore_core *c = make();
     itcore_buffer *b = nullptr;
@@ -99,6 +130,7 @@ static void test_mouse() {
 
 int main() {
     test_text_paste();
+    test_paste_sanitize();
     test_key();
     test_mouse();
     if (failures) std::printf("%d failure(s)\n", failures);

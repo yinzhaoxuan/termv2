@@ -242,6 +242,18 @@ int encode_paste(itcore::Screen *screen, const char *utf8, size_t len, itcore_bu
         for (auto m : marks)
             for (size_t p; (p = body.find(m)) != std::string::npos;) { body.erase(p, m.size()); changed = true; }
     }
+    // 换行规范化（兜底）：CRLF 与孤立 LF 统一为 CR，与真实键盘 Enter 一致
+    {
+        std::string n;
+        n.reserve(body.size());
+        for (size_t i = 0; i < body.size(); ++i) {
+            char ch = body[i];
+            if (ch == '\r' && i + 1 < body.size() && body[i + 1] == '\n') { n.push_back('\r'); ++i; }
+            else if (ch == '\n') n.push_back('\r');
+            else n.push_back(ch);
+        }
+        body.swap(n);
+    }
     std::string all;
     if (screen->modes().bracketed_paste) {
         all.reserve(body.size() + 16);
