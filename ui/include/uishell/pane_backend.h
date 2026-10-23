@@ -16,7 +16,7 @@ enum class SessionState { Starting, Running, Reconnecting, Exited, Failed };
 struct SessionStatus {
   SessionState state;
   int exitCode;              // valid when Exited
-  bool hasForegroundJob;     // drives 12.3 close confirmation
+  bool hasForegroundJob;     // informational only; 12.3 confirm uses state (Running/Starting/Reconnecting => confirm)
   std::string title;         // already rate-limited (<=10/s)
   std::string errorText;     // classified error for Failed (T07 categories)
 };
@@ -26,6 +26,8 @@ struct PaneEvents {                       // called on the UI thread only
   std::function<void()> onBell;           // visual, <=1/s
   std::function<void(std::string url)> onLinkActivated;  // UI runs uicfg::checkLink
   std::function<void()> onRedrawRequested;
+  std::function<void(size_t bytes, size_t limit)> onPasteRejected;
+  std::function<void(bool hasSelection)> onSelectionChanged;
 };
 
 class PaneBackend {
@@ -39,7 +41,12 @@ public:
   virtual void paste(std::string_view utf8) = 0;                   // bracketed-paste aware
   virtual CaretRect caretRect() const = 0;                         // for IME candidate window
   virtual SessionStatus status() const = 0;
-  virtual void requestClose() = 0;  // after UI confirmation; backend runs the T03A close order
+  // Selection is hit-tested and drawn by the backend (it owns the grid); UI owns the copy command.
+  virtual std::string selectedText() const = 0;     // empty if none
+  virtual void clearSelection() = 0;
+  // After UI confirmation. MUST NOT block the UI thread: start the T03A close order and return;
+  // completion is reported via onStatus(Exited/Failed).
+  virtual void requestClose() = 0;
 };
 
 // connectionId: uicfg Connection::id; empty means local shell profile.
