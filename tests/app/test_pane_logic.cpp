@@ -399,6 +399,27 @@ static void font() {
     CHECK(m15.cell_w_px() == 11 && m15.cell_h_px() == 20);
 }
 
+// B3：配置分词字符经 applyWordChars 下发核心
+static void wordchars() {
+    itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 20, 3, 100, 1u << 20};
+    itcore_core *c = nullptr; CHECK(itcore_create(&o, &c) == 0 && c);
+    const char *t = "ab cd/e;f";
+    itcore_feed(c, reinterpret_cast<const uint8_t *>(t), std::strlen(t));
+    while (itcore_event *e = itcore_next_event(c)) itcore_event_release(e);
+    auto word = [&](uint16_t col) {
+        itcore_selection_start_unit(c, 0, col, 0, 1);
+        itcore_buffer *b = nullptr; std::string r;
+        if (itcore_selection_text(c, &b) == 0 && b) { r.assign(reinterpret_cast<char *>(b->data), b->length); itcore_buffer_release(b); }
+        return r;
+    };
+    CHECK(applyWordChars(c, std::nullopt) == 0 && word(3) == "cd/e");
+    CHECK(applyWordChars(c, std::string(";")) == 0 && word(3) == "cd" && word(7) == "e;f");
+    CHECK(applyWordChars(c, std::string("x")) == -1 && word(3) == "cd");   // 非法不改
+    CHECK(applyWordChars(c, std::nullopt) == 0 && word(3) == "cd/e");
+    CHECK(applyWordChars(nullptr, std::nullopt) == -1);
+    itcore_destroy(c);
+}
+
 // BUG-03：拖动中失去捕获（模态对话框）后，后续鼠标移动不得改变选区；已拖出的选区保留
 static void capture_loss() {
     using C = DragSelect::Cell;
@@ -452,7 +473,8 @@ int main(int argc, char **argv) {
     else if (w == "keys") keys();
     else if (w == "sync") syncfocus();
     else if (w == "font") font();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); } }
+    else if (w == "wordchars") wordchars();
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

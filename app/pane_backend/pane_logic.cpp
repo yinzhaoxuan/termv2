@@ -1,9 +1,15 @@
+#include "itcore.h"
 #include "pane_logic.h"
 #include <thread>
 #include <condition_variable>
 #include <algorithm>
 
 namespace it2app {
+
+int applyWordChars(itcore_core *core, const std::optional<std::string> &wc) {
+    if (!core) return -1;
+    return wc ? itcore_set_word_chars(core, wc->data(), wc->size()) : itcore_set_word_chars(core, nullptr, 0);
+}
 
 namespace {
 std::wstring utf8ToWide(std::string_view s) {

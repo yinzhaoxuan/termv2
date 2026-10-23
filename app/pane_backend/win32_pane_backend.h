@@ -27,6 +27,8 @@ struct PaneBackendConfig {
     uint64_t memoryLimitBytes = 32ull << 20;
     // 配置色（前景/背景/光标/256 色）；空则用 itcore_default_colors。首次 feed 前经 itcore_set_colors 下发
     std::optional<itcore_colors> colors;
+    // B3：双击选词时额外算作单词字符的 ASCII 标点；nullopt 用核心默认 "/-+\\~_."
+    std::optional<std::string> wordChars;
 };
 
 uishell::PaneBackendFactory makeWin32PaneBackendFactory(PaneBackendConfig cfg);

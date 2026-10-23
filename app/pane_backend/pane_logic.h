@@ -14,7 +14,12 @@
 #include <string>
 #include <string_view>
 
+typedef struct itcore_core itcore_core;
+
 namespace it2app {
+
+// B3：把配置的分词字符下发给核心。nullopt → 核心默认；非法（字母数字/空白/非 ASCII）返回 -1，核心保持原设置。
+int applyWordChars(itcore_core *core, const std::optional<std::string> &wordChars);
 
 inline constexpr std::size_t kPasteLimitBytes = 32u * 1024u;  // 与核心 / InputScheduler 上限一致
 

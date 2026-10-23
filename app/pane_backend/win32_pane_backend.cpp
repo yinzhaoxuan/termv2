@@ -283,6 +283,7 @@ bool Win32PaneBackend::startSession() {
     // 首次 feed 前：GridMetrics 单元格像素尺寸（CSI 14/16 t）与配置色（OSC 10/11/12/4 查询与 104/110–112 恢复）
     pushCellPixelSize();
     if (cfg_->colors) itcore_set_colors(core_, &*cfg_->colors);
+    if (applyWordChars(core_, cfg_->wordChars) != 0) std::fprintf(stderr, "[pane] wordChars 非法，使用默认\n");
     renderer_->set_expected_generation(resize_.generation());
 
     GridSize gs{resize_.dims().cols, resize_.dims().rows};
