@@ -243,6 +243,7 @@ void ConPtyTransport::readerLoop() {
     for (;;) {
         DWORD n = 0;
         if (!ReadFile(outRead_, buf.data(), kReadChunk, &n, nullptr) || n == 0) break;  // EOF / ERROR_BROKEN_PIPE
+        if (cb_.onOutputTap) cb_.onOutputTap(sid_, aid_, std::string_view(buf.data(), n));
         OutputQueue::PushResult r;
         { Lock l(lock_); r = output_.push(buf.substr(0, n)); }
         if (r != OutputQueue::PushResult::Discarded && cb_.onOutputAvailable) cb_.onOutputAvailable(sid_, aid_);

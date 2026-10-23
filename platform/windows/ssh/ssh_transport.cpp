@@ -10,11 +10,13 @@ SshTransport::SshTransport(SshCallbacks cb) : cb_(std::move(cb)) {
         if (st == TransportState::Failed && f == TransportFault::StartFailed && !finished_) {
             finished_ = true;
             SshExitInfo e; e.error = SshError::SshNotFound; e.detail = "ssh.exe 启动失败";
+            { std::lock_guard<std::mutex> g(tailMu_); e.outputTail = utf8Tail(tail_.text(), kSshOutputTailBytes); }
             if (cb_.onFinished) cb_.onFinished(s, a, e);
         }
     };
     tc.onOutputAvailable = [this](SessionId s, AttemptId a) { if (cb_.onOutputAvailable) cb_.onOutputAvailable(s, a); };
     tc.onExited = [this](SessionId s, AttemptId a, uint32_t code) { handleExit(s, a, code); };
+    tc.onOutputTap = [this](SessionId, AttemptId, std::string_view b) { std::lock_guard<std::mutex> g(tailMu_); tail_.append(b); };
     tc.onDiagnostic = [this](SessionId s, AttemptId a, const DiagRecord &d) { if (cb_.onDiagnostic) cb_.onDiagnostic(s, a, d); };
     pty_ = std::make_unique<ConPtyTransport>(std::move(tc));
 }
@@ -82,17 +84,17 @@ std::optional<SnapshotError> SshTransport::start(SessionId sid, AttemptId aid, c
 
 std::optional<OutputChunk> SshTransport::tryPopOutput() {
     auto c = pty_->tryPopOutput();
-    if (c) { std::lock_guard<std::mutex> g(tailMu_); tail_.append(c->bytes); }
-    return c;
+    return c;  // 尾部由读线程 onOutputTap 记录
 }
 
 void SshTransport::handleExit(SessionId s, AttemptId a, uint32_t code) {
     if (finished_) return;
     finished_ = true;
-    // 退出时把队列里尚未被 UI 取走的输出也计入尾部（不丢弃：UI 仍可 tryPopOutput）
+    // 尾部在读线程入队前记录：UI 未取走的输出也在其中
     std::string t;
     { std::lock_guard<std::mutex> g(tailMu_); t = tail_.text(); }
     SshExitInfo e = mapSshExit(code, t);
+    e.outputTail = utf8Tail(t, kSshOutputTailBytes);
     if (cb_.onFinished) cb_.onFinished(s, a, e);
 }
 

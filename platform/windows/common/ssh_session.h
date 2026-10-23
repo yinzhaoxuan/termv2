@@ -39,7 +39,13 @@ struct SshExitInfo {
     SshError error = SshError::Unknown;
     uint32_t exitCode = 0;
     std::string detail;   // 命中的 ssh 诊断行（已去掉控制字符），供 UI 显示
+    // ssh 子进程输出（ConPTY 下含 stderr）最后约 kSshOutputTailBytes 字节，去转义、按 UTF-8 边界截断。
+    // 由传输层读线程自行记录，不依赖 UI 是否取走输出
+    std::string outputTail;
 };
+constexpr size_t kSshOutputTailBytes = 4096;
+// s 的最后 ≤max 字节，起点前移到 UTF-8 首字节（不切断多字节字符）
+std::string utf8Tail(std::string_view s, size_t max);
 
 // ssh 约定：255 表示 ssh 自身错误，其他为远端退出码。ConPTY 下 stderr 与 stdout 合流，
 // 因此依据输出尾部识别错误。
@@ -49,7 +55,7 @@ const char *sshErrorName(SshError);
 // 保留最近 N 字节输出（错误识别用）；去掉 CSI/OSC 转义，便于匹配
 class OutputTail {
 public:
-    explicit OutputTail(size_t cap = 8192) : cap_(cap) {}
+    explicit OutputTail(size_t cap = 16384) : cap_(cap) {}
     void append(std::string_view bytes);
     std::string text() const;  // 去转义后的文本
 private:

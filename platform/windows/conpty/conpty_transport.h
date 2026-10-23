@@ -40,6 +40,8 @@ struct TransportCallbacks {  // 均从传输内部线程调用；接收方须比
     std::function<void(SessionId, AttemptId)> onOutputAvailable;
     std::function<void(SessionId, AttemptId, uint32_t)> onExited;
     std::function<void(SessionId, AttemptId, const DiagRecord &)> onDiagnostic;
+    // 可选：读线程在入队前把原始输出给出（不依赖 UI 取输出；SshTransport 用它记错误尾部）。须快速返回
+    std::function<void(SessionId, AttemptId, std::string_view)> onOutputTap;
 };
 
 struct OutputChunk { std::string bytes; bool incompleteAfterThis = false; };

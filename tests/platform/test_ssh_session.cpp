@@ -68,6 +68,19 @@ static void unit() {
     OutputTail tail(16);
     tail.append("0123456789"); tail.append("abcdefghij");
     CHECK(tail.text() == "456789abcdefghij");
+    // B1：错误尾部 ≤4 KiB、不切断 UTF-8；默认 OutputTail 容量足够覆盖去转义后的 4 KiB
+    CHECK(utf8Tail("abc", 10) == "abc");
+    CHECK(utf8Tail("ab\xe6\xb5\x8b", 2) == "");          // 只剩半个“测”：整个丢掉
+    CHECK(utf8Tail("ab\xe6\xb5\x8bz", 4) == "\xe6\xb5\x8bz");
+    CHECK(utf8Tail("ab\xe6\xb5\x8bz", 3) == "z");
+    {
+        std::string big(10000, 'x'); big += "\xe6\xb5\x8b" "ssh: connect to host h port 22: Connection refused\r\n";
+        OutputTail t; t.append(big);
+        auto tl = utf8Tail(t.text(), kSshOutputTailBytes);
+        CHECK(tl.size() <= kSshOutputTailBytes && tl.size() > kSshOutputTailBytes - 4);
+        CHECK(tl.find("Connection refused") != std::string::npos);
+        CHECK((static_cast<unsigned char>(tl[0]) & 0xC0) != 0x80);
+    }
     CHECK(stripTerminalEscapes("\x1b[1;31mA\x1b]2;t\x1b\\B\r") == "AB\n");
 }
 

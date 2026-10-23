@@ -96,6 +96,12 @@ void OutputTail::append(std::string_view b) {
     buf_.append(b);
     if (buf_.size() > cap_) buf_.erase(0, buf_.size() - cap_);
 }
+std::string utf8Tail(std::string_view s, size_t max) {
+    if (s.size() <= max) return std::string(s);
+    size_t i = s.size() - max;
+    while (i < s.size() && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80) ++i;
+    return std::string(s.substr(i));
+}
 std::string OutputTail::text() const { return stripTerminalEscapes(buf_); }
 
 const char *sshErrorName(SshError e) {
