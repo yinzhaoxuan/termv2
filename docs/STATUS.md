@@ -10,7 +10,7 @@
 |------|------|
 | `9d7f716` | T05 屏幕模型 Grid/Cell/Scrollback；CSI 默认参数与 SGR；快照 ABI；CORE-03/04/05、MEM-01 子集 |
 | `aab3c7e` | T06+T05 评审：`encode_*`、D2D/DWrite 原型、宽字孤儿与 `wrap_pending` 组合、快照 `generation`、ConPTY `failStart` 清 reader |
-| P0 第 2 批 | DA2、CSI t 窗口查询与标题栈、OSC 1 图标标题、OSC 4/10/11/12/104/110–112 配置色 ABI；CORE-20/21 |
+| `66f10dc` | P0 第 2 批：DA2、CSI t 窗口查询与标题栈、OSC 1 图标标题、OSC 4/10/11/12/104/110–112 配置色 ABI；CORE-20/21 |
 | `c8e9264` | T06 集成：`app/win32_term/` 最小 WIN32 实验窗串联 itcore + ConPTY + `itrender_d2d`；`docs/STATUS.md` |
 
 ## 模块状态

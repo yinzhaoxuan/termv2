@@ -162,6 +162,15 @@ static void misc() {
     CHECK(feed(c, "\x1b[?26n") == "\x1b[?27;1;0;0n");
     CHECK(feed(c, "\x1b[?55n") == "\x1b[?53n");
     CHECK(feed(c, "\x1b[?99n").empty());
+    // DECSTR 复位光标样式、?2026、?1004（1e239e1 评审）
+    feed(c, "\x1b[5 q\x1b[?2026h\x1b[?1004h\x1b[!p");
+    { auto *s = itcore_acquire_snapshot(c, 0, 1); int got = -1; itcore_snapshot_cursor_style(s, &got); CHECK(got == 0); itcore_snapshot_release(s); }
+    CHECK(itcore_mode_query(c, 2026) == ITCORE_MODE_RESET);
+    CHECK(itcore_mode_query(c, 1004) == ITCORE_MODE_RESET);
+    // DECOM 下 DSR 6 相对滚动区上沿
+    feed(c, "\x1b[2;3r\x1b[?6h\x1b[2;2H");
+    CHECK(feed(c, "\x1b[6n") == "\x1b[2;2R");
+    CHECK(feed(c, "\x1b[?6n") == "\x1b[?2;2R");
     itcore_destroy(c);
 }
 

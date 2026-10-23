@@ -1,6 +1,7 @@
 // T08 PaneBackend 的平台无关部分（Linux 单测）：括号粘贴、响铃/标题限流、20×5 最小网格与
 // resize generation、跨线程 → UI 线程的事件派发队列。Win32 实现见 win32_pane_backend.cpp。
 #pragma once
+#include "../common/it2app/limits.h"
 #include <chrono>
 #include <atomic>
 #include <cstddef>
@@ -165,8 +166,7 @@ struct KeyPlan {
 };
 KeyPlan planKey(unsigned vk, unsigned uiMods, uint32_t translated, uint32_t base);
 std::string utf8Encode(uint32_t cp);
-// 旧 attempt 只读文本预算（设计 §15.4：每 Pane 一个，最多 8 MiB）
-inline constexpr std::size_t kPrevAttemptTextBytes = 8u * 1024u * 1024u;
+// kPrevAttemptTextBytes 见 it2app/limits.h
 
 class Viewport {
 public:

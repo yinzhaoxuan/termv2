@@ -894,6 +894,9 @@ void Screen::soft_reset() {
     modes_.app_cursor = false;
     modes_.app_keypad = false;
     modes_.wrap = true;
+    modes_.cursor_style = 0;      // 上游 softReset 复位光标样式
+    modes_.sync_output = false;   // 关 ?2026，避免画面冻结
+    modes_.focus_events = false;  // 关 ?1004
     grid().set_origin(false);
     grid().set_scroll(0, grid().rows() - 1);
     pen_ = Pen{};
@@ -1189,7 +1192,7 @@ void Screen::apply_one(const Token &t, std::string *reply) {
         else if (cmd == "DECDSR" && reply) {
             // 上游 executeDecDeviceStatusReport 子集
             int p = param_or(t2, 0, 0);
-            if (p == 6) *reply += "\x1b[?" + std::to_string(g.cursor().y + 1) + ";" + std::to_string(std::min(g.cursor().x + 1, (int)g.cols())) + "R";
+            if (p == 6) *reply += "\x1b[?" + std::to_string(g.cursor().y - g.origin_top() + 1) + ";" + std::to_string(std::min(g.cursor().x + 1, (int)g.cols())) + "R";
             else if (p == 15) *reply += "\x1b[?13n";        // 无打印机
             else if (p == 25) *reply += "\x1b[?20n";        // UDK 未锁
             else if (p == 26) *reply += "\x1b[?27;1;0;0n";  // 北美键盘
@@ -1251,7 +1254,7 @@ void Screen::apply_one(const Token &t, std::string *reply) {
             else if (p == 6 && reply) {
                 char buf[32];
                 std::snprintf(buf, sizeof(buf), "\x1b[%d;%dR",
-                              g.cursor().y + 1, std::min(g.cursor().x + 1, (int)g.cols()));
+                              g.cursor().y - g.origin_top() + 1, std::min(g.cursor().x + 1, (int)g.cols()));
                 *reply += buf;
             }
         }
