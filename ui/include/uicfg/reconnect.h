@@ -14,7 +14,7 @@ struct OldAttempt {
 
 class PaneAttempts {
  public:
-  explicit PaneAttempts(size_t oldTextBudgetBytes = 1 << 20) : budget_(oldTextBudgetBytes) {}
+  explicit PaneAttempts(size_t oldTextBudgetBytes = 8u << 20) : budget_(oldTextBudgetBytes) {}
   int attemptId() const { return attempt_; }
   // 点击重连：当前 attempt 的输出转为只读旧文本（替换更早的），返回新 attempt ID
   int reconnect(std::string currentOutput);
