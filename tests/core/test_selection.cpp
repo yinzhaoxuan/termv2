@@ -257,6 +257,28 @@ static void test_ansi_decrqm() {
     feed(c, "\x1b[4l");
     CHECK(feed(c, "\x1b[4$p") == "\x1b[4;2$y");
     CHECK(feed(c, "\x1b[20$p") == "\x1b[20;2$y");
+    // DEC 与 ANSI 编号空间分离：DEC 20 不是 LNM
+    feed(c, "\x1b[20h");
+    CHECK(itcore_mode_query(c, 20) == ITCORE_MODE_NOT_RECOGNIZED);
+    CHECK(feed(c, "\x1b[?20$p") == "\x1b[?20;0$y");
+    feed(c, "\x1b[20l");
+    // DEC ?4（DECSCLM）与 ANSI 4（IRM）互不影响
+    feed(c, "\x1b[?4l\x1b[4l");
+    CHECK(itcore_mode_query(c, 4) == ITCORE_MODE_RESET && itcore_ansi_mode_query(c, 4) == ITCORE_MODE_RESET);
+    feed(c, "\x1b[?4h");
+    CHECK(itcore_mode_query(c, 4) == ITCORE_MODE_SET && itcore_ansi_mode_query(c, 4) == ITCORE_MODE_RESET);
+    CHECK(feed(c, "\x1b[?4$p") == "\x1b[?4;1$y");
+    CHECK(feed(c, "\x1b[4$p") == "\x1b[4;2$y");
+    feed(c, "\x1b[4h");
+    CHECK(itcore_mode_query(c, 4) == ITCORE_MODE_SET && itcore_ansi_mode_query(c, 4) == ITCORE_MODE_SET);
+    feed(c, "\x1b[?4l");
+    CHECK(itcore_mode_query(c, 4) == ITCORE_MODE_RESET && itcore_ansi_mode_query(c, 4) == ITCORE_MODE_SET);
+    CHECK(feed(c, "\x1b[?4$p") == "\x1b[?4;2$y");
+    CHECK(feed(c, "\x1b[4$p") == "\x1b[4;1$y");
+    feed(c, "\x1b[4l");
+    CHECK(itcore_mode_query(c, 4) == ITCORE_MODE_RESET && itcore_ansi_mode_query(c, 4) == ITCORE_MODE_RESET);
+    CHECK(itcore_ansi_mode_query(c, 25) == ITCORE_MODE_NOT_RECOGNIZED);
+    CHECK(itcore_ansi_mode_query(nullptr, 4) == ITCORE_MODE_NOT_RECOGNIZED);
     feed(c, "\x1b[20h");
     CHECK(feed(c, "\x1b[20$p") == "\x1b[20;1$y");
     CHECK(feed(c, "\x1b[25$p") == "\x1b[25;0$y");  // ANSI 25 与 DEC ?25 分开
@@ -290,11 +312,11 @@ static void test_ansi_decrqm() {
     }
     // LNM：Enter 发 CR LF；关闭时只发 CR
     feed(c, "\x1b[20h");
-    CHECK(itcore_mode_query(c, 20) == ITCORE_MODE_SET);
+    CHECK(itcore_ansi_mode_query(c, 20) == ITCORE_MODE_SET);
     CHECK(enter(0) == "\r\n");
     CHECK(enter(ITCORE_MOD_ALT) == "\x1b\r\n");
     feed(c, "\x1b[20l");
-    CHECK(itcore_mode_query(c, 20) == ITCORE_MODE_RESET);
+    CHECK(itcore_ansi_mode_query(c, 20) == ITCORE_MODE_RESET);
     CHECK(enter(0) == "\r");
     CHECK(enter(ITCORE_MOD_ALT) == "\x1b\r");
     CHECK(feed(c, "\x1b[20$p") == "\x1b[20;2$y");

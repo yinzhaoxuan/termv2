@@ -124,11 +124,14 @@ void itcore_snapshot_release(itcore_snapshot *s);
    与核心后续写入并发安全；释放前指针稳定。 */
 int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t hyperlink_id,
                               const char **url, size_t *url_len, const char **id, size_t *id_len);
-/* DEC 私有模式查询，返回值与 DECRQM/DECRPM 的 Pm 对齐 */
+/* 模式查询，返回值与 DECRQM/DECRPM 的 Pm 对齐。DEC 私有模式（CSI ? Ps）与 ANSI 模式（CSI Ps）
+   是两个独立编号空间，分别用两个函数查询；同一编号互不影响（如 DEC ?4 DECSCLM 与 ANSI 4 IRM）。
+   为保持 C ABI 稳定，itcore_mode_query 的签名与语义（仅 DEC）不变，ANSI 另立新函数。 */
 typedef enum { ITCORE_MODE_NOT_RECOGNIZED = 0, ITCORE_MODE_SET = 1, ITCORE_MODE_RESET = 2 } itcore_mode_state;
-/* 至少覆盖 1 7 9 25 47 1000 1002 1003 1006 1047 1049 2004；core 为空返回 NOT_RECOGNIZED */
-/* mode 20 返回 ANSI LNM（无同号 DEC 私有模式） */
+/* DEC 私有模式：至少覆盖 1 4 7 9 25 47 1000 1002 1003 1006 1047 1049 2004；core 为空返回 NOT_RECOGNIZED */
 itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t dec_private_mode);
+/* ANSI 模式：覆盖 4（IRM）、20（LNM），其余 NOT_RECOGNIZED；core 为空返回 NOT_RECOGNIZED */
+itcore_mode_state itcore_ansi_mode_query(const itcore_core *c, uint32_t ansi_mode);
 
 /* 本地选区（字符粒度），坐标同 itcore_acquire_snapshot：first_row 相对视口顶部，col/row 为快照内格坐标。
    端点按 (逻辑段, 字符序号) 存储，跟随滚动历史、重排与 resize；切换主/备用屏、RIS、ED 3 时清除。

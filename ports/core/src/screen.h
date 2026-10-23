@@ -214,7 +214,8 @@ private:
 
 struct ScreenModes {
     bool wrap = true;          // DECAWM
-    bool insert = false;       // IRM
+    bool insert = false;       // IRM (ANSI 4)
+    bool smooth_scroll = false;// DECSCLM (?4)：仅记录状态，渲染不做平滑滚动
     bool lnm = false;          // LNM (ANSI 20)：LF/VT/FF 同时回车
     bool cursor_visible = true;// DECTCEM
     bool alt = false;          // 当前是否备用屏

@@ -450,7 +450,7 @@ void Win32PaneBackend::setFocused(bool f) {
 void Win32PaneBackend::sendInput(std::string_view utf8) {
     if (!transport_ || closing_ || finished_ || utf8.empty()) return;
     scrollToBottom();  // 用户一有输入就回到底部
-    const bool lnm = core_ && itcore_mode_query(core_, 20) == ITCORE_MODE_SET;
+    const bool lnm = core_ && itcore_ansi_mode_query(core_, 20) == ITCORE_MODE_SET;
     const std::string bytes = applyNewlineMode(utf8, lnm);  // LNM：UI 翻译的 Enter 补 LF
     auto r = transport_->input(bytes);
     if (r != EnqueueResult::Ok) std::fprintf(stderr, "[pane] enqueueUserInput %d\n", int(r));

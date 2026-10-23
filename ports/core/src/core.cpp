@@ -176,9 +176,11 @@ void itcore_destroy(itcore_core *c) { delete c; }
 
 itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t mode) {
     if (!c || !c->screen || mode > 0x7fffffffu) return ITCORE_MODE_NOT_RECOGNIZED;
-    // 20（LNM）没有同号 DEC 私有模式，查询时返回 ANSI LNM 状态（供 Enter → CR LF 判定）
-    if (mode == 20) return static_cast<itcore_mode_state>(c->screen->ansi_mode_state(20));
     return static_cast<itcore_mode_state>(c->screen->dec_mode_state(int(mode)));
+}
+itcore_mode_state itcore_ansi_mode_query(const itcore_core *c, uint32_t mode) {
+    if (!c || !c->screen || mode > 0x7fffffffu) return ITCORE_MODE_NOT_RECOGNIZED;
+    return static_cast<itcore_mode_state>(c->screen->ansi_mode_state(int(mode)));
 }
 int itcore_selection_start(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row) {
     if (!c || !c->screen) return 0;

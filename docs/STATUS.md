@@ -62,7 +62,7 @@
 ### T08 评审修复（R1–R4，对齐 UI 头 783435d）
 1. **关闭不阻塞 UI**：`requestClose` 把关闭交给本会话的关闭线程后立即返回。该线程调 `transport.close(User)`，由传输层 closer 执行 T03A §1.4 的 9 步和 3 s 强杀，再 `waitClosed(5 s)`。结果 post 到 UI 队列，UI 线程 `finishSession`（排空输出、finish_input、最终快照）后发 `onStatus(Exited)`，超时发 `onStatus(Failed, "关闭超时，已强制结束")`。超时后线程继续等传输真正结束，并在该线程上析构。析构函数先 close 队列，再把传输交给关闭线程（若尚未开始），只释放自己的引用，**不 join、不等待**。多窗格各自一条线程，并行关闭。单测 PANE-01：立即返回、只经 drain 送达、8 个会话并行（≈单个耗时）、超时路径、关闭中销毁不回调。
 2. **粘贴**：直接 `itcore_encode_paste`，由核心按 DECSET 2004 加标记并清洗 NUL 与内嵌起止标记（7 位 / C1，循环删除），已删除 `bracketedFromProbe`/`buildPaste`/`sanitizePasteBody`。核心返回 -2 或传输返回 TooLarge 时调 `onPasteRejected(bytes, 32768)`。单测 ENC-02。
-3. **`itcore_mode_query(core, mode)`** → `ITCORE_MODE_NOT_RECOGNIZED/SET/RESET`（0/1/2，与 DECRPM Pm 一致），覆盖 1 7 9 25 47 1000 1002 1003 1006 1047 1049 2004。`CSI ? Ps $ p` → `CSI ? Ps ; Pm $ y`。单测 CORE-11。
+3. **`itcore_mode_query(core, mode)`** → `ITCORE_MODE_NOT_RECOGNIZED/SET/RESET`（0/1/2，与 DECRPM Pm 一致），仅 DEC 私有模式，覆盖 1 4（DECSCLM，仅记录） 7 9 25 47 1000 1002 1003 1006 1047 1049 2004。`CSI ? Ps $ p` → `CSI ? Ps ; Pm $ y`。单测 CORE-11。ANSI 模式另用 `itcore_ansi_mode_query(core, mode)`（4 IRM、20 LNM），保持原函数签名以稳定 C ABI；DEC ?4 与 ANSI 4 互不影响，CORE-13 覆盖。
 4. **选区在核心**：`itcore_selection_start/extend/clear/active/text`。端点存为 (逻辑段 id, 字符序号)，跟随滚动进历史、历史按宽度重排和 resize。起点被历史裁掉时夹到最早一行；切主/备用屏、RIS、ED 3 时清除。复制规则：软换行拼接，硬换行出 `\n`，行尾空白去掉，宽字符只出一次，WIDE 换行补的空格不算内容。快照里选中格带 `ITCORE_CELL_SELECTED` 并翻转 INVERSE，选区变化会 touch 全部行，触发脏行重绘。后端：本地模式（无鼠标报告或按住 Shift）下，移到另一格才开始拖选；单击清除选区并检查链接。`selectedText()`/`clearSelection()` 已实现；选区有/无变化（含被输出清掉）时发 `onSelectionChanged`。单测 CORE-12。
 - 剩余 UI 接口需求：见下“接口问题”。
 
@@ -97,7 +97,7 @@
 3. Shift+PgUp 等滚动快捷键由 UI 调 `scrollViewport`。后端不处理键盘滚动，因为按键会转发给父窗。
 4. SSH 下 hasForegroundJob 无法看到远端，Running 期间恒为 true（仅供参考）。
 5. attach 在会话启动失败时仍返回 true（状态 Failed）。
-6. 词分隔符目前写死在核心，尚无配置接口。LNM 下回车键已发 CR LF：编码器 VK_RETURN 看 lnm，后端 sendInput 对恰为 "\r"/"\x1b\r" 的输入按 itcore_mode_query(20) 补 LF（UI 自行翻译按键，只认精确的回车输入，属已知限制）。
+6. 词分隔符目前写死在核心，尚无配置接口。LNM 下回车键已发 CR LF：编码器 VK_RETURN 看 lnm，后端 sendInput 对恰为 "\r"/"\x1b\r" 的输入按 itcore_ansi_mode_query(20) 补 LF（UI 自行翻译按键，只认精确的回车输入，属已知限制）。
 7. `itcore_history_rows` 每次都会重排历史（O(历史)），只在有输出时调用。大历史下的性能留作后续缓存项。
 
 ### T08 未实机项

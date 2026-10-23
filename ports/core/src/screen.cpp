@@ -949,6 +949,7 @@ void Screen::set_mode(const Token &t, bool set) {
                     }
                 }
                 break;
+            case 4: modes_.smooth_scroll = set; break;  // DECSCLM，与 ANSI 4（IRM）互不相干
             case 2004: modes_.bracketed_paste = set; break;
             case 1: modes_.app_cursor = set; break;  // DECCKM
             case 9:
@@ -1254,6 +1255,7 @@ int Screen::dec_mode_state(int mode) const {
     const uint32_t mm = modes_.mouse_mode;
     switch (mode) {
     case 1: return st(modes_.app_cursor);
+    case 4: return st(modes_.smooth_scroll);
     case 7: return st(modes_.wrap);
     case 25: return st(modes_.cursor_visible);
     case 47: case 1047: case 1049: return st(modes_.alt);
