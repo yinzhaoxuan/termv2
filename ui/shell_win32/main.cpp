@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,7 @@
 #include "uicfg/session_tree.h"
 #include "uicfg/settings.h"
 #include "uicfg/shell_logic.h"
+#include "uicfg/shell_models.h"
 #include "uicfg/store.h"
 #include "uicfg/tab_model.h"
 #include "uicfg/workspace.h"
@@ -63,11 +65,14 @@ std::string U(const std::wstring& w) {
 
 constexpr wchar_t kMainClass[] = L"it2w_shell_main";
 constexpr wchar_t kPaneHostClass[] = L"it2w_shell_pane";
-constexpr UINT_PTR kIdSearch = 101, kIdList = 102, kIdTabs = 103, kIdStatus = 104, kIdReconnect = 200;
+constexpr UINT kMsgViewport = WM_APP + 1;
+constexpr UINT_PTR kIdSearch = 101, kIdTree = 102, kIdTabs = 103, kIdStatus = 104, kIdReconnect = 200;
 
 struct PaneHost {
   std::string paneId, connectionId, title;
   HWND host = nullptr, overlay = nullptr, reconnectBtn = nullptr;
+  HWND scrollBar = nullptr, oldPanel = nullptr, separator = nullptr;  // 滚动条；旧 attempt 只读文本与分隔行
+  int vpOffset = 0, vpHistory = 0;  // 最近一次 onViewportChanged
   std::unique_ptr<uishell::PaneBackend> backend;
   uishell::SessionStatus status{SessionState::Starting, 0, false, "", ""};
   PaneAttempts attempts;
@@ -76,19 +81,26 @@ struct PaneHost {
 
 struct App {
   HINSTANCE inst{};
-  HWND main{}, search{}, list{}, tabs{}, statusBar{};
+  HWND main{}, search{}, tree{}, tabs{}, statusBar{};
   fs::path configDir;
   ConfigDirLock lock;
   ConnectionsFile conns;
   bool connsReadOnly = false;
   SettingsFile settings;
+  bool settingsReadOnly = false;
+  std::string statusNote;
   WorkspaceFile ws;
   bool wsReadOnly = false;
   int paneSeq = 0;
   TabBar tabBar{[this] { return "pane-" + std::to_string(GetTickCount64()) + "-" + std::to_string(++paneSeq); }};
   std::map<std::string, std::unique_ptr<PaneHost>> panes;
   SessionSnapshots snaps;
-  std::vector<std::optional<std::string>> listIds;  // 列表行 → 连接 id（nullopt = 分组标题；"" = 本地 shell）
+  struct TreeNode { bool isGroup; std::string id; };   // TreeView lParam → 下标；连接 id "" = 本地 shell
+  std::vector<TreeNode> treeNodes;
+  std::set<std::string> collapsedGroups;
+  struct { bool active = false, dragging = false; int from = -1, x = 0, y = 0; } tabDrag;
+  struct { bool active = false; std::vector<int> path; Rect splitArea; } divDrag;
+  bool imeComposing = false;
   uishell::PaneBackendFactory factory;
   bool skipChar = false;
   bool quitting = false;
@@ -125,14 +137,55 @@ RECT paneArea() {
   return r;
 }
 Rect toRect(const RECT& r) { return {0, 0, double(r.right - r.left), double(r.bottom - r.top)}; }
-int estimateRows(const PaneHost& p) {
-  RECT rc; GetClientRect(p.host, &rc);
-  double cellH = g->settings.fontSize * 96.0 / 72.0 * 1.2 * scale();  // 近似：后端未暴露网格行数
-  return std::max(1, (int)((rc.bottom - rc.top) / std::max(1.0, cellH)));
-}
+
+double cellH() { return g->settings.fontSize * 96.0 / 72.0 * 1.2 * scale(); }  // 近似：后端未暴露 cell 尺寸
+double cellW() { return g->settings.fontSize * 96.0 / 72.0 * 0.6 * scale(); }
 
 void updateStatusBar();
 void layoutPanes();
+
+// 窗格容器内部：[旧 attempt 只读面板][分隔行][终端 | 滚动条]
+struct InnerLayout { AttemptPanelLayout a; int w, sbW; };
+InnerLayout innerLayout(const PaneHost& p) {
+  RECT rc; GetClientRect(p.host, &rc);
+  int sbW = GetSystemMetricsForDpi(SM_CXVSCROLL, g->dpi);
+  int w = std::max(1, (int)rc.right);
+  return {attemptPanelLayout(rc.bottom, p.attempts.oldAttempt().has_value(), scale()), w, std::min(sbW, w - 1)};
+}
+uishell::PixelRect termRect(const PaneHost& p) {
+  auto l = innerLayout(p);
+  return {0, l.a.termY, std::max(1, l.w - l.sbW), std::max(1, l.a.termH)};
+}
+void updateScrollBar(PaneHost& p) {
+  auto sb = scrollBarFor(p.vpOffset, p.vpHistory, std::max(1, (int)(termRect(p).h / std::max(1.0, cellH()))));
+  SCROLLINFO si{}; si.cbSize = sizeof si; si.fMask = SIF_ALL | SIF_DISABLENOSCROLL;
+  si.nMin = sb.min; si.nMax = sb.max; si.nPage = (UINT)sb.page; si.nPos = sb.pos;
+  SetScrollInfo(p.scrollBar, SB_CTL, &si, TRUE);
+  EnableScrollBar(p.scrollBar, SB_CTL, sb.enabled ? ESB_ENABLE_BOTH : ESB_DISABLE_BOTH);
+}
+void layoutPaneInner(PaneHost& p) {
+  auto l = innerLayout(p);
+  auto& old = p.attempts.oldAttempt();
+  ShowWindow(p.oldPanel, old ? SW_SHOW : SW_HIDE);
+  ShowWindow(p.separator, old ? SW_SHOW : SW_HIDE);
+  if (old) {
+    MoveWindow(p.oldPanel, 0, 0, l.w, l.a.panelH, TRUE);
+    MoveWindow(p.separator, 0, l.a.panelH, l.w, l.a.sepH, TRUE);
+  }
+  auto tr = termRect(p);
+  MoveWindow(p.scrollBar, tr.w, tr.y, l.sbW, tr.h, TRUE);
+  if (p.backend) p.backend->setBounds(tr, scale());
+  updateScrollBar(p);
+}
+void showOldAttempt(PaneHost& p) {
+  auto& old = p.attempts.oldAttempt(); if (!old) return;
+  std::string crlf = attemptHeader(old->attemptId) + "\n";
+  for (char c : old->text) { if (c == '\n') crlf += '\r'; crlf += c; }
+  SetWindowTextW(p.oldPanel, W(crlf).c_str());
+  SendMessageW(p.oldPanel, EM_SETSEL, (WPARAM)-1, -1);  // 滚到尾部
+  SendMessageW(p.oldPanel, EM_SCROLLCARET, 0, 0);
+  SetWindowTextW(p.separator, W(p.attempts.separator()).c_str());
+}
 
 void positionOverlay(PaneHost& p) {
   RECT rc; GetClientRect(p.host, &rc);
@@ -146,18 +199,25 @@ void positionOverlay(PaneHost& p) {
   SetWindowPos(p.reconnectBtn, HWND_TOP, px(16), px(84), px(96), px(28), 0);
 }
 
+int estimateRows(const PaneHost& p) { return std::max(1, (int)(termRect(p).h / std::max(1.0, cellH()))); }
+
 void layoutPanes() {
   RECT area = paneArea();
+  const int gap = px(4);  // 分隔条宽度（主窗口客户区，可拖动）
+  const double aw = area.right - area.left, ah = area.bottom - area.top;
   std::map<std::string, bool> visible;
   if (Tab* t = g->tabBar.activeTab()) {
     for (auto& pr : computeRects(t->root, toRect(area))) {
       PaneHost* p = paneById(pr.paneId); if (!p) continue;
       visible[p->paneId] = true;
-      int x = area.left + (int)pr.rect.x, y = area.top + (int)pr.rect.y;
-      int w = std::max(1, (int)pr.rect.w - 1), h = std::max(1, (int)pr.rect.h - 1);  // 1px 分隔
+      const auto& r = pr.rect;
+      int l0 = r.x > 0.5 ? gap - gap / 2 : 0, r0 = r.x + r.w < aw - 0.5 ? gap / 2 : 0;
+      int t0 = r.y > 0.5 ? gap - gap / 2 : 0, b0 = r.y + r.h < ah - 0.5 ? gap / 2 : 0;
+      int x = area.left + (int)std::lround(r.x) + l0, y = area.top + (int)std::lround(r.y) + t0;
+      int w = std::max(1, (int)std::lround(r.w) - l0 - r0), h = std::max(1, (int)std::lround(r.h) - t0 - b0);
       SetWindowPos(p->host, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
       ShowWindow(p->host, SW_SHOW);
-      if (p->backend) p->backend->setBounds({0, 0, w, h}, scale());
+      layoutPaneInner(*p);
       positionOverlay(*p);
     }
   }
@@ -168,7 +228,7 @@ void layoutAll() {
   RECT rc; GetClientRect(g->main, &rc);
   int side = px(220);
   MoveWindow(g->search, px(4), px(4), side - px(8), px(24), TRUE);
-  MoveWindow(g->list, 0, px(32), side, std::max(0L, rc.bottom - px(32) - px(22)), TRUE);
+  MoveWindow(g->tree, 0, px(32), side, std::max(0L, rc.bottom - px(32) - px(22)), TRUE);
   MoveWindow(g->tabs, side, 0, std::max(0L, rc.right - side), px(30), TRUE);
   MoveWindow(g->statusBar, 0, rc.bottom - px(22), rc.right, px(22), TRUE);
   layoutPanes();
@@ -191,22 +251,47 @@ void refreshTabs() {
 // ---------- 会话树 ----------
 void refreshTree() {
   wchar_t buf[256]; GetWindowTextW(g->search, buf, 256);
-  auto groups = buildSessionTree(g->conns, U(buf), g->snaps.runningByConnection());
-  SendMessageW(g->list, WM_SETREDRAW, FALSE, 0);
-  SendMessageW(g->list, LB_RESETCONTENT, 0, 0);
-  g->listIds.clear();
-  auto add = [](const std::string& text, std::optional<std::string> id) {
-    SendMessageW(g->list, LB_ADDSTRING, 0, (LPARAM)W(text).c_str());
-    g->listIds.push_back(std::move(id));
-  };
-  add("＋ 本地终端", std::string());
-  for (auto& gr : groups) {
-    add("▾ " + gr.name, std::nullopt);
-    for (auto& it : gr.items)
-      add(std::string(it.hasRunning() ? "  ● " : "    ") + it.name + (it.host.empty() ? "" : "  · " + it.host), it.connectionId);
+  std::string filter = U(buf);
+  auto groups = buildSessionTree(g->conns, filter, g->snaps.runningByConnection());
+  // 保留选中项
+  std::optional<App::TreeNode> sel;
+  if (HTREEITEM hs = TreeView_GetSelection(g->tree)) {
+    TVITEMW it{}; it.mask = TVIF_PARAM; it.hItem = hs;
+    if (TreeView_GetItem(g->tree, &it) && it.lParam >= 0 && (size_t)it.lParam < g->treeNodes.size()) sel = g->treeNodes[it.lParam];
   }
-  SendMessageW(g->list, WM_SETREDRAW, TRUE, 0);
-  InvalidateRect(g->list, nullptr, TRUE);
+  SendMessageW(g->tree, WM_SETREDRAW, FALSE, 0);
+  TreeView_DeleteAllItems(g->tree);
+  g->treeNodes.clear();
+  HTREEITEM reselect = nullptr;
+  auto add = [&](HTREEITEM parent, const std::string& text, App::TreeNode node, bool expanded) {
+    std::wstring t = W(text);
+    TVINSERTSTRUCTW ins{}; ins.hParent = parent; ins.hInsertAfter = TVI_LAST;
+    ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_STATE; ins.item.pszText = t.data();
+    ins.item.lParam = (LPARAM)g->treeNodes.size();
+    ins.item.stateMask = TVIS_EXPANDED | TVIS_BOLD;
+    ins.item.state = (expanded ? TVIS_EXPANDED : 0) | (node.isGroup ? TVIS_BOLD : 0);
+    g->treeNodes.push_back(node);
+    HTREEITEM h = (HTREEITEM)SendMessageW(g->tree, TVM_INSERTITEMW, 0, (LPARAM)&ins);
+    if (sel && sel->isGroup == node.isGroup && sel->id == node.id) reselect = h;
+    return h;
+  };
+  if (filter.empty()) add(TVI_ROOT, "＋ 本地终端", {false, ""}, false);
+  for (auto& gr : groups) {
+    bool expanded = !filter.empty() || !g->collapsedGroups.count(gr.id);  // 搜索时全部展开
+    HTREEITEM hg = add(TVI_ROOT, groupLabel(gr), {true, gr.id}, expanded);
+    for (auto& it : gr.items) add(hg, itemLabel(it), {false, it.connectionId}, false);
+    if (expanded) TreeView_Expand(g->tree, hg, TVE_EXPAND);
+  }
+  if (reselect) TreeView_SelectItem(g->tree, reselect);
+  SendMessageW(g->tree, WM_SETREDRAW, TRUE, 0);
+  InvalidateRect(g->tree, nullptr, TRUE);
+}
+
+std::optional<App::TreeNode> treeNodeOf(HTREEITEM h) {
+  if (!h) return std::nullopt;
+  TVITEMW it{}; it.mask = TVIF_PARAM; it.hItem = h;
+  if (!TreeView_GetItem(g->tree, &it) || it.lParam < 0 || (size_t)it.lParam >= g->treeNodes.size()) return std::nullopt;
+  return g->treeNodes[it.lParam];
 }
 
 void updateStatusBar() {
@@ -216,6 +301,7 @@ void updateStatusBar() {
     if (auto* c = findConn(p->connectionId); c && c->endpoint && c->endpoint->host) s += " · " + *c->endpoint->host;
     s += " · attempt #" + std::to_string(p->attempts.attemptId());
   }
+  if (!g->statusNote.empty()) s += " · " + g->statusNote;
   SetWindowTextW(g->statusBar, W(s).c_str());
 }
 
@@ -250,15 +336,20 @@ void startSession(PaneHost& p) {
     if (MessageBoxW(g->main, W(lp.message).c_str(), L"打开链接", MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) == IDOK)
       ShellExecuteW(g->main, L"open", W(lp.url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
   };
-  ev.onViewportChanged = [](int, int) {};
+  ev.onViewportChanged = [id](int off, int hist) {  // 投递到 UI 线程（契约要求 UI 线程回调，这里再保险一次）
+    struct VpMsg { std::string id; int off, hist; };
+    auto* m = new VpMsg{id, off, hist};
+    if (!g || !PostMessageW(g->main, kMsgViewport, 0, (LPARAM)m)) delete m;
+  };
   ev.onPasteRejected = [](size_t bytes, size_t limit) {
     MessageBoxW(g->main, W(pasteRejectedMessage(bytes, limit)).c_str(), L"粘贴", MB_OK | MB_ICONWARNING);
   };
   ev.onSelectionChanged = [](bool) {};
   p.status = {SessionState::Starting, 0, false, "", ""};
   p.backend = g->factory(p.connectionId, std::move(ev));
-  RECT rc; GetClientRect(p.host, &rc);
-  if (p.backend) p.backend->attach(p.host, {0, 0, std::max(1L, rc.right), std::max(1L, rc.bottom)}, scale());
+  p.vpOffset = p.vpHistory = 0;
+  if (p.backend) p.backend->attach(p.host, termRect(p), scale());
+  layoutPaneInner(p);
   positionOverlay(p);
 }
 
@@ -273,6 +364,12 @@ PaneHost& createPane(const std::string& paneId, const std::string& connectionId,
   p->overlay = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | SS_LEFT, 0, 0, 10, 10, p->host, nullptr, g->inst, nullptr);
   p->reconnectBtn = CreateWindowExW(0, L"BUTTON", L"重连", WS_CHILD | BS_PUSHBUTTON, 0, 0, 10, 10, p->host,
                                     (HMENU)kIdReconnect, g->inst, nullptr);
+  p->scrollBar = CreateWindowExW(0, L"SCROLLBAR", L"", WS_CHILD | WS_VISIBLE | SBS_VERT, 0, 0, 10, 10, p->host, nullptr, g->inst, nullptr);
+  p->oldPanel = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+                                0, 0, 10, 10, p->host, nullptr, g->inst, nullptr);
+  p->separator = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | SS_CENTER | SS_CENTERIMAGE, 0, 0, 10, 10, p->host, nullptr, g->inst, nullptr);
+  SendMessageW(p->oldPanel, WM_SETFONT, (WPARAM)GetStockObject(ANSI_FIXED_FONT), TRUE);
+  SendMessageW(p->separator, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
   SendMessageW(p->overlay, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
   SendMessageW(p->reconnectBtn, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
   PaneHost& ref = *p;
@@ -295,9 +392,14 @@ void destroyPane(const std::string& paneId) {
 
 void reconnectPane(PaneHost& p) {
   if (p.missingRef) return;
-  if (p.backend) { if (stateNeedsConfirm(p.status.state)) p.backend->requestClose(); p.backend.reset(); }
-  p.attempts.reconnect("");  // 后端未暴露旧 attempt 文本：只记录 attempt 号
-  startSession(p);
+  if (p.backend) {
+    p.backend->reconnect();  // 后端：新 core + 进程，attempt +1，保留上一 attempt 只读文本
+    p.attempts.reconnect(p.backend->previousAttemptText());  // 按 15.4 预算截断，只留一个
+    p.vpOffset = p.vpHistory = 0;
+    showOldAttempt(p);
+  } else {
+    startSession(p);
+  }
   layoutPanes();
   focusPane(p.paneId);
 }
@@ -379,6 +481,21 @@ void pasteClipboard() {
   if (!w.empty()) p->backend->paste(normalizePasteText(U(w)));  // 上限由后端判断，超限走 onPasteRejected
 }
 
+uishell::PaneBackendFactory makeFactory();
+
+// 字号：6–72，写回 settings.json；后端无运行时改字号接口，新建窗格生效
+void applyFontSize(double v) {
+  if (v == g->settings.fontSize) { g->statusNote = "字号已是 " + std::to_string((int)v) + " pt"; updateStatusBar(); return; }
+  g->settings.fontSize = v;
+  std::string err;
+  if (g->settingsReadOnly) g->statusNote = "settings.json 只读，字号未保存";
+  else if (!saveSettings(g->configDir / "settings.json", g->settings, false, &err)) g->statusNote = "保存 settings.json 失败：" + err;
+  else g->statusNote = "字号 " + std::to_string((int)v) + " pt（新建窗格生效）";
+  g->factory = makeFactory();
+  for (auto& [id, p] : g->panes) updateScrollBar(*p);
+  updateStatusBar();
+}
+
 bool runAction(const KeyMatch& m) {
   const std::string& a = m.action;
   PaneHost* p = activePane();
@@ -396,6 +513,7 @@ bool runAction(const KeyMatch& m) {
     if (t) if (auto n = neighborPane(t->root, toRect(paneArea()), t->activePaneId, *m.direction)) focusPane(*n);
     return true;
   }
+  if (auto fsz = fontSizeFor(a, g->settings.fontSize)) { applyFontSize(*fsz); return true; }
   if (a == "copy") { copySelection(); return true; }
   if (a == "paste") { pasteClipboard(); return true; }
   if (a == "searchConnections") { SetFocus(g->search); SendMessageW(g->search, EM_SETSEL, 0, -1); return true; }
@@ -403,7 +521,7 @@ bool runAction(const KeyMatch& m) {
     auto sc = scrollCommandFor(a, estimateRows(*p));
     if (sc.isScroll) { if (sc.toBottom) p->backend->scrollToBottom(); else p->backend->scrollViewport(sc.lines); return true; }
   }
-  return false;  // searchHistory / font* 未实现：交给终端
+  return false;  // searchHistory 未实现：交给终端
 }
 
 std::optional<std::string> keyName(WPARAM vk) {
@@ -416,26 +534,52 @@ std::optional<std::string> keyName(WPARAM vk) {
     case VK_LEFT: return "Left"; case VK_RIGHT: return "Right"; case VK_OEM_PLUS: case VK_ADD: return "Plus";
     case VK_OEM_MINUS: case VK_SUBTRACT: return "Minus"; case VK_RETURN: return "Enter"; case VK_ESCAPE: return "Escape";
     case VK_INSERT: return "Insert"; case VK_DELETE: return "Delete"; case VK_SPACE: return "Space";
+    case VK_BACK: return "Backspace";
   }
+  if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) return "Numpad" + std::to_string(vk - VK_NUMPAD0);
   return std::nullopt;
 }
 
-// 窗格（后端子窗口转发）收到的键盘消息。返回 true = 已处理
-bool handleKey(UINT msg, WPARAM w, LPARAM) {
+bool isModifierVk(WPARAM vk) {
+  switch (vk) {
+    case VK_SHIFT: case VK_CONTROL: case VK_MENU: case VK_LSHIFT: case VK_RSHIFT: case VK_LCONTROL:
+    case VK_RCONTROL: case VK_LMENU: case VK_RMENU: case VK_LWIN: case VK_RWIN: case VK_CAPITAL:
+    case VK_NUMLOCK: case VK_SCROLL: case VK_APPS: case VK_PROCESSKEY: return true;
+  }
+  return false;
+}
+
+// 窗格（后端子窗口转发）收到的键盘消息。返回 true = 已处理。
+// 特殊键 → sendKey(vk, mods)（后端用 itcore_encode_key 处理 DECCKM 等）；文本 → WM_CHAR → sendInput。
+bool handleKey(UINT msg, WPARAM w, LPARAM l) {
   PaneHost* p = activePane();
   if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
     g->skipChar = false;
-    auto k = keyName(w); if (!k) return false;
+    bool processKey = w == VK_PROCESSKEY;
+    if (processKey || g->imeComposing) return false;  // 输入法组字：交给 IME
+    if (isModifierVk(w)) return false;
     bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;
-    auto m = matchKey(g->settings.keybindings, {ctrl, shift, alt, *k});
-    if (!m.action.empty() && runAction(m)) { g->skipChar = true; return true; }
-    std::string vt = vtForKey(*k, ctrl, shift, alt);
-    if (!vt.empty() && p && p->backend) {
-      p->backend->scrollToBottom(); p->backend->sendInput(vt);
-      g->skipChar = (*k == "Tab");
+    auto k = keyName(w);
+    if (k) {
+      auto m = matchKey(g->settings.keybindings, {ctrl, shift, alt, *k});
+      if (!m.action.empty() && runAction(m)) { g->skipChar = true; return true; }
+    }
+    bool altGrText = false;
+    if (ctrl && alt) {  // AltGr = Ctrl+Alt：ToUnicode 能译出字符就按文本发
+      BYTE ks[256]; wchar_t buf[8];
+      if (GetKeyboardState(ks)) {
+        int n = ToUnicode((UINT)w, (UINT)((l >> 16) & 0xff), ks, buf, 8, 0x4 /* 不改内核键盘状态 */);
+        altGrText = n > 0 && buf[0] >= 0x20;
+      }
+    }
+    std::string name = k ? *k : "Char";
+    if (routeKey(name, processKey, g->imeComposing, ctrl, alt, altGrText) == KeyRoute::SendKey && p && p->backend) {
+      p->backend->scrollToBottom();
+      p->backend->sendKey((unsigned)w, keyMods(ctrl, shift, alt));
+      g->skipChar = true;  // 吞掉对应 WM_CHAR / WM_SYSCHAR
       return true;
     }
-    return false;
+    return false;  // 等 WM_CHAR
   }
   if (msg == WM_CHAR || msg == WM_SYSCHAR) {
     if (g->skipChar) { g->skipChar = false; return true; }
@@ -445,7 +589,7 @@ bool handleKey(UINT msg, WPARAM w, LPARAM) {
     std::wstring ws;
     if (IS_LOW_SURROGATE(ch) && highSurrogate) { ws += highSurrogate; ws += ch; } else ws += ch;
     highSurrogate = 0;
-    if (p && p->backend) { p->backend->scrollToBottom(); p->backend->sendInput(vtForChar(U(ws), msg == WM_SYSCHAR)); }
+    if (p && p->backend) { p->backend->scrollToBottom(); p->backend->sendInput(U(ws)); }
     return true;
   }
   return false;
@@ -459,6 +603,36 @@ LRESULT CALLBACK PaneHostProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       return m == WM_MOUSEACTIVATE ? MA_ACTIVATE : 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN: case WM_CHAR: case WM_SYSCHAR:
       if (handleKey(m, w, l)) return 0;
+      break;
+    case WM_IME_STARTCOMPOSITION: g->imeComposing = true; break;
+    case WM_IME_ENDCOMPOSITION: g->imeComposing = false; break;
+    case WM_VSCROLL: {
+      PaneHost* p = id ? paneById(*id) : nullptr;
+      if (!p || !p->backend || (HWND)l != p->scrollBar) break;
+      int rows = estimateRows(*p), lines = 0;
+      switch (LOWORD(w)) {
+        case SB_LINEUP: lines = -1; break;
+        case SB_LINEDOWN: lines = 1; break;
+        case SB_PAGEUP: lines = -rows; break;
+        case SB_PAGEDOWN: lines = rows; break;
+        case SB_TOP: lines = scrollLinesForThumb(0, p->vpOffset, p->vpHistory); break;
+        case SB_BOTTOM: p->backend->scrollToBottom(); break;
+        case SB_THUMBTRACK: case SB_THUMBPOSITION: {
+          SCROLLINFO si{}; si.cbSize = sizeof si; si.fMask = SIF_TRACKPOS;
+          GetScrollInfo(p->scrollBar, SB_CTL, &si);
+          lines = scrollLinesForThumb(si.nTrackPos, p->vpOffset, p->vpHistory);
+          break;
+        }
+      }
+      if (lines) p->backend->scrollViewport(lines);  // 后端回报 onViewportChanged 后再更新滑块
+      if (LOWORD(w) == SB_ENDSCROLL) focusPane(*id);  // 焦点还给终端
+      return 0;
+    }
+    case WM_CTLCOLORSTATIC:
+      if (id) if (auto* p = paneById(*id); p && (HWND)l == p->separator) {
+        SetBkMode((HDC)w, TRANSPARENT); SetTextColor((HDC)w, RGB(160, 160, 160));
+        return (LRESULT)GetStockObject(BLACK_BRUSH);
+      }
       break;
     case WM_COMMAND:
       if (LOWORD(w) == kIdReconnect && id) { if (auto* p = paneById(*id)) reconnectPane(*p); return 0; }
@@ -502,6 +676,52 @@ void shutdownAndExit() {
   DestroyWindow(g->main);                                      // 5. 退出消息循环
 }
 
+std::optional<Divider> dividerAt(POINT pt) {
+  Tab* t = g->tabBar.activeTab(); if (!t) return std::nullopt;
+  RECT a = paneArea();
+  auto ds = computeDividers(t->root, toRect(a), px(6));
+  if (auto i = hitDivider(ds, pt.x - a.left, pt.y - a.top)) return ds[*i];
+  return std::nullopt;
+}
+
+// 标签栏：拖动重排、中键关闭
+LRESULT CALLBACK TabSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
+  auto hit = [&](LPARAM lp) { TCHITTESTINFO ht{}; ht.pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}; return TabCtrl_HitTest(h, &ht); };
+  auto& d = g->tabDrag;
+  switch (m) {
+    case WM_LBUTTONDOWN: {
+      int i = hit(l);
+      d = {}; d.active = i >= 0; d.from = i; d.x = GET_X_LPARAM(l); d.y = GET_Y_LPARAM(l);
+      break;  // 交给默认处理（切换标签）
+    }
+    case WM_MOUSEMOVE:
+      if (d.active && (w & MK_LBUTTON) && !d.dragging &&
+          isDragStart(GET_X_LPARAM(l) - d.x, GET_Y_LPARAM(l) - d.y, GetSystemMetricsForDpi(SM_CXDRAG, g->dpi))) {
+        d.dragging = true; SetCapture(h);
+      }
+      if (d.dragging) { SetCursor(LoadCursorW(nullptr, IDC_SIZEWE)); return 0; }
+      break;
+    case WM_LBUTTONUP:
+      if (d.dragging) {
+        int from = d.from; d = {}; ReleaseCapture();
+        std::vector<std::pair<double, double>> spans;
+        for (int i = 0; i < TabCtrl_GetItemCount(h); ++i) { RECT r; TabCtrl_GetItemRect(h, i, &r); spans.push_back({double(r.left), double(r.right)}); }
+        auto to = tabDropIndex(spans, GET_X_LPARAM(l));
+        if (to && (int)*to != from && g->tabBar.move((size_t)from, *to)) {
+          refreshTabs(); layoutPanes();
+          if (Tab* t = g->tabBar.activeTab()) focusPane(t->activePaneId);
+        }
+        return 0;
+      }
+      d.active = false;
+      break;
+    case WM_CAPTURECHANGED: if ((HWND)l != h) d = {}; break;
+    case WM_MBUTTONUP: { int i = hit(l); if (i >= 0) closeTabAt((size_t)i, true); return 0; }
+    case WM_NCDESTROY: RemoveWindowSubclass(h, TabSubclass, 1); break;
+  }
+  return DefSubclassProc(h, m, w, l);
+}
+
 LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   switch (m) {
     case WM_CREATE: {
@@ -509,10 +729,13 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       g->dpi = GetDpiForWindow(h);
       g->search = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, h, (HMENU)kIdSearch, g->inst, nullptr);
       SendMessageW(g->search, EM_SETCUEBANNER, TRUE, (LPARAM)L"搜索会话");
-      g->list = CreateWindowExW(0, L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, 0, 0, 0, 0, h, (HMENU)kIdList, g->inst, nullptr);
+      g->tree = CreateWindowExW(0, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_LINESATROOT |
+                                TVS_SHOWSELALWAYS | TVS_FULLROWSELECT, 0, 0, 0, 0, h, (HMENU)kIdTree, g->inst, nullptr);
+
       g->tabs = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_FOCUSNEVER, 0, 0, 0, 0, h, (HMENU)kIdTabs, g->inst, nullptr);
       g->statusBar = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, h, (HMENU)kIdStatus, g->inst, nullptr);
-      for (HWND c : {g->search, g->list, g->tabs, g->statusBar}) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+      SetWindowSubclass(g->tabs, TabSubclass, 1, 0);
+      for (HWND c : {g->search, g->tree, g->tabs, g->statusBar}) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
       return 0;
     }
     case WM_SIZE: layoutAll(); return 0;
@@ -525,11 +748,6 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     case WM_COMMAND:
       if (LOWORD(w) == kIdSearch && HIWORD(w) == EN_CHANGE) { refreshTree(); return 0; }
-      if (LOWORD(w) == kIdList && HIWORD(w) == LBN_DBLCLK) {
-        int i = (int)SendMessageW(g->list, LB_GETCURSEL, 0, 0);
-        if (i >= 0 && i < (int)g->listIds.size() && g->listIds[i]) openTab(*g->listIds[i]);
-        return 0;
-      }
       break;
     case WM_NOTIFY: {
       auto* nm = reinterpret_cast<NMHDR*>(l);
@@ -537,9 +755,53 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         g->tabBar.activate((size_t)TabCtrl_GetCurSel(g->tabs));
         layoutPanes(); if (Tab* t = g->tabBar.activeTab()) focusPane(t->activePaneId);
       }
+      if (nm->hwndFrom == g->tree) {
+        if (nm->code == NM_DBLCLK || nm->code == NM_RETURN) {
+          if (auto n = treeNodeOf(TreeView_GetSelection(g->tree)); n && !n->isGroup) { openTab(n->id); return 1; }
+        }
+        if (nm->code == TVN_ITEMEXPANDEDW) {
+          auto* tv = reinterpret_cast<NMTREEVIEWW*>(l);
+          if (auto n = treeNodeOf(tv->itemNew.hItem); n && n->isGroup) {
+            if (tv->action == TVE_COLLAPSE) g->collapsedGroups.insert(n->id); else g->collapsedGroups.erase(n->id);
+          }
+        }
+      }
       break;
     }
-    case WM_MBUTTONUP: break;
+    case kMsgViewport: {
+      struct VpMsg { std::string id; int off, hist; };
+      std::unique_ptr<VpMsg> vm(reinterpret_cast<VpMsg*>(l));
+      if (PaneHost* p = paneById(vm->id)) { p->vpOffset = vm->off; p->vpHistory = vm->hist; updateScrollBar(*p); }
+      return 0;
+    }
+    // ---- 分隔条拖动（分隔条是主窗口客户区里窗格之间的间隙）----
+    case WM_SETCURSOR:
+      if ((HWND)w == h && LOWORD(l) == HTCLIENT) {
+        POINT pt; GetCursorPos(&pt); ScreenToClient(h, &pt);
+        if (auto d = dividerAt(pt)) { SetCursor(LoadCursorW(nullptr, d->axis == SplitAxis::Columns ? IDC_SIZEWE : IDC_SIZENS)); return TRUE; }
+      }
+      break;
+    case WM_LBUTTONDOWN: {
+      POINT pt{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+      if (auto d = dividerAt(pt)) { g->divDrag.active = true; g->divDrag.path = d->path; g->divDrag.splitArea = d->splitArea; SetCapture(h); }
+      return 0;
+    }
+    case WM_MOUSEMOVE:
+      if (g->divDrag.active) {
+        Tab* t = g->tabBar.activeTab(); LayoutNode* n = t ? nodeAtPath(t->root, g->divDrag.path) : nullptr;
+        if (!n || n->kind != LayoutNode::Kind::Split) { g->divDrag.active = false; ReleaseCapture(); return 0; }
+        RECT a = paneArea();
+        n->ratio = dragRatio(*n, g->divDrag.splitArea, GET_X_LPARAM(l) - a.left, GET_Y_LPARAM(l) - a.top, cellW(), cellH());
+        layoutPanes();
+      }
+      return 0;
+    case WM_LBUTTONUP:
+      if (g->divDrag.active) {
+        g->divDrag.active = false; ReleaseCapture();
+        if (Tab* t = g->tabBar.activeTab()) focusPane(t->activePaneId);  // 焦点留在原窗格
+      }
+      return 0;
+    case WM_CAPTURECHANGED: g->divDrag.active = false; break;
     // 后端子窗口把键盘消息 SendMessage 给其父窗口（窗格容器）；若直接到主窗口也走同一处理
     case WM_KEYDOWN: case WM_SYSKEYDOWN: case WM_CHAR: case WM_SYSCHAR:
       if (handleKey(m, w, l)) return 0;
@@ -587,11 +849,23 @@ std::optional<it2w::SshLaunchOptions> resolveSsh(const std::string& id, std::str
 }
 #endif
 
+uishell::PaneBackendFactory makeFactory() {
+#ifdef IT2W_SHELL_STUB_BACKEND
+  return it2w_shell::makeStubFactory();
+#else
+  it2app::PaneBackendConfig cfg;
+  cfg.resolveSsh = resolveSsh;
+  cfg.fontFamily = W(g->settings.fontFamily);
+  cfg.fontSizePt = (float)g->settings.fontSize;
+  return it2app::makeWin32PaneBackendFactory(std::move(cfg));
+#endif
+}
+
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);  // manifest 之外的兜底
-  INITCOMMONCONTROLSEX icc{sizeof icc, ICC_TAB_CLASSES | ICC_STANDARD_CLASSES};
+  INITCOMMONCONTROLSEX icc{sizeof icc, ICC_TAB_CLASSES | ICC_STANDARD_CLASSES | ICC_TREEVIEW_CLASSES | ICC_BAR_CLASSES};
   InitCommonControlsEx(&icc);
   App app; g = &app; app.inst = inst;
 
@@ -608,18 +882,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     MessageBoxW(nullptr, W("connections.json 无法读取：" + lc.detail).c_str(), L"it2w", MB_OK | MB_ICONWARNING);
   auto ls = loadSettings(app.configDir / "settings.json");
   app.settings = (ls.status == LoadStatus::NotFound || ls.status == LoadStatus::Corrupt) ? defaultSettings() : ls.data;
+  app.settingsReadOnly = ls.readOnly;
+  app.settings.fontSize = std::clamp(app.settings.fontSize, kMinFontSize, kMaxFontSize);
   auto lw = loadWorkspace(app.configDir / "workspace.json");
   app.ws = std::move(lw.data); app.wsReadOnly = lw.readOnly;
 
-#ifdef IT2W_SHELL_STUB_BACKEND
-  app.factory = it2w_shell::makeStubFactory();
-#else
-  it2app::PaneBackendConfig cfg;
-  cfg.resolveSsh = resolveSsh;
-  cfg.fontFamily = W(app.settings.fontFamily);
-  cfg.fontSizePt = (float)app.settings.fontSize;
-  app.factory = it2app::makeWin32PaneBackendFactory(std::move(cfg));
-#endif
+  app.factory = makeFactory();
 
   WNDCLASSEXW wc = {}; wc.cbSize = sizeof wc; wc.lpfnWndProc = MainProc; wc.hInstance = inst; wc.lpszClassName = kMainClass;
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
