@@ -6,6 +6,7 @@
 #endif
 #include "uishell/pane_backend.h"
 #include "ssh_transport.h"
+#include "hyperv_transport.h"
 #include <optional>
 #include <string>
 
@@ -15,6 +16,9 @@ struct PaneBackendConfig {
     // connectionId → SSH 启动参数（由 UI 从 uicfg Connection 构造）。返回 nullopt 时 *error 给出原因，
     // 窗格进入 Failed。接口签名里 factory 只有 connectionId，所以解析器在构造工厂时注入。
     std::function<std::optional<it2w::SshLaunchOptions>(const std::string &connectionId, std::string *error)> resolveSsh;
+    // T09：connectionId → Hyper-V 启动参数（endpoint.mode=hyperv）。返回 nullopt 表示不是 Hyper-V 连接，
+    // 再走 resolveSsh。policy.vmId 须为 GUID；ssh.target.hostName 留空，由后台解析填入。
+    std::function<std::optional<it2w::HyperVLaunch>(const std::string &connectionId, std::string *error)> resolveHyperV;
     std::wstring localShell;            // 空：%ComSpec%，再退回 System32\cmd.exe
     std::wstring fontFamily = L"Consolas";
     float fontSizePt = 12.f;

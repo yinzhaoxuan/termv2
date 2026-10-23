@@ -84,6 +84,21 @@ struct SshT final : Transport {
     bool isSsh() const override { return true; }
 };
 
+struct HyperVT final : Transport {
+    std::unique_ptr<HyperVTransport> t;
+    EnqueueResult input(std::string_view b) override { return t->enqueueUserInput(b); }
+    EnqueueResult reply(std::string_view b) override { return t->enqueueReply(b); }
+    EnqueueResult beginPaste(size_t n, bool br) override { return t->beginPaste(n, br); }
+    EnqueueResult appendPaste(std::string_view b) override { return t->appendPaste(b); }
+    void resize(GridSize g, uint64_t gen) override { t->resize(g, gen); }
+    void close(CloseReason r) override { t->close(r); }
+    std::optional<OutputChunk> pop() override { return t->tryPopOutput(); }
+    TransportState state() const override { return t->state(); }
+    bool waitClosed(DWORD ms) override { return t->waitClosed(ms); }
+    uint32_t processes() override { return t->activeProcessCount(); }
+    bool isSsh() const override { return true; }
+};
+
 class Win32PaneBackend final : public uishell::PaneBackend {
 public:
     Win32PaneBackend(std::string connectionId, uishell::PaneEvents ev, std::shared_ptr<const PaneBackendConfig> cfg)
@@ -165,6 +180,7 @@ private:
     mutable std::mutex statusMu_;
     uishell::SessionStatus status_;
     std::optional<SshExitInfo> sshExit_;
+    std::optional<HvAction> hvResult_;   // T09 解析结果（Fail 时作为错误文本）
     std::optional<uint32_t> localExit_;
     bool focused_ = false, closing_ = false, finished_ = false, skipChar_ = false;
     int downCol_ = -1, downRow_ = -1;
@@ -268,6 +284,40 @@ bool Win32PaneBackend::startSession() {
         transport_ = std::move(lt);
         shared_->transport = transport_;
         if (!raw->start(SessionId{1}, AttemptId{1}, spec)) { fail("本地 shell 启动失败"); return false; }
+    } else if (std::string herr; cfg_->resolveHyperV && [&] {
+                   auto h = cfg_->resolveHyperV(connId_, &herr);
+                   if (!h) return !herr.empty();   // 有错误文本：是 Hyper-V 连接但配置无效
+                   auto id = normalizeVmId(h->policy.vmId);
+                   if (!id) { herr = "Hyper-V VM ID 格式无效"; return true; }
+                   h->policy.vmId = *id;
+                   h->ssh.initialSize = gs;
+                   HyperVCallbacks cb;
+                   cb.onStateChanged = onState;
+                   cb.onOutputAvailable = onOut;
+                   cb.onFinished = [ws](SessionId, AttemptId, const SshExitInfo &x) {
+                       if (auto sh = ws.lock()) postTo<P>(*sh->queue, [x](P &p) { p.sshExit_ = x; });
+                   };
+                   cb.onDiagnostic = onDiag;
+                   cb.onResolved = [ws](SessionId, AttemptId, const HvAction &a) {
+                       if (auto sh = ws.lock()) postTo<P>(*sh->queue, [a](P &p) {
+                           p.hvResult_ = a;
+                           if (a.kind == HvAction::Connect) {
+                               std::lock_guard l(p.statusMu_);
+                               p.status_.title = (a.fallback ? "手动地址 " : "Hyper-V ") + a.host;
+                           }
+                           if (a.kind == HvAction::Connect) p.publishStatus();
+                       });
+                   };
+                   auto ht = std::make_unique<HyperVT>();
+                   ht->t = std::make_unique<HyperVTransport>(cb);
+                   auto *raw = ht->t.get();
+                   transport_ = std::move(ht);
+                   shared_->transport = transport_;
+                   raw->start(SessionId{1}, AttemptId{1}, std::move(*h));
+                   herr.clear();
+                   return true;
+               }()) {
+        if (!herr.empty()) { fail(herr); return false; }
     } else {
         std::string err;
         std::optional<SshLaunchOptions> o = cfg_->resolveSsh ? cfg_->resolveSsh(connId_, &err) : std::nullopt;
@@ -333,6 +383,9 @@ void Win32PaneBackend::finishSession() {
             status_.state = uishell::SessionState::Failed;
             status_.errorText = std::string(sshErrorName(sshExit_->error)) + (sshExit_->detail.empty() ? "" : ": " + sshExit_->detail);
             status_.exitCode = int(sshExit_->exitCode);
+        } else if (failed && hvResult_ && hvResult_->kind == HvAction::Fail) {
+            status_.state = uishell::SessionState::Failed;
+            status_.errorText = std::string(hvFailureName(hvResult_->failure)) + ": " + hvResult_->text;
         } else if (failed) {
             status_.state = uishell::SessionState::Failed;
             status_.errorText = "会话传输故障";

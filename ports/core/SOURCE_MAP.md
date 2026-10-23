@@ -82,3 +82,4 @@
 - 选区变化：`sel_touch(old)` 只给新旧范围内的网格行取新 revision，全局计数推进一次，历史行随之变脏。
 - `itcore_history_rows`：当前列宽下历史显示行数（备用屏为 0）。快照的 `first_row<0` 显示历史；光标按视口相对行给出，移出视口则不可见。
 - ANSI DECRQM（`CSI Ps $ p`）：对应上游 `VT100Terminal` 的 ANSI 分支，4→IRM、20→LNM，其余 Pm=0。LNM 置位时 LF/VT/FF 兼回车，Enter 编码为 CR LF（上游 newlineMode）；ABI：DEC 私有模式用 `itcore_mode_query`，ANSI 模式用 `itcore_ansi_mode_query`，两个编号空间互不影响（?4 DECSCLM 仅记录状态 vs 4 IRM）。
+- T09 Hyper-V：无上游对应（Windows 专有）。`hyperv_resolve.*` 地址解析策略，`hyperv_query.*` PowerShell 查询，`hyperv_transport.*` 解析后接 SSH。

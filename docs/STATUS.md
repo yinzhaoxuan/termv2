@@ -91,7 +91,14 @@
    - `pane_logic` 中的 `Viewport`、`ClickCounter`、`routeWheel` 由 PANE-03 覆盖。
 5. **DECRQM ANSI**：`CSI Ps $ p`（不带 ?）与私有模式分开处理，回复 `CSI Ps;Pm$y`。4（IRM）和 20（LNM）回 1 或 2，其余回 0；ANSI 25 与 `?25` 互不相干。新实现 LNM（LF/VT/FF 兼回车）。单测 CORE-13 覆盖 2004、1049、25 的开和关，`?9999`→0、`9999`→0，以及 4 和 20；LF/VT/FF 在 LNM 开和关时的列位置、Enter/Alt+Enter 编码均有对照。Viewport::scroll 用 int64 截断，PANE-03 覆盖 INT_MIN/INT_MAX。
 
+### T09 Hyper-V 辅助（实现）
+- `platform/windows/common/hyperv_resolve.*`（平台无关）：VM ID 规范化（仅 GUID）、查询 JSON 解析（v=1，标量/数组、BOM）、地址筛选（排除 0.0.0.0、127/8、169.254/16、::、::1、无 scope 的 fe80::/10）、候选选择、`HyperVResolver` 状态机与 `runHyperVResolution`（轮询 2 s、单次查询 5 s、预算 60 s；只在策略允许时启动一次；多候选不盲选；VmNotFound 不回退，AccessDenied/模块缺失/启动失败可回退手动地址）。
+- `platform/windows/hyperv/`：固定 PowerShell 脚本（-EncodedCommand，VM ID 走环境变量）+ Job/超时/取消；`HyperVTransport` 后台解析后启动内层 SshTransport。
+- 后端：`PaneBackendConfig::resolveHyperV`，失败文本为 `<类别>: <说明>` 写进 errorText；连接后标题为 “Hyper-V <地址>” 或 “手动地址 <地址>”。
+- 测试 HV-01.resolve_policy。实机（VM-01）未跑。
+
 ### 接口问题（未改头文件，待 UI 定夺）
+8. T09：UI 无“启动并连接”按钮、多地址选择器、“正在解析/等待 VM 地址”状态；目前分别以 Failed 文本（VmNotRunning / AddressAmbiguous 含候选列表）和 Starting 状态表达。
 1. “UI 翻译按键”与子窗焦点冲突：子窗把 WM_KEY*/WM_CHAR SendMessage 给父窗，IME 留在子窗处理。
 2. **UI 须在退出时调用 `it2app::shutdownPaneBackends(3000)`**：在所有窗格销毁之后、WinMain 返回之前调用。头文件里没有对应的跨平台入口，建议在 `PaneBackendFactory` 旁边加一个 shutdown 钩子。
 3. Shift+PgUp 等滚动快捷键由 UI 调 `scrollViewport`。后端不处理键盘滚动，因为按键会转发给父窗。
