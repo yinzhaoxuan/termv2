@@ -1,3 +1,4 @@
+#undef NDEBUG  // assert 在任何构建类型下都必须执行
 #include "glyph_cache.h"
 #include <cassert>
 #include <cstdio>

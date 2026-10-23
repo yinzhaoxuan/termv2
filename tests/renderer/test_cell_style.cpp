@@ -1,3 +1,4 @@
+#undef NDEBUG  // assert 在任何构建类型下都必须执行
 #include "cell_style.h"
 #include "itcore_mock.h"
 #include <cassert>
