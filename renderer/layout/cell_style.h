@@ -35,10 +35,10 @@ inline uint32_t resolve(const Theme &t, uint32_t c, bool is_fg) {
 }
 
 struct ResolvedColors { uint32_t fg, bg, underline; };
-// INVERSE 同时交换前景与背景（背景段合并也必须用这里的 bg）
+// INVERSE 或 SELECTED 交换前景与背景，二者叠加也只交换一次（背景段合并也必须用这里的 bg）
 inline ResolvedColors resolve_cell(const Theme &t, const itcore_cell &c) {
   uint32_t fg = resolve(t, c.fg, true), bg = resolve(t, c.bg, false);
-  if (c.flags & ITCORE_CELL_INVERSE) { uint32_t x = fg; fg = bg; bg = x; }
+  if (c.flags & (ITCORE_CELL_INVERSE | ITCORE_CELL_SELECTED)) { uint32_t x = fg; fg = bg; bg = x; }  // 选中+INVERSE 只反一次，避免“负负得正”看不出选中
   uint32_t ul = (c.underline_color >> 24) ? resolve(t, c.underline_color, true) : fg;
   return {fg, bg, ul};
 }

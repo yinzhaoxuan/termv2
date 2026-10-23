@@ -16,6 +16,10 @@ int main() {
   itcore_cell c{}; c.fg = 0x02FF0000; c.bg = 0x00000000; c.flags = ITCORE_CELL_INVERSE;
   auto r = resolve_cell(t, c);
   assert(r.fg == t.bg && r.bg == 0xFF0000 && r.underline == r.fg);
+  c.flags = ITCORE_CELL_SELECTED; r = resolve_cell(t, c);
+  assert(r.fg == t.bg && r.bg == 0xFF0000);                    // 仅选中：反色
+  c.flags = ITCORE_CELL_SELECTED | ITCORE_CELL_INVERSE; r = resolve_cell(t, c);
+  assert(r.fg == t.bg && r.bg == 0xFF0000);                    // 选中+INVERSE：仍是反色，不会被反回原色
 
   const char *txt = "abc\ndef";
   auto *s = itmock_snapshot_from_utf8(txt, strlen(txt), 20, 5);
