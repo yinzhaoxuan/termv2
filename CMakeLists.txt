@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
 project(iterm2_win LANGUAGES C CXX)
+# mingw（真机包）默认 RelWithDebInfo：带调试符号，便于真机定位
+if((MINGW OR CMAKE_CROSSCOMPILING) AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -156,3 +160,21 @@ endif()
 
 # T08：PaneBackend（uishell 接口实现）；需在 it2w_ssh 之后
 add_subdirectory(app/pane_backend)
+
+# 所有测试目标 -UNDEBUG：Release/RelWithDebInfo 真机包里 assert 必须生效
+function(it2w_collect_targets dir out)
+  get_property(_t DIRECTORY ${dir} PROPERTY BUILDSYSTEM_TARGETS)
+  get_property(_s DIRECTORY ${dir} PROPERTY SUBDIRECTORIES)
+  foreach(_d ${_s})
+    it2w_collect_targets(${_d} _sub)
+    list(APPEND _t ${_sub})
+  endforeach()
+  set(${out} ${_t} PARENT_SCOPE)
+endfunction()
+it2w_collect_targets(${CMAKE_CURRENT_SOURCE_DIR} _all_targets)
+foreach(_tg ${_all_targets})
+  get_target_property(_ty ${_tg} TYPE)
+  if(_ty STREQUAL "EXECUTABLE" AND _tg MATCHES "test")
+    target_compile_options(${_tg} PRIVATE -UNDEBUG)
+  endif()
+endforeach()
