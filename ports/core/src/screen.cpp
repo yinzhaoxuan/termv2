@@ -1392,7 +1392,7 @@ size_t Screen::history_display_rows() const {
     if (hist_rows_gen_ == scrollback_.generation() && hist_rows_cols_ == cols) return hist_rows_cache_;
     std::vector<Row> hist;
     reflow_merged(scrollback_, cols, hist);
-    ++hist_rows_recompute_count;
+    ++debug_hist_rows_recompute_count;
     hist_rows_gen_ = scrollback_.generation();
     hist_rows_cols_ = cols;
     hist_rows_cache_ = hist.size();

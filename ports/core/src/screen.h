@@ -385,7 +385,7 @@ private:
     mutable size_t hist_rows_cache_ = 0;
 public:
     // 测试用：缓存未命中（真正重排）的次数
-    mutable uint64_t hist_rows_recompute_count = 0;
+    mutable uint64_t debug_hist_rows_recompute_count = 0;
 private:
 };
 

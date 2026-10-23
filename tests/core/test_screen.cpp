@@ -411,7 +411,30 @@ static void test_history_cache() {
     CHECK(itcore_history_rows(c) == w20);
     feed("\x1b[3J");                                   // ED3 清历史 → 失效
     CHECK(itcore_history_rows(c) == 0);
+    feed("a\r\nb\r\nc\r\nd\r\n");
+    CHECK(itcore_history_rows(c) > 0);
+    feed("\x1b" "c");                                 // RIS 清历史 → 失效
+    CHECK(itcore_history_rows(c) == 0);
     itcore_destroy(c);
+    // max_lines 淘汰：历史满后每次 push 都淘汰最旧逻辑行，缓存须跟着失效。
+    // 对照：同一字节流一次性喂给新核心（无旧缓存）得到的行数
+    const char *steps[] = {"0123456789ABCDEFGHIJ\r\n0123456789ABCDEFGHIJ\r\n0123456789ABCDEFGHIJ\r\n0123456789ABCDEFGHIJ\r\n",
+                           "s\r\n", "t\r\n", "u\r\nv\r\n"};
+    itcore_core *e = make(10, 2, 3);
+    std::string all;
+    for (const char *st : steps) {
+        itcore_history_rows(e);
+        uint64_t before = itcore_debug_history_recomputes(e);
+        itcore_feed(e, reinterpret_cast<const uint8_t *>(st), std::strlen(st)); drain(e);
+        all += st;
+        uint32_t got = itcore_history_rows(e);
+        CHECK(itcore_debug_history_recomputes(e) == before + 1);  // 满历史时 push+淘汰也使缓存失效
+        itcore_core *f = make(10, 2, 3);
+        itcore_feed(f, reinterpret_cast<const uint8_t *>(all.data()), all.size()); drain(f);
+        CHECK(got == itcore_history_rows(f));
+        itcore_destroy(f);
+    }
+    itcore_destroy(e);
 }
 
 int main(int argc, char **argv) {
