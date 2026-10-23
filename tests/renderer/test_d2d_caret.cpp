@@ -40,8 +40,9 @@ int main() {
   itren::Preedit pe; pe.utf8 = "测"; pe.anchor_col = 3; pe.anchor_row = 1;
   r.set_preedit(pe);
   rc = r.caret_rect_px();
-  assert(rc.x == m.cell_rect(3, 1, 1).x);
-  assert(rc.y == m.cell_rect(3, 1, 1).y);
+  // ime_layout：候选窗锚点在预编辑光标处（"测" 宽 2 → 第 5 列）
+  assert(rc.x == m.cell_rect(5, 1, 1).x);
+  assert(rc.y == m.cell_rect(5, 1, 1).y);
   itcore_snapshot_release(s);
   r.shutdown();
   std::puts("ok");

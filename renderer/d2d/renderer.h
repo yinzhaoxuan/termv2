@@ -4,16 +4,25 @@
 #include "iswap_chain_host.h"
 #include "grid_metrics.h"
 #include "itcore.h"
+#include "ime_layout.h"
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
+#include <cstddef>
 
 namespace itren {
 
 struct Preedit {
     std::string utf8;       // 本地预编辑，不进快照
     uint16_t anchor_col = 0, anchor_row = 0;
+    std::vector<uint8_t> widths;   // 每个 cluster 的列宽（1/2）；空则按码点粗估
+    std::vector<uint8_t> attrs;    // ClauseAttr；可短于 widths
+    size_t cursor = SIZE_MAX;      // 预编辑内光标（cluster 下标）；SIZE_MAX = 末尾
 };
+
+// 预编辑几何（下划线 / 内部光标 / 候选窗锚点），平台无关
+ImeLayout preedit_layout(const GridMetrics &m, const Preedit &p, uint16_t cols, uint16_t rows);
 
 // 当前 D3D 设备类型（UI 状态栏显示）
 enum class DeviceKind { None, Hardware, Warp, Stub };
@@ -35,6 +44,12 @@ public:
     void set_expected_generation(uint64_t gen) { expected_gen_ = gen; }
     void set_preedit(const Preedit &p) { preedit_ = p; }
     void clear_preedit() { preedit_ = {}; }
+    // 光标：失焦画空心框；输入后 530ms 内常亮（tick_ms 为单调毫秒，如 GetTickCount64）
+    void set_focused(bool f) { focused_ = f; }
+    void note_input(uint64_t tick_ms) { last_input_ms_ = tick_ms; }
+    void set_clock(uint64_t tick_ms) { now_ms_ = tick_ms; }
+    // 动画（光标闪烁 / SGR 5）需要的下一次重绘时间点；0 = 不需要
+    bool wants_animation() const { return animating_; }
 
     // 脏行重绘 + Present；无变化返回 false（跳过 Present）
     bool present_frame();
@@ -61,6 +76,8 @@ private:
     uint64_t expected_gen_ = 0;
     uint64_t last_drawn_revision_ = 0;
     Preedit preedit_{};
+    bool focused_ = true, animating_ = false;
+    uint64_t last_input_ms_ = 0, now_ms_ = 0;
     bool device_lost_ = false;
     DeviceKind device_kind_ = DeviceKind::None;
     std::unique_ptr<Impl> impl_;

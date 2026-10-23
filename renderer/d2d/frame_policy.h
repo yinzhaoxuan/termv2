@@ -4,6 +4,11 @@
 // 只绘制两者交集内的格子，交集以外（含客户区多出部分）一律填背景色。
 #include <cstdint>
 
+// ?2026 同步输出：后端暂停取快照、D2D 暂停 Present 的共同上限（渲染设计第 4 节）
+#ifndef ITREN_SYNC_TIMEOUT_MS
+#define ITREN_SYNC_TIMEOUT_MS 150
+#endif
+
 namespace itren {
 
 struct FrameLayout {

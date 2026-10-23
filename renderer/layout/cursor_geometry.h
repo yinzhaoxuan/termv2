@@ -1,5 +1,5 @@
 /* 平台无关的光标几何（DECSCUSR）、闪烁与 OSC 8 链接悬停下划线（DESIGN-T06）。D2D 只按这里的矩形画。
-   缺口：itcore.h 目前没有光标形状访问器，光标样式由调用方传入 DECSCUSR Ps（待架构师补 itcore_snapshot_cursor_style）。 */
+   光标样式来自 itcore_snapshot_cursor_style（DECSCUSR Ps），D2DRenderer::present_frame 经 decscusr_to_style 使用。 */
 #pragma once
 #include "grid_metrics.h"
 #include "itcore.h"

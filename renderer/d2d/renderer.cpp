@@ -4,6 +4,10 @@
 #include "renderer.h"
 #include "cell_style.h"
 #include "frame_policy.h"
+#include "cursor_geometry.h"
+#include "glyph_cache.h"
+#include "ime_layout.h"
+#include <unordered_map>
 #include <vector>
 #include <cstring>
 #include <cstdio>
@@ -56,11 +60,47 @@ struct D2DRenderer::Impl {
     std::wstring family = L"Consolas";
     float size_pt = 12.f;
     std::vector<uint64_t> row_rev_cache;
+    std::unordered_map<std::wstring, float> advance[4];  // 字形 advance 缓存（按样式），字体变化时清空
+    int last_reverse = -1;
+    bool last_blink_on = true, had_blink = false;
+    bool last_cursor_on = true; int last_cursor_style = -1; bool last_focused = true;
 #endif
 };
 
 D2DRenderer::D2DRenderer(ISwapChainHost *host) : host_(host), impl_(std::make_unique<Impl>()) {}
 D2DRenderer::~D2DRenderer() { shutdown(); }
+
+#ifdef _WIN32
+static bool row_has_text(const itcore_snapshot *s, uint16_t row, uint16_t col) {
+    itcore_wrap w; uint64_t rr;
+    const itcore_cell *r = itcore_snapshot_row(s, row, &w, &rr);
+    return r && col < itcore_snapshot_columns(s) && r[col].grapheme_id && !(r[col].flags & ITCORE_CELL_CONTINUATION);
+}
+#endif
+// 预编辑 → ime_layout：widths 缺省时按码点粗估（CJK/全角 2 列）
+static std::vector<uint8_t> utf8_widths_estimate(const std::string &u) {
+    std::vector<uint8_t> w;
+    for (size_t i = 0; i < u.size();) {
+        unsigned char b = (unsigned char)u[i];
+        int n = b < 0x80 ? 1 : (b >> 5) == 6 ? 2 : (b >> 4) == 14 ? 3 : 4;
+        uint32_t cp = n == 1 ? b : (b & (0x7F >> n));
+        for (int k = 1; k < n && i + k < u.size(); ++k) cp = (cp << 6) | ((unsigned char)u[i + k] & 0x3F);
+        i += n;
+        if (cp == 0x200D || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0x300 && cp <= 0x36F)) continue;
+        bool wide = (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0xA4CF) || (cp >= 0xAC00 && cp <= 0xD7A3) ||
+                    (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFE30 && cp <= 0xFE4F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
+                    (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x1F300 && cp <= 0x1FAFF) || (cp >= 0x20000 && cp <= 0x3FFFD);
+        w.push_back(wide ? 2 : 1);
+    }
+    return w;
+}
+ImeLayout preedit_layout(const GridMetrics &m, const Preedit &p, uint16_t cols, uint16_t rows) {
+    auto widths = p.widths.empty() ? utf8_widths_estimate(p.utf8) : p.widths;
+    std::vector<ClauseAttr> attrs;
+    for (uint8_t a : p.attrs) attrs.push_back(ClauseAttr(a > 2 ? 0 : a));
+    size_t cur = p.cursor == SIZE_MAX ? widths.size() : std::min(p.cursor, widths.size());
+    return ime_layout(m, p.anchor_row, p.anchor_col, widths, attrs, cur, cols, rows);
+}
 
 #ifdef _WIN32
 namespace {
@@ -146,6 +186,7 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
     if (FAILED(hr)) return fail_hr("CreateTextFormat(regular)", hr);
     impl_->format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     impl_->formats[0] = impl_->format; impl_->format->AddRef();
+    for (auto &a : impl_->advance) a.clear();
     for (int i = 1; i < 4; ++i) {
         hr = impl_->dwrite->CreateTextFormat(impl_->family.c_str(), nullptr,
                                              (i & 1) ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
@@ -220,7 +261,11 @@ bool D2DRenderer::resize_surface() {
 GridMetrics::Rect D2DRenderer::caret_rect_px() const {
     uint16_t col = 0, row = 0; int vis = 0;
     if (snap_) itcore_snapshot_cursor(snap_, &col, &row, &vis);
-    if (!preedit_.utf8.empty()) { col = preedit_.anchor_col; row = preedit_.anchor_row; }
+    if (!preedit_.utf8.empty() && snap_) {
+        uint16_t cols = itcore_snapshot_columns(snap_), rows = itcore_snapshot_rows(snap_);
+        if (cols && rows) return preedit_layout(metrics_, preedit_, cols, rows).anchor;
+        col = preedit_.anchor_col; row = preedit_.anchor_row;
+    }
     return metrics_.cell_rect(col, row, 1);
 }
 
@@ -259,12 +304,26 @@ bool D2DRenderer::present_frame() {
         I.dirty.invalidate();
     }
     bool full = L.layout_changed;
+    // DECSCNM 切换：默认色全部翻转 → 整屏重画
+    const int rev = itcore_snapshot_reverse_screen(snap_) ? 1 : 0;
+    if (rev != I.last_reverse) { full = true; I.last_reverse = rev; }
+    // SGR 5：闪烁相位翻转且上一帧画过闪烁格 → 整屏重画（闪烁格稀少，行级跟踪不值）
+    const uint64_t now = now_ms_;
+    const bool blink_on = ((now / 1000) % 2) == 0;
+    if (blink_on != I.last_blink_on) { if (I.had_blink) full = true; I.last_blink_on = blink_on; }
     if (full) I.dirty.invalidate();
     std::vector<uint16_t> rows = I.dirty.collect(snap_);  // 评审第 1 点：只画脏行
 
     uint16_t cc = 0, cr = 0; int vis = 0;
     itcore_snapshot_cursor(snap_, &cc, &cr, &vis);
-    bool overlay_changed = cc != I.last_cc || cr != I.last_cr || vis != I.last_vis || preedit_.utf8 != I.last_preedit;
+    int cstyle_ps = 0; itcore_snapshot_cursor_style(snap_, &cstyle_ps);
+    const CursorStyle cstyle = decscusr_to_style(cstyle_ps);
+    const uint64_t since_input = now >= last_input_ms_ ? now - last_input_ms_ : 0;
+    const bool cursor_on = cursor_visible(cstyle, focused_, since_input);
+    bool overlay_changed = cc != I.last_cc || cr != I.last_cr || vis != I.last_vis || preedit_.utf8 != I.last_preedit ||
+                           cursor_on != I.last_cursor_on || cstyle_ps != I.last_cursor_style || focused_ != I.last_focused;
+    animating_ = (vis && cstyle.blink && focused_) || I.had_blink;
+    if (full) I.had_blink = false;
     if (!full && rows.empty() && !overlay_changed) return false;
 
     I.d2d->SetTarget(I.canvas);
@@ -287,11 +346,11 @@ bool D2DRenderer::present_frame() {
         uint16_t x = 0;
         while (x < cols) {
             if (cells[x].flags & ITCORE_CELL_CONTINUATION) { ++x; continue; }
-            uint32_t bg = resolve_cell(I.theme, cells[x]).bg;
+            uint32_t bg = resolve_cell(I.theme, cells[x], rev != 0).bg;
             uint16_t x1 = uint16_t(x + (cells[x].width ? cells[x].width : 1));
             while (x1 < cols) {
                 if (cells[x1].flags & ITCORE_CELL_CONTINUATION) { ++x1; continue; }
-                if (resolve_cell(I.theme, cells[x1]).bg != bg) break;
+                if (resolve_cell(I.theme, cells[x1], rev != 0).bg != bg) break;
                 x1 = uint16_t(x1 + (cells[x1].width ? cells[x1].width : 1));
             }
             if (x1 > cols) x1 = cols;
@@ -305,12 +364,14 @@ bool D2DRenderer::present_frame() {
         for (uint16_t col = 0; col < cols; ++col) {
             const itcore_cell &c = cells[col];
             if (c.flags & ITCORE_CELL_CONTINUATION) continue;
-            auto rcol = resolve_cell(I.theme, c);
+            auto rcol = resolve_cell(I.theme, c, rev != 0);
+            if (c.flags & ITREN_CELL_BLINK) I.had_blink = true;
+            const bool text_on = text_visible(c, now);
             auto st = text_style(c.flags, ITCORE_CELL_BOLD, ITCORE_CELL_ITALIC, ITCORE_CELL_UNDERLINE);
             uint8_t cw = c.width ? c.width : 1;
             auto rc = metrics_.cell_rect(col, y, cw);
             D2D1_RECT_F clip = D2D1::RectF(float(rc.x), float(rc.y), float(rc.x + rc.w), float(rc.y + rc.h));
-            if (c.grapheme_id) {
+            if (c.grapheme_id && text_on) {
                 size_t glen = 0;
                 const char *g = itcore_snapshot_grapheme(snap_, c.grapheme_id, &glen);
                 if (g && glen) {
@@ -318,9 +379,33 @@ bool D2DRenderer::present_frame() {
                     std::wstring ws(wlen, 0);
                     MultiByteToWideChar(CP_UTF8, 0, g, int(glen), ws.data(), wlen);
                     I.brush_fg->SetColor(rgb_f(rcol.fg));
+                    // fit_glyph：advance 超出格宽（回退字体/宽字形）时只缩不放、水平居中；advance 按样式缓存
+                    const int fi = st.format_index();
+                    float adv = 0.f;
+                    auto it = I.advance[fi].find(ws);
+                    if (it != I.advance[fi].end()) adv = it->second;
+                    else {
+                        IDWriteTextLayout *tl = nullptr;
+                        if (SUCCEEDED(I.dwrite->CreateTextLayout(ws.c_str(), UINT32(ws.size()), I.formats[fi], 1e4f, 1e4f, &tl)) && tl) {
+                            DWRITE_TEXT_METRICS tm{};
+                            if (SUCCEEDED(tl->GetMetrics(&tm))) adv = tm.widthIncludingTrailingWhitespace;
+                            tl->Release();
+                        }
+                        if (I.advance[fi].size() > 4096) I.advance[fi].clear();
+                        I.advance[fi].emplace(ws, adv);
+                    }
+                    GlyphFit gf = fit_glyph(adv, cw, float(metrics_.cell_w_px()));
                     I.d2d->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_ALIASED);
-                    I.d2d->DrawTextW(ws.c_str(), UINT32(ws.size()), I.formats[st.format_index()], clip, I.brush_fg,
-                                     D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+                    D2D1_MATRIX_3X2_F old; I.d2d->GetTransform(&old);
+                    if (gf.scale < 1.f) {
+                        I.d2d->SetTransform(D2D1::Matrix3x2F::Scale(gf.scale, 1.f, D2D1::Point2F(clip.left, clip.top)) *
+                                            D2D1::Matrix3x2F::Translation(gf.x_offset, 0.f) * old);
+                    }
+                    D2D1_RECT_F box = clip;
+                    if (gf.scale < 1.f) box.right = clip.left + adv + 1.f;
+                    I.d2d->DrawTextW(ws.c_str(), UINT32(ws.size()), I.formats[fi], box, I.brush_fg,
+                                     D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+                    I.d2d->SetTransform(old);
                     I.d2d->PopAxisAlignedClip();
                 }
             }
@@ -328,6 +413,11 @@ bool D2DRenderer::present_frame() {
                 float uy = clip.bottom - 1.5f;
                 I.brush_fg->SetColor(rgb_f(rcol.underline));
                 I.d2d->DrawLine(D2D1::Point2F(clip.left, uy), D2D1::Point2F(clip.right, uy), I.brush_fg, 1.f);
+            }
+            if ((c.flags & ITREN_CELL_STRIKE) && text_on) {
+                auto sr = strike_rect(metrics_, col, y, cw);
+                I.brush_fg->SetColor(rgb_f(rcol.fg));
+                I.d2d->FillRectangle(D2D1::RectF(float(sr.x), float(sr.y), float(sr.x + sr.w), float(sr.y + sr.h)), I.brush_fg);
             }
         }
     }
@@ -339,26 +429,66 @@ bool D2DRenderer::present_frame() {
     I.d2d->BeginDraw();
     I.d2d->DrawImage(I.canvas);
     if (!preedit_.utf8.empty()) {
-        auto rc = metrics_.cell_rect(preedit_.anchor_col, preedit_.anchor_row, 1);
+        // ime_layout：按 cluster 宽度逐格排布（满行折行），子句下划线 + 预编辑内光标
+        auto IL = preedit_layout(metrics_, preedit_, L.cols, L.rows);
         int wlen = MultiByteToWideChar(CP_UTF8, 0, preedit_.utf8.data(), int(preedit_.utf8.size()), nullptr, 0);
         std::wstring ws(wlen, 0);
         MultiByteToWideChar(CP_UTF8, 0, preedit_.utf8.data(), int(preedit_.utf8.size()), ws.data(), wlen);
-        D2D1_RECT_F r = D2D1::RectF(float(rc.x), float(rc.y), float(rc.x + rc.w * 8), float(rc.y + rc.h));
-        I.brush_bg->SetColor(rgb_f(theme_bg));
-        I.d2d->FillRectangle(r, I.brush_bg);
+        // 按码点切分为 cluster（与 widths 对齐；组合符并入前一 cluster）
+        std::vector<std::wstring> cl;
+        for (size_t i = 0; i < ws.size();) {
+            size_t n = (ws[i] >= 0xD800 && ws[i] <= 0xDBFF && i + 1 < ws.size()) ? 2 : 1;
+            uint32_t cp = n == 2 ? 0x10000 + ((ws[i] - 0xD800) << 10) + (ws[i + 1] - 0xDC00) : ws[i];
+            bool join = cp == 0x200D || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0x300 && cp <= 0x36F);
+            if (join && !cl.empty()) cl.back().append(ws, i, n); else cl.emplace_back(ws, i, n);
+            i += n;
+        }
         I.brush_fg->SetColor(D2D1::ColorF(D2D1::ColorF::Yellow));
-        I.d2d->DrawTextW(ws.c_str(), UINT32(ws.size()), I.formats[0], r, I.brush_fg);
-        I.d2d->DrawLine(D2D1::Point2F(r.left, r.bottom - 1), D2D1::Point2F(r.right, r.bottom - 1), I.brush_fg, 1.f);
-    }
-    if (vis && cc < L.cols && cr < L.rows) {
-        auto rc = metrics_.cell_rect(cc, cr, 1);
-        I.d2d->FillRectangle(D2D1::RectF(float(rc.x), float(rc.y), float(rc.x + 2), float(rc.y + rc.h)), I.brush_caret);
+        for (size_t i = 0; i < IL.cells.size() && i < cl.size(); ++i) {
+            const auto &pc = IL.cells[i];
+            if (pc.row >= L.rows) break;
+            auto rc = metrics_.cell_rect(pc.col, pc.row, pc.width);
+            D2D1_RECT_F r = D2D1::RectF(float(rc.x), float(rc.y), float(rc.x + rc.w), float(rc.y + rc.h));
+            I.brush_bg->SetColor(rgb_f(theme_bg));
+            I.d2d->FillRectangle(r, I.brush_bg);
+            I.d2d->DrawTextW(cl[i].c_str(), UINT32(cl[i].size()), I.formats[0], r, I.brush_fg,
+                             D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+        }
+        for (auto &u : IL.underlines)
+            I.d2d->FillRectangle(D2D1::RectF(float(u.x), float(u.y), float(u.x + u.w), float(u.y + u.h)), I.brush_fg);
+        auto &k = IL.caret;
+        I.d2d->FillRectangle(D2D1::RectF(float(k.x), float(k.y), float(k.x + k.w), float(k.y + k.h)), I.brush_caret);
+    } else if (vis && cursor_on && cc < L.cols && cr < L.rows) {
+        // DECSCUSR 形状；宽字符首格覆盖 2 格；失焦的块光标画空心框
+        bool wide = false;
+        itcore_wrap w; uint64_t rr;
+        if (const itcore_cell *row = itcore_snapshot_row(snap_, cr, &w, &rr)) wide = row[cc].width == 2 && cc + 1 < L.cols;
+        for (auto &q : cursor_rects(metrics_, cr, cc, cstyle, focused_, wide, metrics_.dpi_scale))
+            I.d2d->FillRectangle(D2D1::RectF(float(q.x), float(q.y), float(q.x + q.w), float(q.y + q.h)), I.brush_caret);
+        if (cursor_inverts_glyph(cstyle, focused_) && row_has_text(snap_, cr, cc)) {
+            const itcore_cell *row = itcore_snapshot_row(snap_, cr, &w, &rr);
+            const itcore_cell &c = row[cc];
+            size_t glen = 0;
+            const char *g = c.grapheme_id ? itcore_snapshot_grapheme(snap_, c.grapheme_id, &glen) : nullptr;
+            if (g && glen && text_visible(c, now)) {
+                int wl = MultiByteToWideChar(CP_UTF8, 0, g, int(glen), nullptr, 0);
+                std::wstring gs(wl, 0);
+                MultiByteToWideChar(CP_UTF8, 0, g, int(glen), gs.data(), wl);
+                auto rc = metrics_.cell_rect(cc, cr, wide ? 2 : 1);
+                D2D1_RECT_F r = D2D1::RectF(float(rc.x), float(rc.y), float(rc.x + rc.w), float(rc.y + rc.h));
+                auto st = text_style(c.flags, ITCORE_CELL_BOLD, ITCORE_CELL_ITALIC, ITCORE_CELL_UNDERLINE);
+                I.brush_fg->SetColor(rgb_f(resolve_cell(I.theme, c, rev != 0).bg));
+                I.d2d->DrawTextW(gs.c_str(), UINT32(gs.size()), I.formats[st.format_index()], r, I.brush_fg,
+                                 D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+            }
+        }
     }
     hr = I.d2d->EndDraw();
     if (is_lost(hr)) { device_lost_ = true; return false; }
     hr = I.swap->Present(1, 0);
     if (is_lost(hr)) { device_lost_ = true; return false; }
     I.last_cc = cc; I.last_cr = cr; I.last_vis = vis; I.last_preedit = preedit_.utf8;
+    I.last_cursor_on = cursor_on; I.last_cursor_style = cstyle_ps; I.last_focused = focused_;
     last_drawn_revision_ = itcore_snapshot_revision(snap_);
     return true;
 }
@@ -376,7 +506,11 @@ bool D2DRenderer::resize_surface() { return true; }
 GridMetrics::Rect D2DRenderer::caret_rect_px() const {
     uint16_t col = 0, row = 0; int vis = 0;
     if (snap_) itcore_snapshot_cursor(snap_, &col, &row, &vis);
-    if (!preedit_.utf8.empty()) { col = preedit_.anchor_col; row = preedit_.anchor_row; }
+    if (!preedit_.utf8.empty() && snap_) {
+        uint16_t cols = itcore_snapshot_columns(snap_), rows = itcore_snapshot_rows(snap_);
+        if (cols && rows) return preedit_layout(metrics_, preedit_, cols, rows).anchor;
+        col = preedit_.anchor_col; row = preedit_.anchor_row;
+    }
     return metrics_.cell_rect(col, row, 1);
 }
 bool D2DRenderer::present_frame() { return false; }

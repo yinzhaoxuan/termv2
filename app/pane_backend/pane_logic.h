@@ -193,4 +193,35 @@ inline WheelRoute routeWheel(bool mouseMode, bool altScreen) {
 // LNM 置位时补成 CR LF。只匹配整条输入恰为 Enter 的情况，避免改写其它按键序列 / 文本里的 CR。
 std::string applyNewlineMode(std::string_view in, bool lnm);
 
+// ?2026 同步输出期间暂停取快照：打开后最多 timeoutMs（ITREN_SYNC_TIMEOUT_MS）出一帧兜底；
+// 关闭（含 DECSTR/RIS 清掉）的那一刻立即允许出帧。
+class SyncGate {
+public:
+    explicit SyncGate(uint64_t timeoutMs) : timeout_(timeoutMs) {}
+    // 返回 true 表示现在可以取快照并 present
+    bool allow(bool syncOn, uint64_t nowMs) {
+        if (!syncOn) { since_.reset(); return true; }
+        if (!since_) { since_ = nowMs; return false; }
+        if (nowMs - *since_ >= timeout_) { since_ = nowMs; return true; }  // 兜底帧，并重新计时
+        return false;
+    }
+    bool holding() const { return since_.has_value(); }
+private:
+    uint64_t timeout_;
+    std::optional<uint64_t> since_;
+};
+
+// ?1004 焦点事件：模式置位且焦点状态变化时返回 CSI I / CSI O；否则空
+class FocusReporter {
+public:
+    std::string update(bool modeSet, bool focused) {
+        if (last_ && *last_ == focused) return {};
+        last_ = focused;
+        if (!modeSet) return {};
+        return focused ? "\x1b[I" : "\x1b[O";
+    }
+private:
+    std::optional<bool> last_;
+};
+
 }  // namespace it2app

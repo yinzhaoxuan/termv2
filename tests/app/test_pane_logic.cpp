@@ -1,5 +1,6 @@
 // T08 PaneBackend 平台无关逻辑单测（PANE-01）
 #include "pane_logic.h"
+#include "frame_policy.h"
 #include <atomic>
 #include <climits>
 #include <chrono>
@@ -288,12 +289,31 @@ static void keys() {
     CHECK(it2app::kPrevAttemptTextBytes == 8u * 1024u * 1024u);
 }
 
+static void syncfocus() {
+    it2app::SyncGate g(ITREN_SYNC_TIMEOUT_MS);
+    CHECK(ITREN_SYNC_TIMEOUT_MS == 150);
+    CHECK(g.allow(false, 0));
+    CHECK(!g.allow(true, 1000));          // 打开：暂停
+    CHECK(!g.allow(true, 1149));
+    CHECK(g.allow(true, 1150));           // 150ms 兜底帧
+    CHECK(!g.allow(true, 1200));          // 重新计时
+    CHECK(g.allow(false, 1201));          // 关闭（含软复位）立即出帧
+    CHECK(!g.holding());
+    it2app::FocusReporter f;
+    CHECK(f.update(false, true).empty());
+    CHECK(f.update(true, true).empty());  // 状态未变
+    CHECK(f.update(true, false) == "\x1b[O");
+    CHECK(f.update(true, true) == "\x1b[I");
+    CHECK(f.update(false, false).empty());
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "churn") churn();
     else if (w == "viewport") viewport();
     else if (w == "keys") keys();
-    else { limits(); grid(); queue(); closer(); drag(); if (w == "all") { churn(); viewport(); keys(); } }
+    else if (w == "sync") syncfocus();
+    else { limits(); grid(); queue(); closer(); drag(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

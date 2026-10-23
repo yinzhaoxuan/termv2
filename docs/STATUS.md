@@ -115,7 +115,9 @@
 - CSI t：18t 恒应答 `8;rows;cols`；14t/16t 仅在后端调用 `itcore_set_cell_pixel_size` 后应答；22/23t 窗口/图标标题栈（各上限 10，23t 重发标题事件）；21t/20t 回报标题有注入风险，不实现；8t 等改窗口尺寸忽略（CORE-20）。
 - OSC 0/1/2：新事件 `ITCORE_EV_ICON_TITLE = 6`（OSC 0 同时发 TITLE 与 ICON_TITLE；ABI-01 已更新）。
 - 配置色：`itcore_colors` + `itcore_default_colors`（xterm 调色板）/`itcore_set_colors`/`itcore_snapshot_colors`；OSC 4、10/11/12 设置与 `?` 查询（应答 `rgb:rrrr/gggg/bbbb`，统一以 ST 结尾），OSC 104、110/111/112 恢复配置；变更全行失效 + RENDER_INVALIDATED；RIS 恢复配置色并清标题栈（CORE-21）。
-- 待办（第 3 批）：后端 ?1004 焦点事件、?2026 暂停快照（≤1 s）、GridMetrics → `itcore_set_cell_pixel_size`、配置色下发、D2D 接 cursor_style / reverse_screen / glyph cache。
+- 第 3 批（已完成）：?1004 焦点事件（FocusReporter，CSI I/O）；?2026 暂停快照（SyncGate，超时 ITREN_SYNC_TIMEOUT_MS = 150 ms 兜底出帧，DECSTR/RIS 关闭后立即出帧）；D2D 接 cursor_style（DECSCUSR 形状/闪烁/失焦空心框/块光标反色）、reverse_screen（DECSCNM 整屏重画）、SGR 5/9（text_visible / strike_rect）、fit_glyph（advance 缓存，只缩不放）、ime_layout（预编辑逐格排布、子句下划线、候选窗锚点）、selection_hit（拖选宽字符吸附、按越界距离自动滚动）。
+- 未接：GlyphCache 图集与 plan_runs 多 face 回退——当前走 DrawText（DWrite 自带回退），需改为 glyph run 路径后再接，留第 4 批。
+- 提案（第 4 批）：运行时改字体/字号。`GridMetrics::from_font(实测 advance/行高)` 取代硬编码 7.2×10 → on_config 时：重建 DWrite 格式并清 advance 缓存 → 重算 GridMetrics → `itcore_set_cell_pixel_size` → grid_size 得新列行 → ResizeTracker 出 generation → `itcore_resize(gen)` → `transport.resize(gen)` → 渲染按 expected generation 保持旧布局直到快照对齐。DPI 变化走同一路径。
 
 ### 接口问题（未改头文件，待 UI 定夺）
 8. T09：UI 无“启动并连接”按钮、多地址选择器、“正在解析/等待 VM 地址”状态；目前分别以 Failed 文本（VmNotRunning / AddressAmbiguous 含候选列表）和 Starting 状态表达。

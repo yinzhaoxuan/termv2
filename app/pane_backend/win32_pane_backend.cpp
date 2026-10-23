@@ -9,8 +9,11 @@
 #include "pane_logic.h"
 #include "hwnd_swap_host.h"
 #include "renderer.h"
+#include "frame_policy.h"
 #include "grid_metrics.h"
+#include "selection_hit.h"
 #include "itcore.h"
+#include <algorithm>
 #include <climits>
 #include <windows.h>
 #include <windowsx.h>
@@ -164,6 +167,9 @@ private:
     std::unique_ptr<iterm_app::HwndSwapChainHost> host_;
     std::unique_ptr<itren::D2DRenderer> renderer_;
     itren::GridMetrics metrics_{};
+    SyncGate sync_{ITREN_SYNC_TIMEOUT_MS};   // ?2026 暂停快照（与 D2D 共用常量）
+    FocusReporter focusRep_;                 // ?1004
+    void reportFocus();
     itcore_core *core_ = nullptr;
     itcore_snapshot *snap_ = nullptr;
     // 同一对象也挂在 shared_->transport：关闭线程经共享状态持有，阻塞关闭与析构都在那条线程上完成
@@ -472,11 +478,15 @@ void Win32PaneBackend::pump() {
 
 void Win32PaneBackend::present() {
     if (!renderer_ || !core_) return;
+    // ?2026：同步输出期间不取快照，超过 ITREN_SYNC_TIMEOUT_MS 兜底出一帧；关闭（含 DECSTR/RIS）后立即出帧
+    if (!sync_.allow(itcore_mode_query(core_, 2026) == ITCORE_MODE_SET, nowMs())) return;
     releaseSnap();
     snap_ = itcore_acquire_snapshot(core_, vp_.firstRow(), resize_.dims().rows);  // 视口偏移：负 first_row 显示历史
     if (!snap_) return;
     renderer_->set_expected_generation(resize_.generation());
     renderer_->set_snapshot(snap_);
+    renderer_->set_focused(focused_);
+    renderer_->set_clock(nowMs());
     renderer_->present_frame();  // 设备丢失在 present_frame 内 recover_device
 }
 
@@ -515,12 +525,22 @@ void Win32PaneBackend::setFocused(bool f) {
     HWND h = hwnd_;
     if (!h) return;
     if (f && GetFocus() != h) SetFocus(h);
-    present();  // 光标样式随焦点变化（渲染器目前未区分，留作实机项）
+    reportFocus();
+    present();  // 失焦：块光标画空心框、停止闪烁
+}
+
+void Win32PaneBackend::reportFocus() {
+    // ?1004：焦点变化时向程序发 CSI I / CSI O（不回到底部，不经 LNM）
+    const bool on = core_ && itcore_mode_query(core_, 1004) == ITCORE_MODE_SET;
+    auto bytes = focusRep_.update(on, focused_);
+    if (bytes.empty() || !transport_ || closing_ || finished_) return;
+    transport_->input(bytes);
 }
 
 void Win32PaneBackend::sendInput(std::string_view utf8) {
     if (!transport_ || closing_ || finished_ || utf8.empty()) return;
     scrollToBottom();  // 用户一有输入就回到底部
+    if (renderer_) renderer_->note_input(nowMs());  // 输入后光标常亮一个周期
     const bool lnm = core_ && itcore_ansi_mode_query(core_, 20) == ITCORE_MODE_SET;
     const std::string bytes = applyNewlineMode(utf8, lnm);  // LNM：UI 翻译的 Enter 补 LF
     auto r = transport_->input(bytes);
@@ -793,10 +813,11 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
         return;
     }
     if (msg == WM_MOUSEMOVE && drag_.pressed()) {
-        RECT rc{};
-        GetClientRect(hwnd_, &rc);
-        dragEdge_ = y < 0 ? -1 : y >= rc.bottom ? 1 : 0;
-        dragCol_ = c;
+        // selection_hit：宽字符尾格吸附到首格；越出网格上/下边缘时按距离给出自动滚动速度
+        auto sh = itren::selection_hit(metrics_, x, y, cols, rows, snap_);
+        dragEdge_ = sh.autoscroll_dir * std::max(1, sh.autoscroll_lines);
+        dragCol_ = sh.col;
+        if (!sh.autoscroll_dir) { c = sh.col; r = sh.row; cell = DragSelect::Cell{c, r}; }
     }
     auto startSel = [&] {
         auto p = drag_.pressCell();
@@ -835,7 +856,7 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
 void Win32PaneBackend::autoScrollTick() {
     if (!dragEdge_ || !drag_.pressed() || !core_ || !dragSelStarted_) return;
     uint16_t rows = resize_.dims().rows;
-    scrollViewport(dragEdge_ < 0 ? -1 : 1);
+    scrollViewport(dragEdge_);  // |dragEdge_| = 每节拍行数（selection_hit，封顶 10）
     uint16_t row = dragEdge_ < 0 ? 0 : uint16_t(rows - 1);
     if (itcore_selection_extend(core_, vp_.firstRow(), uint16_t(dragCol_), row)) selectionChanged();
 }
@@ -893,7 +914,7 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_PANE_WAKE: drainUi(); return 0;
     case WM_TIMER:
-        if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); }
+        if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present(); }
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -946,6 +967,20 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
                 std::wstring ws(size_t(nb / sizeof(wchar_t)), L'\0');
                 ImmGetCompositionStringW(imc, GCS_COMPSTR, ws.data(), nb);
                 pe.utf8 = toUtf8(ws);
+                // 子句属性（ATTR_INPUT/TARGET_CONVERTED/CONVERTED…）按 UTF-16 单元给出，折算到 cluster（跳过低代理）
+                LONG na = ImmGetCompositionStringW(imc, GCS_COMPATTR, nullptr, 0);
+                std::vector<uint8_t> raw(na > 0 ? size_t(na) : 0);
+                if (na > 0) ImmGetCompositionStringW(imc, GCS_COMPATTR, raw.data(), na);
+                LONG cur16 = ImmGetCompositionStringW(imc, GCS_CURSORPOS, nullptr, 0);
+                size_t idx = 0;
+                pe.cursor = SIZE_MAX;
+                for (size_t i = 0; i < ws.size(); ++i) {
+                    if (ws[i] >= 0xDC00 && ws[i] <= 0xDFFF) continue;
+                    if (LONG(i) == cur16) pe.cursor = idx;
+                    uint8_t a = i < raw.size() ? raw[i] : 0;
+                    pe.attrs.push_back(a == ATTR_TARGET_CONVERTED || a == ATTR_TARGET_NOTCONVERTED ? 1 : a == ATTR_CONVERTED ? 2 : 0);
+                    ++idx;
+                }
             }
             if (snap_) { int vis = 0; itcore_snapshot_cursor(snap_, &pe.anchor_col, &pe.anchor_row, &vis); }
             if (renderer_) renderer_->set_preedit(pe);
@@ -984,6 +1019,7 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
         break;
     case WM_SETFOCUS: {
         focused_ = true;
+        reportFocus();
         auto cr = caretRect();
         if (HIMC imc = ImmGetContext(h)) {
             COMPOSITIONFORM cf{};
@@ -994,7 +1030,7 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
         }
         return 0;
     }
-    case WM_KILLFOCUS: focused_ = false; return 0;
+    case WM_KILLFOCUS: focused_ = false; reportFocus(); present(); return 0;
     case WM_DESTROY:
         KillTimer(h, kTickTimer);
         hwnd_ = nullptr;  // 之后的 post 不再 PostMessage
