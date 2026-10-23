@@ -2,6 +2,7 @@
 // 第 12.3「点击重连」：每次重连新建 Session 并增加 attempt ID；
 // 每窗格最多保留一个旧 attempt 的只读文本（受第 15.4 节预算限制）。
 #include <cstddef>
+#include "uishell/limits.h"
 #include <optional>
 #include <string>
 
@@ -14,7 +15,8 @@ struct OldAttempt {
 
 class PaneAttempts {
  public:
-  explicit PaneAttempts(size_t oldTextBudgetBytes = 8u << 20) : budget_(oldTextBudgetBytes) {}
+  explicit PaneAttempts(size_t oldTextBudgetBytes = uishell::kPrevAttemptTextBytes) : budget_(oldTextBudgetBytes) {}
+  size_t budget() const { return budget_; }
   int attemptId() const { return attempt_; }
   // 点击重连：当前 attempt 的输出转为只读旧文本（替换更早的），返回新 attempt ID
   int reconnect(std::string currentOutput);
