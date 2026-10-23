@@ -16,14 +16,17 @@ namespace itren {
 struct Preedit {
     std::string utf8;       // 本地预编辑，不进快照
     uint16_t anchor_col = 0, anchor_row = 0;
-    std::vector<uint8_t> widths;   // 每个 cluster 的列宽（1/2）；空则按核心 itcore_text_clusters
+    std::vector<uint8_t> widths;   // 每个 cluster 的列宽（1/2），由 fill_preedit_clusters 按核心当前屏幕填
+    std::vector<uint32_t> byte_lens;  // 每个 cluster 的 UTF-8 字节数（与 widths 同长）；空则按码点逐个切
     std::vector<uint8_t> attrs;    // ClauseAttr；可短于 widths
     size_t cursor = SIZE_MAX;      // 预编辑内光标（cluster 下标）；SIZE_MAX = 末尾
 };
 
-// 预编辑各簇列宽（Preedit::widths 为空时按核心 itcore_text_clusters）与簇的 UTF-8 切分
+// 按核心 c 的当前屏幕（主/备用屏 VS16 规则不同）填 widths / byte_lens（itcore_text_clusters）
+void fill_preedit_clusters(Preedit &p, const itcore_core *c);
+// 预编辑各簇列宽与 UTF-8 切分；widths/byte_lens 为空时退回每码点一簇、宽 1
 std::vector<uint8_t> preedit_widths(const Preedit &p);
-std::vector<std::string> preedit_clusters(const std::string &utf8);
+std::vector<std::string> preedit_clusters(const Preedit &p);
 // 预编辑几何（下划线 / 内部光标 / 候选窗锚点），平台无关
 ImeLayout preedit_layout(const GridMetrics &m, const Preedit &p, uint16_t cols, uint16_t rows);
 

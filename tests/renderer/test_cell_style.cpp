@@ -64,6 +64,31 @@ int main() {
     br.set(2, true); br.resize(6); assert(!br.any());  // 尺寸变化清空
     br.set(9, true); assert(!br.any());               // 越界忽略
   }
+  // BLINK-03：present_frame 的规划路径（blink_frame_rows + blink_note_row）：闪烁行滚走后原位置不再闪
+  {
+    auto *bs = itmock_snapshot_from_utf8("a\nb\nc\nd\ne", 9, 4, 5);
+    DirtyRows dd; BlinkRows br; bool last_on = true;
+    auto frame = [&](bool full, bool on) {  // 同 D2DRenderer::present_frame：规划 → 逐行重画并记闪烁
+      auto rows = blink_frame_rows(dd, br, last_on, bs, 5, full, on);
+      for (uint16_t y : rows) { itcore_wrap w; uint64_t rr; blink_note_row(br, y, itcore_snapshot_row(bs, y, &w, &rr), 4); }
+      return rows;
+    };
+    itmock_set_style(bs, 2, 0, ITREN_CELL_BLINK, 0, 0);
+    assert(frame(true, true).size() == 5 && br.rows() == std::vector<uint16_t>{2});
+    auto f = frame(false, false); assert(f == std::vector<uint16_t>{2});           // 相位翻转：只重画第 2 行
+    assert(frame(false, false).empty());                                            // 同相位无变化
+    // 上滚一行：闪烁内容从第 2 行移到第 1 行（两行 revision 都变）
+    itmock_set_style(bs, 2, 0, 0, 0, 0); itmock_set_style(bs, 1, 0, ITREN_CELL_BLINK, 0, 0);
+    f = frame(false, false); assert(f.size() == 2 && br.rows() == std::vector<uint16_t>{1});
+    f = frame(false, true); assert(f == std::vector<uint16_t>{1});                  // 原位置（第 2 行）不再随相位重画
+    // 再滚走：闪烁全部离开屏幕 → 不再标脏，any()=false（停 animating_）
+    itmock_set_style(bs, 1, 0, 0, 0, 0);
+    f = frame(false, true); assert(f == std::vector<uint16_t>{1} && !br.any());
+    assert(frame(false, false).empty() && frame(false, true).empty());
+    // 布局外的行（cells 为空）视为无闪烁
+    br.resize(5); br.set(4, true); blink_note_row(br, 4, nullptr, 4); assert(!br.any());
+    itcore_snapshot_release(bs);
+  }
   // BLINK-02：下划线随闪烁隐藏；位置/粗细按度量与 DPI（贴底留 1 逻辑像素）
   {
     itcore_cell u{}; u.flags = ITCORE_CELL_UNDERLINE | ITREN_CELL_BLINK;

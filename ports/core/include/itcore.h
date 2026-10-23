@@ -143,11 +143,16 @@ itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t dec_private_m
 /* ?2026 同步输出由开变关的累计次数（?2026l、DECSTR、RIS 各计一次；只增不减）。
    后端在一批 feed 之后比较：计数变化说明本批内有同步结束（即使批尾又重新打开），应出一帧。 */
 uint64_t itcore_sync_end_count(const itcore_core *c);
-/* 按核心的字素簇与列宽规则（同 itcore_feed 主屏：组合/ZWJ+Pictographic/区域指示符对并入前簇，
-   Default_Ignorable 丢弃，VS16 与肤色修饰把窄 emoji 扩为 2，零宽基字按 1）切分 UTF-8 文本。
-   widths[i]（1/2）与 byte_lens[i]（该簇 UTF-8 字节数，含丢弃的可忽略码点）各可为 NULL；
-   返回簇总数（可大于 cap，只写前 cap 个）。不依赖 itcore_core，任意线程可调。供 IME 预编辑宽度用。 */
-size_t itcore_text_clusters(const char *utf8, size_t length, uint8_t *widths, uint32_t *byte_lens, size_t cap);
+/* 按核心 itcore_feed 在 c 的当前屏幕上的字素簇与列宽规则切分 UTF-8 文本（IME 预编辑宽度用）：
+   组合/ZWJ+Pictographic/区域指示符对并入前簇，Default_Ignorable 不占格，零宽基字按 1；
+   肤色修饰把窄 emoji 扩为 2；VS16 只在主屏扩宽（备用屏不扩，同 screen.cpp 写网格）。
+   屏幕状态从 c 读取，调用方不传；c 为 NULL 返回 0。与 itcore_feed 同线程调用。
+   widths[i]（1/2）与 byte_lens[i]（该簇 UTF-8 字节数，含并入的可忽略码点）各可为 NULL；
+   返回簇总数（可大于 cap，只写前 cap 个）。与写网格的差异：
+   - 一个簇不像写网格那样限制在 32 个码点以内（超长组合序列在网格里会被截断/拆开）；
+   - 只含可忽略码点的输入返回 0 个簇（其字节不计入任何簇）；
+   - 输入不应含 C0 控制字符（网格里是控制功能，这里按宽 1 的普通簇计）。 */
+size_t itcore_text_clusters(const itcore_core *c, const char *utf8, size_t length, uint8_t *widths, uint32_t *byte_lens, size_t cap);
 /* ANSI 模式：覆盖 4（IRM）、20（LNM），其余 NOT_RECOGNIZED；core 为空返回 NOT_RECOGNIZED */
 itcore_mode_state itcore_ansi_mode_query(const itcore_core *c, uint32_t ansi_mode);
 

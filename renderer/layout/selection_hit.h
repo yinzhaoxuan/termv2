@@ -73,9 +73,39 @@ inline uint16_t drag_endpoint_col(const SelHit &h, bool forward, uint16_t cols) 
   if (!cols) return 0;
   if (forward) {
     if (h.after) return std::min<uint16_t>(h.col, uint16_t(cols - 1));          // 宽字符取首格
-    return uint16_t(h.boundary > 0 ? std::min<int>(h.boundary - 1, cols - 1) : 0);
+    return uint16_t(h.boundary > 0 ? std::min<int>(h.boundary - 1, cols - 1) : 0);  // boundary=0 的空选区见 drag_end
   }
   return uint16_t(std::min<int>(h.boundary, cols - 1));
+}
+
+// 拖动时一次鼠标移动的选区终点（SEL-01，后端 WM_MOUSEMOVE 与自动滚动共用）。
+// 方向：自动滚动按滚动方向；不同行按行；同一行按 boundary 与按下点 boundary 比较（在按下的格内
+// 左右来回不会被误判成反向）。empty：终点与按下点重合（同行同 boundary）或向前拖到首行第 0 列左边界，
+// 此时不应有选区。forward 且 boundary=0 落在下一行行首左半：终点为上一行末列（不含该行第 0 列）。
+struct DragEnd {
+  bool empty = true;
+  bool forward = true;
+  uint16_t col = 0, row = 0;   // itcore_selection_extend 的含端点格（empty 时无意义）
+  int edge = 0;                // 自动滚动：方向 × 每节拍行数（≥1），0 不滚
+};
+inline DragEnd drag_end(const SelHit &h, uint16_t press_row, uint16_t press_boundary, uint16_t cols) {
+  DragEnd d;
+  d.row = h.row;
+  d.edge = h.autoscroll_dir * std::max(1, h.autoscroll_lines);
+  if (!cols) return d;
+  if (h.autoscroll_dir) d.forward = h.autoscroll_dir > 0;
+  else if (h.row != press_row) d.forward = h.row > press_row;
+  else if (h.boundary != press_boundary) d.forward = h.boundary > press_boundary;
+  else return d;  // 同行同边界：空选区
+  if (d.forward) {
+    if (h.after) { d.col = std::min<uint16_t>(h.col, uint16_t(cols - 1)); d.empty = false; return d; }
+    if (h.boundary > 0) { d.col = uint16_t(std::min<int>(h.boundary - 1, cols - 1)); d.empty = false; return d; }
+    if (h.row > 0) { d.row = uint16_t(h.row - 1); d.col = uint16_t(cols - 1); d.empty = false; }
+    return d;  // 首行第 0 列左边界：空
+  }
+  d.col = uint16_t(std::min<int>(h.boundary, cols - 1));
+  d.empty = false;
+  return d;
 }
 
 struct SelSpan { uint16_t row, c0, c1; };  // [c0,c1)

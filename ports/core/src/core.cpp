@@ -345,8 +345,9 @@ itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t mode) {
     if (!c || !c->screen || mode > 0x7fffffffu) return ITCORE_MODE_NOT_RECOGNIZED;
     return static_cast<itcore_mode_state>(c->screen->dec_mode_state(int(mode)));
 }
-size_t itcore_text_clusters(const char *utf8, size_t length, uint8_t *widths, uint32_t *byte_lens, size_t cap) {
-    if (!utf8) return 0;
+size_t itcore_text_clusters(const itcore_core *c, const char *utf8, size_t length, uint8_t *widths, uint32_t *byte_lens, size_t cap) {
+    if (!c || !c->screen || !utf8) return 0;
+    const bool alt = c->screen->on_alt();  // 备用屏 VS16 不扩宽（screen.cpp 写网格同规则）
     const uint8_t *p = reinterpret_cast<const uint8_t *>(utf8);
     size_t n = 0, i = 0;
     uint32_t last_cp = 0, base_cp = 0; int cps = 0; uint8_t w = 0; uint32_t bytes = 0;
@@ -364,7 +365,7 @@ size_t itcore_text_clusters(const char *utf8, size_t length, uint8_t *widths, ui
         bool join = cps > 0 && (itcore::ucd::is_combining(cp) || (last_cp == 0x200D && itcore::ucd::is_ext_pict(cp)) ||
                                 (itcore::ucd::is_regional_indicator(cp) && itcore::ucd::is_regional_indicator(base_cp) && cps == 1));
         if (join) {
-            if (w == 1 && ((cp == 0xFE0F && itcore::ucd::is_vs16_base(base_cp)) ||
+            if (w == 1 && ((cp == 0xFE0F && !alt && itcore::ucd::is_vs16_base(base_cp)) ||
                            (itcore::ucd::is_modifier(cp) && itcore::ucd::is_modifier_base(base_cp)))) w = 2;
             ++cps; last_cp = cp; bytes += uint32_t(adv);
             continue;

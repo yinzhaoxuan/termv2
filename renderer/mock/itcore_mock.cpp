@@ -110,7 +110,7 @@ extern "C" int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t id, 
 }
 
 // 模拟版字素簇：ZWJ/VS/组合符号（U+0300–036F）并入前簇，宽度用简化表；正式规则见核心 itcore_text_clusters
-extern "C" size_t itcore_text_clusters(const char *utf8, size_t length, uint8_t *widths, uint32_t *byte_lens, size_t cap) {
+extern "C" size_t itcore_text_clusters(const itcore_core *, const char *utf8, size_t length, uint8_t *widths, uint32_t *byte_lens, size_t cap) {
   if (!utf8) return 0;
   auto *p = reinterpret_cast<const unsigned char *>(utf8), *e = p + length;
   size_t n = 0; uint32_t last = 0;

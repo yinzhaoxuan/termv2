@@ -45,8 +45,11 @@ int main() {
   assert(rc.y == m.cell_rect(3, 1, 1).y);
   pe.utf8 = "测试"; r.set_preedit(pe);
   rc = r.caret_rect_px(); assert(rc.x == m.cell_rect(3, 1, 1).x);
-  // 预编辑宽度按 itcore_text_clusters（此处链接 mock）
-  auto pw = itren::preedit_widths(pe); assert(pw.size() == 2 && pw[0] == 2 && pw[1] == 2);
+  // 预编辑宽度：未填时每码点宽 1；fill_preedit_clusters 按 itcore_text_clusters（此处链接 mock）
+  auto pw = itren::preedit_widths(pe); assert(pw.size() == 2 && pw[0] == 1);
+  itren::fill_preedit_clusters(pe, nullptr);
+  pw = itren::preedit_widths(pe); assert(pw.size() == 2 && pw[0] == 2 && pw[1] == 2);
+  auto pc = itren::preedit_clusters(pe); assert(pc.size() == 2 && pc[0] == "\xE6\xB5\x8B");
   itcore_snapshot_release(s);
   r.shutdown();
   std::puts("ok");

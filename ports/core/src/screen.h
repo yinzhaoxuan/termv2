@@ -242,6 +242,7 @@ public:
     // 应用解析器 Token；可能产生应答字节（写入 reply）。
     void apply(const Token &t, std::string *reply);
     Grid &grid() { return modes_.alt ? alt_ : main_; }
+    bool on_alt() const { return modes_.alt; }
     const Grid &grid() const { return modes_.alt ? alt_ : main_; }
     Scrollback &scrollback() { return scrollback_; }
     const Scrollback &scrollback() const { return scrollback_; }

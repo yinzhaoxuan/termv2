@@ -98,6 +98,25 @@ int main() {
     // 网格内：宽字符右半前向取首格
     h = selection_hit_autoscroll(m, 4 + 8 + 12, 4 + 2, 10, 5, s2);
     assert(!h.autoscroll_dir && h.after && drag_endpoint_col(h, true, 10) == 1);
+    // drag_end（后端 WM_MOUSEMOVE 用的纯函数）：按下在第 3 列（“b”）左半，boundary=3
+    auto press = selection_hit(m, 4 + 3 * 8 + 2, 4 + 2, 10, 5, s2); assert(press.boundary == 3);
+    auto at = [&](int px, int py) { return selection_hit_autoscroll(m, px, py, 10, 5, s2); };
+    // 在按下的格内往右半拖：前向，含第 3 列
+    auto d = drag_end(at(4 + 3 * 8 + 6, 6), 0, press.boundary, 10); assert(!d.empty && d.forward && d.col == 3);
+    // 再拖回同一格左半：不是反向，是空选区
+    d = drag_end(at(4 + 3 * 8 + 1, 6), 0, press.boundary, 10); assert(d.empty);
+    // 拖到左边“中”的右半：boundary 仍为 3（与按下相同）→ 空，而不是反向
+    d = drag_end(at(4 + 8 + 12, 6), 0, press.boundary, 10); assert(d.empty);
+    // “中”左半：反向，含“中”首格
+    d = drag_end(at(4 + 8 + 2, 6), 0, press.boundary, 10); assert(!d.forward && d.col == 1);
+    // 向右拖到下一行第 0 列左半（boundary=0）：前向，终点为上一行末列，不含第 0 列
+    d = drag_end(at(4 + 1, 4 + 16 + 2), 0, press.boundary, 10); assert(!d.empty && d.forward && d.row == 0 && d.col == 9);
+    // 按在首行第 0 列左边界，向前拖到同一边界：空
+    d = drag_end(at(4 + 1, 6), 0, 0, 10); assert(d.empty);
+    // 自动滚动：方向按滚动方向，edge = 方向 × 行数；列按网格内同一 x
+    d = drag_end(at(4 + 3 * 8 + 6, 1000), 0, press.boundary, 10); assert(!d.empty && d.forward && d.edge >= 1 && d.row == 4 && d.col == 3);
+    d = drag_end(at(4 + 8 + 2, -40), 3, press.boundary, 10); assert(!d.empty && !d.forward && d.edge <= -1 && d.row == 0 && d.col == 1);
+    assert(drag_end(at(4 + 1, 6), 0, 3, 0).empty);  // cols=0
     itcore_snapshot_release(s2);
   }
   std::puts("selection_ime ok");

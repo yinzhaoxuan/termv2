@@ -130,12 +130,31 @@ class DirtyRows {
     }
     return out;
   }
-  void invalidate() { rev_.clear(); }
-  void mark(uint16_t row) { if (row < rev_.size()) rev_[row] = UINT64_MAX; }  // 单行强制重画（闪烁相位）  // 设备丢失 / DPI / 字体变化
+  void invalidate() { rev_.clear(); }  // 设备丢失 / DPI / 字体变化
+  void mark(uint16_t row) { if (row < rev_.size()) rev_[row] = UINT64_MAX; }  // 单行强制重画（闪烁相位）
  private:
   std::vector<uint64_t> rev_;
   uint64_t gen_ = UINT64_MAX, epoch_ = UINT64_MAX;
   uint16_t cols_ = 0;
 };
+
+// present_frame 的闪烁/脏行规划（BLINK-03）。full：整屏重画（清闪烁行表）；否则相位翻转把
+// 闪烁行表里的行标脏，再按行 revision 收集。滚动后行 revision 变了的行会被重画，重画时
+// blink_note_row 按该行的新内容重设闪烁标记——闪烁行滚走后原位置不再标脏。
+inline std::vector<uint16_t> blink_frame_rows(DirtyRows &dirty, BlinkRows &blink, bool &last_blink_on,
+                                              const itcore_snapshot *s, uint16_t rows, bool full, bool blink_on) {
+  blink.resize(rows);
+  if (full) { dirty.invalidate(); blink.clear(); }
+  else if (blink_on != last_blink_on) for (uint16_t y : blink.rows()) dirty.mark(y);
+  last_blink_on = blink_on;
+  return dirty.collect(s);
+}
+// 重画第 y 行后更新闪烁行表；cells 为空（布局外）视为无闪烁
+inline void blink_note_row(BlinkRows &blink, uint16_t y, const itcore_cell *cells, uint16_t cols) {
+  bool any = false;
+  for (uint16_t x = 0; cells && x < cols && !any; ++x)
+    any = !(cells[x].flags & ITCORE_CELL_CONTINUATION) && (cells[x].flags & ITREN_CELL_BLINK);
+  blink.set(y, any);
+}
 
 }  // namespace itren

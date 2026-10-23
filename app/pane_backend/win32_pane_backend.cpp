@@ -187,6 +187,8 @@ private:
     ClickCounter clicks_;
     int clickUnit_ = 0;                 // 0 字符 / 1 词 / 2 行（双击 / 三击后拖动按单位扩展）
     int dragEdge_ = 0;                  // 拖选到上(-1)/下(+1)边缘外：tick 自动滚动
+    bool dragEmpty_ = false;            // 最近一次移动的 drag_end 为空选区
+    uint16_t pressBoundary_ = 0;        // 按下点的列边界（selection_hit.boundary），drag_end 判方向/空选区
     int dragCol_ = 0;                   // 自动滚动时端点列（按 boundary 与方向换算，右半算进选区）
     int wheelAccum_ = 0;
     mutable std::mutex statusMu_;
@@ -794,6 +796,8 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
     DragSelect::Cell cell{c, r};
     if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
         downCol_ = c; downRow_ = r; drag_.down(cell); dragSelStarted_ = false; dragEdge_ = 0;
+        dragEmpty_ = false;
+        pressBoundary_ = itren::selection_hit(metrics_, x, y, cols, rows, snap_).boundary;
         int n = clicks_.press(c, r, GetTickCount64(), GetDoubleClickTime());
         clickUnit_ = n >= 2 ? n - 1 : 0;
         if (clickUnit_) {
@@ -807,12 +811,17 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
         // selection_hit：宽字符尾格吸附到首格；越出网格上/下边缘时按距离给出自动滚动速度
         // 端点按 boundary 换算（右半算进选区）；自动滚动时列仍按同一 x 的网格内命中（SEL-01）
         auto sh = itren::selection_hit_autoscroll(metrics_, x, y, cols, rows, snap_);
-        dragEdge_ = sh.autoscroll_dir * std::max(1, sh.autoscroll_lines);
-        auto p = drag_.pressCell();
-        bool forward = sh.autoscroll_dir ? sh.autoscroll_dir > 0 : (sh.row != p.row ? sh.row > p.row : sh.boundary > p.col);
-        uint16_t ec = itren::drag_endpoint_col(sh, forward, cols);
-        dragCol_ = ec;
-        if (!sh.autoscroll_dir) { c = ec; r = sh.row; cell = DragSelect::Cell{c, r}; }
+        auto de = itren::drag_end(sh, uint16_t(drag_.pressCell().row), pressBoundary_, cols);
+        dragEdge_ = de.edge;
+        dragCol_ = de.col;
+        dragEmpty_ = de.empty && !clickUnit_;
+        if (dragEmpty_) {
+            // 终点回到按下点（或首行行首左边界）：没有选区
+            if (dragSelStarted_ && itcore_selection_active(core_)) { itcore_selection_clear(core_); selectionChanged(); }
+            dragSelStarted_ = false;
+            return;
+        }
+        if (!sh.autoscroll_dir) { c = de.col; r = de.row; cell = DragSelect::Cell{c, r}; }
     }
     auto startSel = [&] {
         auto p = drag_.pressCell();
@@ -831,9 +840,11 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
         selectionChanged();
         break;
     case DragSelect::Act::Extend:
+        if (!dragSelStarted_) startSel();  // 曾回到空选区（drag_end.empty）后重新拖出
         if (itcore_selection_extend(core_, first, c, r)) selectionChanged();
         break;
     case DragSelect::Act::Finish:
+        if (dragEmpty_) break;             // 松开时终点与按下点重合：无选区
         if (!dragSelStarted_) startSel();
         itcore_selection_extend(core_, first, c, r);
         selectionChanged();
@@ -977,6 +988,8 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
                     ++idx;
                 }
             }
+            // 簇与列宽按核心当前屏幕（备用屏 VS16 不扩宽），与上屏后网格一致
+            itren::fill_preedit_clusters(pe, core_);
             if (snap_) { int vis = 0; itcore_snapshot_cursor(snap_, &pe.anchor_col, &pe.anchor_row, &vis); }
             if (renderer_) renderer_->set_preedit(pe);
         }

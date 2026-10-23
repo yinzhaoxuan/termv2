@@ -159,3 +159,4 @@ cmake --build build-mingw -j   # 全量通过
 ```
 
 实机：将 `win32_term.exe` 与依赖（若非 `-static`）拷到 Win11，直接运行；默认启动 `C:\Windows\System32\cmd.exe`。
+- VS16 按屏幕（itcore_text_clusters 取 core 当前屏，alt 屏 VS16 不加宽）+ SEL-01 drag_end 纯函数（空选区状态、按下格内回拖不误判反向）+ BLINK-03 present_frame 路径测试 + cell_style 注释位置修正；Linux 85/85 ×3（plain/ASan/TSan），mingw 含 it2w_shell 通过。

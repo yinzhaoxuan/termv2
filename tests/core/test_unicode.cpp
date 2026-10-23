@@ -61,33 +61,55 @@ static void test_width_table() {
 }
 
 // IME-02：itcore_text_clusters 的簇切分与列宽 = itcore_feed 写进网格的结果（歧义宽度、emoji、组合、ZWJ、旗帜）
+// 在 c 的当前屏幕上：itcore_text_clusters 的宽度 = feed 之后快照第 0 行的宽度；返回 widths
+static std::vector<uint8_t> clusters_vs_grid(const char *t, bool alt) {
+    itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 40, 2, 0, 0};
+    itcore_core *c = nullptr;
+    CHECK(itcore_create(&o, &c) == 0);
+    if (alt) { const char *e = "\x1b[?1049h"; itcore_feed(c, reinterpret_cast<const uint8_t *>(e), strlen(e)); }
+    CHECK((itcore_mode_query(c, 1049) == ITCORE_MODE_SET) == alt);
+    size_t len = strlen(t);
+    size_t n = itcore_text_clusters(c, t, len, nullptr, nullptr, 0);   // 组字时：按当前屏幕
+    std::vector<uint8_t> w(n); std::vector<uint32_t> bl(n);
+    CHECK(itcore_text_clusters(c, t, len, w.data(), bl.data(), n) == n);
+    size_t sum = 0; for (auto b : bl) sum += b;
+    CHECK(sum == len);
+    itcore_feed(c, reinterpret_cast<const uint8_t *>(t), len);           // 上屏
+    itcore_snapshot *sn = itcore_acquire_snapshot(c, 0, 2);
+    itcore_wrap wr; uint64_t rr;
+    const itcore_cell *row = itcore_snapshot_row(sn, 0, &wr, &rr);
+    std::vector<uint8_t> grid;
+    for (int x = 0; x < 40; ++x)
+        if (row[x].grapheme_id && !(row[x].flags & ITCORE_CELL_CONTINUATION)) grid.push_back(row[x].width);
+    if (grid != w) std::printf("text_clusters 不一致（%s）：%s n=%zu grid=%zu\n", alt ? "备用屏" : "主屏", t, n, grid.size());
+    CHECK(grid == w);
+    itcore_snapshot_release(sn);
+    itcore_destroy(c);
+    return w;
+}
+
+// IME-02：itcore_text_clusters 的簇切分与列宽 = itcore_feed 在同一屏幕写进网格的结果（主屏与备用屏）
 static void test_text_clusters() {
     const char *samples[] = {"a\u03b1\u2460b", "\U0001F44D\U0001F3FD", "\u2764\uFE0F", "e\u0301x", "\u6d4b\u8bd5",
                              "\U0001F468\u200D\U0001F469\u200D\U0001F467", "\U0001F1E8\U0001F1F3\U0001F1FA", "\u00ad\u200bq", "\xff!"};
-    for (const char *t : samples) {
-        size_t len = strlen(t);
-        size_t n = itcore_text_clusters(t, len, nullptr, nullptr, 0);
-        std::vector<uint8_t> w(n); std::vector<uint32_t> bl(n);
-        CHECK(itcore_text_clusters(t, len, w.data(), bl.data(), n) == n);
-        size_t sum = 0; for (auto b : bl) sum += b;
-        CHECK(sum == len);
-        itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 40, 2, 0, 0};
-        itcore_core *c = nullptr;
-        CHECK(itcore_create(&o, &c) == 0);
-        itcore_feed(c, reinterpret_cast<const uint8_t *>(t), len);
-        itcore_snapshot *sn = itcore_acquire_snapshot(c, 0, 2);
-        itcore_wrap wr; uint64_t rr;
-        const itcore_cell *row = itcore_snapshot_row(sn, 0, &wr, &rr);
-        std::vector<uint8_t> grid;
-        for (int x = 0; x < 40; ++x)
-            if (row[x].grapheme_id && !(row[x].flags & ITCORE_CELL_CONTINUATION)) grid.push_back(row[x].width);
-        if (grid != w) std::printf("text_clusters 不一致：%s n=%zu grid=%zu\n", t, n, grid.size());
-        CHECK(grid == w);
-        itcore_snapshot_release(sn);
-        itcore_destroy(c);
-    }
-    CHECK(itcore_text_clusters(nullptr, 3, nullptr, nullptr, 0) == 0);
-    uint8_t one[1]; CHECK(itcore_text_clusters("abc", 3, one, nullptr, 1) == 3 && one[0] == 1);  // 只写前 cap 个
+    for (bool alt : {false, true})
+        for (const char *t : samples) clusters_vs_grid(t, alt);
+    // ❤️（U+2764 FE0F）：主屏 VS16 扩为 2，备用屏不扩（screen.cpp 写网格同规则）
+    auto wm = clusters_vs_grid("\u2764\uFE0F", false), wa = clusters_vs_grid("\u2764\uFE0F", true);
+    CHECK(wm.size() == 1 && wm[0] == 2);
+    CHECK(wa.size() == 1 && wa[0] == 1);
+    // 肤色修饰两屏都扩
+    auto tm = clusters_vs_grid("\u261D\U0001F3FD", false), ta = clusters_vs_grid("\u261D\U0001F3FD", true);
+    CHECK(tm == ta && tm.size() == 1 && tm[0] == 2);
+    // 无 core 返回 0；只含可忽略码点返回 0 个簇；只写前 cap 个
+    CHECK(itcore_text_clusters(nullptr, "abc", 3, nullptr, nullptr, 0) == 0);
+    itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 40, 2, 0, 0};
+    itcore_core *c = nullptr;
+    CHECK(itcore_create(&o, &c) == 0);
+    CHECK(itcore_text_clusters(c, nullptr, 3, nullptr, nullptr, 0) == 0);
+    CHECK(itcore_text_clusters(c, "\u200b\u00ad", strlen("\u200b\u00ad"), nullptr, nullptr, 0) == 0);
+    uint8_t one[1]; CHECK(itcore_text_clusters(c, "abc", 3, one, nullptr, 1) == 3 && one[0] == 1);
+    itcore_destroy(c);
 }
 
 static void test_width_screen() {
