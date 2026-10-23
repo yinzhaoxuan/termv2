@@ -26,6 +26,10 @@ int main() {
   // 粘贴换行
   CHECK(normalizePasteText("a\r\nb\nc\rd") == "a\rb\rc\rd");
   CHECK(normalizePasteText(std::string("x\0y", 3)) == "x");
+  CHECK(!parseCommandArg({L"it2w_shell.exe"}));
+  CHECK(*parseCommandArg({L"x", L"--command", L"t.cmd a b"}) == L"t.cmd a b");
+  CHECK(*parseCommandArg({L"x", L"--command=dir /s"}) == L"dir /s");
+  CHECK(parseCommandArg({L"x", L"--command"})->empty());
   // 链接
   auto l = linkPrompt("https://example.com/a");
   CHECK(l.canOpen && l.url == "https://example.com/a" && l.message.find("https://example.com/a") != std::string::npos);

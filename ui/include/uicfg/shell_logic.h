@@ -31,6 +31,10 @@ KeyMatch matchKey(const std::map<std::string, std::string>& bindings, const Chor
 // 剪贴板文本 → paste()：CRLF 与单独 LF 都转 CR（终端回车语义），NUL 截断后部
 std::string normalizePasteText(const std::string& clipboardUtf8);
 
+// 命令行：it2w_shell.exe --command "<命令行>"（也接受 --command=<命令行>）。
+// 返回首个本地窗格要执行的命令；未给出返回 nullopt；--command 后缺值返回空串（调用方报错）。
+std::optional<std::wstring> parseCommandArg(const std::vector<std::wstring>& argv);
+
 // 点击链接：Allow 时给出确认文案（展示真实 URL），否则给出拒绝文案
 struct LinkPrompt { bool canOpen; std::string message; std::string url; };
 LinkPrompt linkPrompt(const std::string& url);

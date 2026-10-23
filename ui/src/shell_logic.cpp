@@ -106,3 +106,12 @@ std::string vtForChar(const std::string& utf8, bool alt) {
   return alt ? "\x1b" + s : s;
 }
 }  // namespace uicfg
+
+std::optional<std::wstring> uicfg::parseCommandArg(const std::vector<std::wstring>& argv) {
+  const std::wstring k = L"--command", ke = L"--command=";
+  for (size_t i = 1; i < argv.size(); ++i) {
+    if (argv[i] == k) return i + 1 < argv.size() ? argv[i + 1] : std::wstring();
+    if (argv[i].rfind(ke, 0) == 0) return argv[i].substr(ke.size());
+  }
+  return std::nullopt;
+}
