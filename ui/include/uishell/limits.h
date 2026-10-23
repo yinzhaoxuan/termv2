@@ -1,6 +1,6 @@
 #pragma once
-// UI 与 pane 后端共用的上限常量（设计文档 §15.4）。只改这里。
-#include <cstddef>
+// 唯一定义在后端公共头 it2app/limits.h（§15.4）；UI 只引用。
+#include "it2app/limits.h"
 namespace uishell {
-inline constexpr std::size_t kPrevAttemptTextBytes = 8u * 1024u * 1024u;
+using it2app::kPrevAttemptTextBytes;
 }

@@ -10,6 +10,7 @@
 namespace uishell {
 
 struct PixelRect { int x, y, w, h; };
+struct CellSize { int w, h; };   // physical px, from renderer GridMetrics::from_font
 struct CaretRect { int x, y, w, h; bool valid; };      // renderer caret_rect_px(), client px
 
 enum class SessionState { Starting, Running, Reconnecting, Exited, Failed };
@@ -62,6 +63,11 @@ public:
   virtual void clearSelection() = 0;
   // After UI confirmation. MUST NOT block the UI thread: start the T03A close order and return;
   // completion is reported via onStatus(Exited/Failed).
+  // Runtime font change (STATUS 第 4 批提案): backend rebuilds DWrite format, clears glyph/advance
+  // caches, recomputes GridMetrics, then set_cell_pixel_size -> resize(gen). Async; grid change
+  // arrives via onStatus. sizePt clamped 6..72 by UI. Empty family = keep current.
+  virtual void setFont(std::string_view family, float sizePt) { (void)family; (void)sizePt; }
+  virtual CellSize cellSize() const { return {0, 0}; }  // {0,0} = not yet known
   virtual void requestClose() = 0;
 };
 
