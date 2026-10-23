@@ -41,3 +41,8 @@ add_test(NAME renderer_cursor_geometry COMMAND test_renderer_cursor_geometry)
 add_executable(test_renderer_glyph_cache ${PROJECT_SOURCE_DIR}/tests/renderer/test_glyph_cache.cpp)
 target_link_libraries(test_renderer_glyph_cache PRIVATE itrender_layout)
 add_test(NAME renderer_glyph_cache COMMAND test_renderer_glyph_cache)
+
+# 拖动选区命中/选区矩形 与 IME 预编辑布局、候选窗锚点
+add_executable(test_renderer_selection_ime ${PROJECT_SOURCE_DIR}/tests/renderer/test_selection_ime.cpp)
+target_link_libraries(test_renderer_selection_ime PRIVATE itcore_mock itrender_layout)
+add_test(NAME renderer_selection_ime COMMAND test_renderer_selection_ime)
