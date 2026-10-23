@@ -248,6 +248,7 @@ void refreshTabs() {
       if (auto* p = paneById(pid)) if (!p->status.title.empty()) return p->status.title;
       return std::nullopt;
     }));
+    t += L"   \u00D7";  // 关闭按钮（点击区域见 tabCloseHit）
     TCITEMW it{}; it.mask = TCIF_TEXT; it.pszText = t.data();
     TabCtrl_InsertItem(g->tabs, (int)i, &it);
   }
@@ -694,13 +695,20 @@ std::optional<Divider> dividerAt(POINT pt) {
   return std::nullopt;
 }
 
-// 标签栏：拖动重排、中键关闭
+// 标签右侧 × 的点击区域：标签矩形最右 18 逻辑像素
+bool tabCloseHit(HWND h, int i, int x, int y) {
+  RECT r; if (i < 0 || !TabCtrl_GetItemRect(h, i, &r)) return false;
+  return x >= r.right - px(18) && x < r.right && y >= r.top && y < r.bottom;
+}
+
+// 标签栏：拖动重排、点 × 或中键关闭
 LRESULT CALLBACK TabSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
   auto hit = [&](LPARAM lp) { TCHITTESTINFO ht{}; ht.pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}; return TabCtrl_HitTest(h, &ht); };
   auto& d = g->tabDrag;
   switch (m) {
     case WM_LBUTTONDOWN: {
       int i = hit(l);
+      if (tabCloseHit(h, i, GET_X_LPARAM(l), GET_Y_LPARAM(l))) { d = {}; closeTabAt((size_t)i, true); return 0; }
       d = {}; d.active = i >= 0; d.from = i; d.x = GET_X_LPARAM(l); d.y = GET_Y_LPARAM(l);
       break;  // 交给默认处理（切换标签）
     }
