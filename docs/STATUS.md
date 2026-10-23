@@ -53,6 +53,26 @@
 - **mingw 全量构建**：交叉编译时 uicfg 使用 `third_party/nlohmann_json/include`（独立路径，不再引入 `/usr/include`），工具链加 `CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY`；`cmake --build build-mingw` 全目标通过。
 - 已知限制：ssh 退出瞬间仍在输出队列中、未被 UI 取走的错误文本不计入尾部，可能映射为 Unknown；后续改为 Transport 内部旁路复制。
 
+## T08 PaneBackend（uishell/pane_backend.h 实现，架构师）
+
+- `app/pane_backend/pane_logic.*`（平台无关，Linux 单测 PANE-01）：粘贴净化（剥 NUL、ESC[200~/201~、C1 0x9B 形式，循环至不变）、bracketed 包装、bell 1 次/秒限流、标题 100ms 节流、最小网格 20×5、resize generation 追踪、UI 派发队列（空→非空唤醒）。
+- `app/pane_backend/win32_pane_backend.*`：`it2app::makeWin32PaneBackendFactory(PaneBackendConfig)`；空 connectionId→ConPtyTransport（%ComSpec%），否则经 `config.resolveSsh` 得 SshLaunchOptions→SshTransport。attach 建子窗 + HwndSwapChainHost + D2DRenderer；setBounds 先 itcore_resize(gen) 后 transport.resize(gen)；传输回调只投递队列，PaneEvents 仅在 UI 线程（WM_APP+0x41 / 50ms 定时器）派发；requestClose 走 T03A §1.4 异步关闭。
+- 传输改动：`ConPtyTransport::beginPaste(n, bracketed)` 透传（原先恒为 bracketed）；新增 `activeProcessCount()`（Job 基本记账 ActiveProcesses，加锁防 job_ 关闭竞态）；SshTransport 对应转发。
+
+### 接口问题（未改头文件，待 UI 定夺）
+1. 工厂仅收 connectionId，SSH 目标解析只能经配置注入 `resolveSsh`。
+2. 头文件无 DECSET 2004 查询：用 `itcore_encode_paste("")` 探测（建议 itcore 增 ABI）。
+3. “UI 翻译按键”与子窗焦点冲突：子窗把 WM_KEY*/WM_CHAR SendMessage 给父窗，IME 留在子窗处理。
+4. 无鼠标/选区 API：后端在子窗内自行处理（鼠标模式→encode_mouse；否则同格单击查超链接→onLinkActivated(url)）。
+5. onRedrawRequested 语义不明：后端自行 present，同时触发该事件。
+6. 粘贴上限 32KiB，超限只记日志，无错误回传通道。
+7. SSH 下 hasForegroundJob 无法看到远端，Running 期间恒为 true。
+8. 析构最多阻塞 3s 等关闭；requestClose 无完成回调（仅 onStatus(Exited)）。
+9. attach 在会话启动失败时仍返回 true（状态 Failed）。
+
+### T08 未实机项
+子窗交换链/DPI、IME 候选窗定位、焦点与按键转发、Job 进程计数（conhost 是否在 Job 内影响 >1 判定）、关闭顺序、链接单击、SSH 实连。
+
 ## 未实机项（须 Win11 + 真 ConPTY / D3D 验证）
 
 以下在 Linux 上只能做到**编译门闸**或纯逻辑单测，行为以规格为准，**不能**用交叉编译结果代替实机：

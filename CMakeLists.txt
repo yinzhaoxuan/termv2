@@ -124,3 +124,6 @@ if(WIN32)
     target_compile_options(it2w_ssh PRIVATE -Wall -Wextra)
   endif()
 endif()
+
+# T08：PaneBackend（uishell 接口实现）；需在 it2w_ssh 之后
+add_subdirectory(app/pane_backend)

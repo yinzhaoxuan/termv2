@@ -47,6 +47,9 @@ public:
     std::optional<OutputChunk> tryPopOutput();
     TransportState state() const { return pty_->state(); }
     bool waitClosed(DWORD ms) { return pty_->waitClosed(ms); }
+    EnqueueResult beginPaste(std::size_t n, bool bracketed) { return pty_->beginPaste(n, bracketed); }
+    EnqueueResult appendPaste(std::string_view b) { return pty_->appendPaste(b); }
+    uint32_t activeProcessCount() { return pty_->activeProcessCount(); }
 
     static std::wstring defaultSshExe();
 

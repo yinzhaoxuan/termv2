@@ -192,9 +192,9 @@ EnqueueResult ConPtyTransport::enqueueReply(std::string_view b) {
     else if (r == EnqueueResult::QueueFull) diag("ReplyBackpressure", 0, b.size());  // 上层决定是否 close(Fault)
     return r;
 }
-EnqueueResult ConPtyTransport::beginPaste(std::size_t n) {
+EnqueueResult ConPtyTransport::beginPaste(std::size_t n, bool bracketed) {
     EnqueueResult r;
-    { Lock l(lock_); r = input_.beginPaste(n); if (r == EnqueueResult::Ok) input_.notePending(nowMs()); }
+    { Lock l(lock_); r = input_.beginPaste(n, bracketed); if (r == EnqueueResult::Ok) input_.notePending(nowMs()); }
     if (r == EnqueueResult::Ok) SetEvent(writerWake_);
     return r;
 }
@@ -377,7 +377,7 @@ void ConPtyTransport::doClose() {
         if (cb_.onExited) cb_.onExited(sid_, aid_, exitCode_);
     }
     if (monitor_) WaitForSingleObject(monitor_, INFINITE);
-    closeH(job_);
+    { Lock l(lock_); closeH(job_); }  // 与 activeProcessCount 串行
     t = stage("close.process", t);
     // 9. 删除 SSH 配置快照
     if (snapshot_) DeleteFileW(snapshot_->c_str());
@@ -386,6 +386,14 @@ void ConPtyTransport::doClose() {
     // 8. 最终状态（核心执行器排空由上层在收到 Closed/Failed 后完成）
     setState(closeReason_ == CloseReason::Fault ? TransportState::Failed : TransportState::Closed, fault_);
     SetEvent(closedEvent_);
+}
+
+uint32_t ConPtyTransport::activeProcessCount() {
+    Lock l(lock_);
+    if (state_ != TransportState::Running || !job_) return 0;
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info{};
+    if (!QueryInformationJobObject(job_, JobObjectBasicAccountingInformation, &info, sizeof(info), nullptr)) return 0;
+    return info.ActiveProcesses;
 }
 
 bool ConPtyTransport::waitClosed(DWORD ms) { return WaitForSingleObject(closedEvent_, ms) == WAIT_OBJECT_0; }

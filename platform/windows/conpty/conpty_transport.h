@@ -54,7 +54,7 @@ public:
     bool start(SessionId, AttemptId, const LaunchSpec &);  // 同步执行 §1.2；结果亦经 onStateChanged
     EnqueueResult enqueueUserInput(std::string_view bytes);
     EnqueueResult enqueueReply(std::string_view bytes);
-    EnqueueResult beginPaste(std::size_t totalBytes);
+    EnqueueResult beginPaste(std::size_t totalBytes, bool bracketed = true);  // bracketed=false：DECSET 2004 关闭时不加标记
     EnqueueResult appendPaste(std::string_view body);
     void cancelPasteBody();
     void resize(GridSize, uint64_t generation);
@@ -65,6 +65,8 @@ public:
     bool waitClosed(DWORD ms);  // 测试/探针用
     uint32_t exitCode() const { return exitCode_; }
     uint64_t discardedBytes();
+    // Job 内活动进程数（JobObjectBasicAccountingInformation）；非 Running 返回 0。T08 hasForegroundJob 用
+    uint32_t activeProcessCount();
 
 private:
     static DWORD WINAPI readerMain(LPVOID);
