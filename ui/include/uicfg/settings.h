@@ -37,4 +37,8 @@ void resetKeybindings(SettingsFile& data);
 // 应用内部冲突：同一快捷键绑了多个动作则报错（不含系统保留键）
 std::vector<ValidationError> validateSettings(const SettingsFile& data);
 
+// 历史滚动动作 → PaneBackend::scrollViewport(lines) / scrollToBottom()
+struct ScrollCommand { bool isScroll; bool toBottom; int lines; };
+ScrollCommand scrollCommandFor(const std::string& action, int visibleRows);
+
 }  // namespace uicfg

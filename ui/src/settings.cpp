@@ -23,6 +23,12 @@ const std::pair<const char*, const char*> kDefaults[] = {
     {"fontBigger", "Ctrl+Plus"},
     {"fontSmaller", "Ctrl+Minus"},
     {"fontReset", "Ctrl+0"},
+    {"scrollPageUp", "Shift+PageUp"},
+    {"scrollPageDown", "Shift+PageDown"},
+    {"scrollLineUp", "Ctrl+Shift+Up"},
+    {"scrollLineDown", "Ctrl+Shift+Down"},
+    {"scrollToTop", "Ctrl+Shift+Home"},
+    {"scrollToBottom", "Ctrl+Shift+End"},
 };
 
 enum class Parse { Ok, Newer, Bad };
@@ -130,4 +136,17 @@ bool saveSettings(const fs::path& file, SettingsFile& data, bool readOnly, std::
   return true;
 }
 
+}  // namespace uicfg
+
+namespace uicfg {
+ScrollCommand scrollCommandFor(const std::string& action, int visibleRows) {
+  int page = visibleRows > 1 ? visibleRows - 1 : 1;  // keep one line of context
+  if (action == "scrollPageUp") return {true, false, -page};
+  if (action == "scrollPageDown") return {true, false, page};
+  if (action == "scrollLineUp") return {true, false, -1};
+  if (action == "scrollLineDown") return {true, false, 1};
+  if (action == "scrollToTop") return {true, false, -(1 << 30)};  // backend clamps
+  if (action == "scrollToBottom") return {true, true, 0};
+  return {false, false, 0};
+}
 }  // namespace uicfg
