@@ -289,6 +289,9 @@ public:
     int ansi_mode_state(int mode) const;  // ANSI 模式（CSI Ps $ p）
     // 历史在当前列宽下的显示行数（备用屏为 0）
     size_t history_display_rows() const;
+    // B3：双击选词的额外 ASCII 词字符
+    static constexpr const char *kDefaultWordChars = "/-+\\~_.";
+    void set_word_chars(std::string w) { word_chars_ = std::move(w); }
     // ---- 选区（字符粒度；坐标为视口相对，first_row 同 take_snapshot）----
     // unit：0 字符 / 1 词 / 2 逻辑行（跨软换行）。词/行模式下 extend 以起点所在的词/行为锚扩展。
     bool sel_start(int32_t first_row, uint16_t col, uint16_t row, int unit = 0);
@@ -372,6 +375,7 @@ private:
     bool sel_range(const std::vector<Seg> &segs, SegPos *s, SegPos *e) const { return sel_range(sel_, segs, s, e); }
     void unit_range(const std::vector<Seg> &segs, SegPos p, int unit, SegPos *lo, SegPos *hi) const;
     int char_class(const Cell *c) const;
+    std::string word_chars_ = kDefaultWordChars;
     // 选区变化：新旧选区覆盖到的网格行全部取新 revision（全局计数器），历史行随计数器一起变
     void sel_touch(const Selection &old);
     size_t sel_hist_segments_ = 0;

@@ -229,6 +229,20 @@ static void test_selection_units() {
     itcore_selection_start_unit(c, 0, 0, 2, 2);
     itcore_selection_extend(c, 0, 0, 0);  // 反向扩展
     CHECK(sel(c) == "ab cd/e.f;g\nxy");
+    // B3 可配置分词字符
+    CHECK(itcore_set_word_chars(c, ";", 1) == 0);  // 仅 ';' 算单词字符
+    itcore_selection_start_unit(c, 0, 4, 0, 1);
+    CHECK(sel(c) == "cd");
+    itcore_selection_start_unit(c, 0, 8, 0, 1);
+    CHECK(sel(c) == "f;g");  // 跨软换行
+    CHECK(itcore_set_word_chars(c, "a", 1) == -1);   // 字母数字不允许
+    CHECK(itcore_set_word_chars(c, " ", 1) == -1);   // 空白不允许
+    CHECK(itcore_set_word_chars(c, "\xc3\xa9", 2) == -1);  // 非 ASCII
+    itcore_selection_start_unit(c, 0, 4, 0, 1);
+    CHECK(sel(c) == "cd");  // 非法输入不改变现有设置
+    CHECK(itcore_set_word_chars(c, nullptr, 0) == 0);  // 恢复默认
+    itcore_selection_start_unit(c, 0, 4, 0, 1);
+    CHECK(sel(c) == "cd/e.f");
     // 历史行数
     itcore_core *h = make(10, 2);
     CHECK(itcore_history_rows(h) == 0);

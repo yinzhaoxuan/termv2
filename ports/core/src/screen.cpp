@@ -1456,7 +1456,7 @@ bool Screen::sel_pos_at(int32_t first_row, uint16_t col, uint16_t row, SelPos *o
     return out->seg != 0;
 }
 
-// 词字符：字母数字、非 ASCII（含 CJK）与上游默认的 "/-+\~_."；空白一类；其余标点各自成词
+// 词字符：字母数字、非 ASCII（含 CJK）与 word_chars_（默认同上游 "/-+\~_."，itcore_set_word_chars 可配）；空白一类；其余标点各自成词
 int Screen::char_class(const Cell *c) const {
     if (!c || !c->grapheme_id) return 0;
     size_t n = 0;
@@ -1464,7 +1464,7 @@ int Screen::char_class(const Cell *c) const {
     if (!t || !n) return 0;
     unsigned char ch = static_cast<unsigned char>(t[0]);
     if (ch == ' ' || ch == '\t') return 0;
-    if (ch >= 0x80 || std::isalnum(ch) || std::strchr("/-+\\~_.", ch)) return 1;
+    if (ch >= 0x80 || std::isalnum(ch) || word_chars_.find(char(ch)) != std::string::npos) return 1;
     return 2;
 }
 

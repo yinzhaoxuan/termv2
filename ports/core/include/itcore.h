@@ -175,6 +175,10 @@ int  itcore_selection_text(itcore_core *c, itcore_buffer **out);
 /* CSI 14 t / 16 t 用的单元格像素尺寸（后端从 GridMetrics 传入，须在首次 feed 前调用；0 表示未知，此时按 8x16 估算应答）。
    14 t 报文本区 rows*h;cols*w，16 t 报单元格 h;w，18 t 报行列（总是应答）。 */
 void itcore_set_cell_pixel_size(itcore_core *c, uint16_t width_px, uint16_t height_px);
+/* 双击选词：除字母数字与非 ASCII（含 CJK）外，还算作词内字符的 ASCII 标点（B3，对应 iTerm2 "Characters considered part of a word"）。
+   chars 为 NULL 恢复默认 "/-+\~_."；len 为 0 表示没有额外词字符。只接受可打印 ASCII 标点（0x21–0x7E 的非字母数字），
+   含空白、控制字符或非 ASCII 返回 -1 且不改动；成功 0。之后的选词立即生效。 */
+int  itcore_set_word_chars(itcore_core *c, const char *chars, size_t len);
 /* 颜色配置：值为 0x00RRGGBB。OSC 10/11/12 与 OSC 4 可在运行时覆盖、OSC 110/111/112 与 104 恢复为这里的配置值，
    查询（"?"）按当前值以 rgb:rrrr/gggg/bbbb 应答，结尾符与请求一致（BEL 或 ST）。修改会推进全部行 revision。 */
 typedef struct {

@@ -432,6 +432,16 @@ int itcore_selection_text(itcore_core *c, itcore_buffer **out) {
     return *out ? 0 : -1;
 }
 
+int itcore_set_word_chars(itcore_core *c, const char *chars, size_t len) {
+    if (!c || !c->screen) return -1;
+    if (!chars) { c->screen->set_word_chars(itcore::Screen::kDefaultWordChars); return 0; }
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char ch = static_cast<unsigned char>(chars[i]);
+        if (ch < 0x21 || ch > 0x7E || std::isalnum(ch)) return -1;
+    }
+    c->screen->set_word_chars(std::string(chars, len));
+    return 0;
+}
 void itcore_set_cell_pixel_size(itcore_core *c, uint16_t w, uint16_t h) {
     if (c) { c->cell_w = w; c->cell_h = h; }
 }
