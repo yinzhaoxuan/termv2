@@ -436,6 +436,58 @@ static void wordchars() {
     itcore_destroy(c);
 }
 
+// PUMP-01：pump_core 预算（字节 / 注入时钟），用尽后经定时器续跑（不投递），读线程合并投递
+static void pump_budget() {
+    itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 80, 24, 100, 1u << 20};
+    itcore_core *c = nullptr;
+    CHECK(itcore_create(&o, &c) == 0 && c);
+    struct Chunk { std::string bytes; };
+    std::deque<Chunk> q;
+    int pops = 0;
+    auto pop = [&]() -> std::optional<Chunk> { if (q.empty()) return std::nullopt; ++pops; Chunk k = std::move(q.front()); q.pop_front(); return k; };
+    using it2app::PumpResult;
+    // 按字节：16 KiB 块 × 10，64 KiB 预算 → 4 块一停
+    for (int i = 0; i < 10; ++i) q.push_back({std::string(16 * 1024, 'x')});
+    it2app::PumpBudget bytes; bytes.maxBytes = 64 * 1024;
+    CHECK(it2app::pump_core(c, pop, [] {}, bytes) == PumpResult::FedMore && pops == 4 && q.size() == 6);
+    CHECK(it2app::nextAfterPump(PumpResult::FedMore) == it2app::PumpNext::Timer);   // 续跑走定时器，不投递
+    CHECK(it2app::pump_core(c, pop, [] {}, bytes) == PumpResult::FedMore && q.size() == 2);
+    CHECK(it2app::pump_core(c, pop, [] {}, bytes) == PumpResult::Fed && q.empty());   // 取空 → 不续跑
+    CHECK(it2app::nextAfterPump(PumpResult::Fed) == it2app::PumpNext::None);
+    CHECK(it2app::nextAfterPump(PumpResult::Idle) == it2app::PumpNext::None);
+    CHECK(it2app::pump_core(c, pop, [] {}, bytes) == PumpResult::Idle);
+    // 单块超预算：至少喂一块（保证前进），然后停
+    q.push_back({std::string(100 * 1024, 'y')}); q.push_back({"z"});
+    pops = 0;
+    CHECK(it2app::pump_core(c, pop, [] {}, bytes) == PumpResult::FedMore && pops == 1 && q.size() == 1);
+    q.clear();
+    // 按时间：假时钟每次 pop 后前进 3ms，8ms 预算 → 3 块一停（字节远未到）
+    struct Clock { uint64_t t = 1000; } clk;
+    it2app::PumpBudget timeB; timeB.maxBytes = size_t(1) << 30; timeB.maxMs = 8;
+    timeB.clockCtx = &clk; timeB.nowMs = [](void *p) { return static_cast<Clock *>(p)->t; };
+    auto slowPop = [&]() -> std::optional<Chunk> { auto k = pop(); if (k) clk.t += 3; return k; };
+    for (int i = 0; i < 10; ++i) q.push_back({"ab"});
+    pops = 0;
+    CHECK(it2app::pump_core(c, slowPop, [] {}, timeB) == PumpResult::FedMore && pops == 3 && q.size() == 7);
+    // 默认预算下小输出照旧一次取空
+    q.clear(); q.push_back({"a"}); q.push_back({"b"});
+    CHECK(it2app::pump_core(c, pop, [] {}) == PumpResult::Fed && q.empty());
+    // 读线程投递：合并为 1 条；续跑定时器在等时不投递
+    std::atomic<bool> pending{false}, timer{false};
+    int posts = 0;
+    for (int i = 0; i < 100; ++i) posts += it2app::readerShouldPost(pending, timer);
+    CHECK(posts == 1);
+    pending = false;                       // 投递的 pump 已执行
+    timer = true;                          // 预算用尽 → 设定时器
+    posts = 0;
+    for (int i = 0; i < 100; ++i) posts += it2app::readerShouldPost(pending, timer);
+    CHECK(posts == 0 && !pending);
+    timer = false;                         // WM_TIMER 续跑
+    for (int i = 0; i < 100; ++i) posts += it2app::readerShouldPost(pending, timer);
+    CHECK(posts == 1);
+    itcore_destroy(c);
+}
+
 // BUG-03：拖动中失去捕获（模态对话框）后，后续鼠标移动不得改变选区；已拖出的选区保留
 static void capture_loss() {
     using C = DragSelect::Cell;
@@ -490,7 +542,8 @@ int main(int argc, char **argv) {
     else if (w == "sync") syncfocus();
     else if (w == "font") font();
     else if (w == "wordchars") wordchars();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); } }
+    else if (w == "pump") pump_budget();
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

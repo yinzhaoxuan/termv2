@@ -31,6 +31,7 @@ namespace {
 
 constexpr UINT WM_PANE_WAKE = WM_APP + 0x41;
 constexpr UINT_PTR kTickTimer = 1;
+constexpr UINT_PTR kPumpContTimer = 2;  // 一次性：pump 预算用尽后续跑
 constexpr UINT kTickMs = 50;
 constexpr wchar_t kPaneClass[] = L"it2w_pane_backend";
 
@@ -299,7 +300,7 @@ bool Win32PaneBackend::startSession() {
     };
     auto onOut = [ws](SessionId, AttemptId) {
         auto sh = ws.lock();
-        if (sh && !sh->pumpPending.exchange(true))
+        if (sh && it2app::readerShouldPost(sh->pumpPending, sh->contTimerPending))
             postTo<P>(*sh->queue, [](P &p) { p.shared_->pumpPending = false; p.pump(); });
     };
     auto onDiag = [](SessionId, AttemptId, const DiagRecord &d) {
@@ -519,9 +520,16 @@ void Win32PaneBackend::flushTitle() {
 
 void Win32PaneBackend::pump() {
     if (!core_ || !transport_) return;
-    auto r = it2app::pump_core(core_, [&] { return transport_->pop(); }, [&] { drainCoreEvents(); });
+    it2app::PumpBudget budget;
+    budget.nowMs = [](void *) -> uint64_t { return nowMs(); };
+    auto r = it2app::pump_core(core_, [&] { return transport_->pop(); }, [&] { drainCoreEvents(); }, budget);
     if (r == it2app::PumpResult::Fatal) { transport_->close(CloseReason::Fault); return; }
-    if (r == it2app::PumpResult::Fed) {
+    if (it2app::nextAfterPump(r) == it2app::PumpNext::Timer) {
+        // 先置标志再设定时器：期间读线程不再投递，续跑只走 WM_TIMER（低于 WM_PAINT/输入）
+        shared_->contTimerPending = true;
+        if (HWND h = hwnd_; !h || !SetTimer(h, kPumpContTimer, 1, nullptr)) shared_->contTimerPending = false;
+    }
+    if (r == it2app::PumpResult::Fed || r == it2app::PumpResult::FedMore) {
         syncSelection();       // 输出可能清掉选区（切备用屏 / RIS / ED 3）
         syncViewport();        // 已上翻时偏移随历史增长，视图停在原处
         present();
@@ -1016,7 +1024,13 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_PANE_WAKE: drainUi(); return 0;
     case WM_TIMER:
-        if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present(); }
+        if (w == kPumpContTimer) {
+            KillTimer(h, kPumpContTimer);    // 一次性
+            shared_->contTimerPending = false;  // 先清：pump 期间到来的数据可走投递（合并，无害）
+            pump();
+            return 0;
+        }
+                if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present(); }
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -1148,6 +1162,7 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     case WM_KILLFOCUS: focused_ = false; reportFocus(); present(); return 0;
     case WM_DESTROY:
         KillTimer(h, kTickTimer);
+        KillTimer(h, kPumpContTimer);
         hwnd_ = nullptr;  // 之后的 post 不再 PostMessage
         return 0;
     default: break;

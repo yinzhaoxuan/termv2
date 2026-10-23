@@ -110,6 +110,7 @@ struct CloseOutcome {
 struct SessionShared {
     std::shared_ptr<UiDispatchQueue> queue = std::make_shared<UiDispatchQueue>();
     std::atomic<bool> pumpPending{false};
+    std::atomic<bool> contTimerPending{false};  // 预算用尽后的续跑定时器已设置（UI 线程写，读线程读）
     std::shared_ptr<void> transport;  // 传输层对象；最后一个持有者（通常是关闭线程）负责析构
     void setCloseResult(CloseOutcome r);
     std::optional<CloseOutcome> takeCloseResult();
