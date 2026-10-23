@@ -37,7 +37,13 @@ public:
   virtual bool attach(void* parentHwnd, const PixelRect& rc, float dpiScale) = 0;
   virtual void setBounds(const PixelRect& rc, float dpiScale) = 0; // backend recomputes grid, enforces >=20x5
   virtual void setFocused(bool focused) = 0;
-  virtual void sendInput(std::string_view utf8) = 0;               // keys already translated by UI
+  virtual void sendInput(std::string_view utf8) = 0;               // committed text (WM_CHAR / IME result)
+  // Special keys (arrows, Home/End, PgUp/PgDn, F1-F24, Ins/Del, keypad, Enter/Tab/Backspace/Esc with mods,
+  // Alt+char as ESC prefix). Backend encodes via itcore_encode_key (DECCKM/DECKPAM/xterm modifiers).
+  // UI never calls this while IME is composing (VK_PROCESSKEY), and sends AltGr chars that ToUnicode
+  // translates as text via sendInput instead.
+  enum KeyMods : unsigned { ModShift = 1, ModAlt = 2, ModCtrl = 4 };
+  virtual void sendKey(unsigned vk, unsigned mods) = 0;
   virtual void paste(std::string_view utf8) = 0;                   // bracketed-paste aware
   virtual CaretRect caretRect() const = 0;                         // for IME candidate window
   virtual SessionStatus status() const = 0;
