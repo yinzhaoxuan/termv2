@@ -159,8 +159,6 @@ private:
     void handleWheel(WPARAM wp, LPARAM lp);
     void autoScrollTick();
     void endDragOnCaptureLoss();
-    void pasteFromClipboard();
-    void copySelection(bool clearAfter);
     bool altScreen() const { return core_ && itcore_mode_query(core_, 1049) == ITCORE_MODE_SET; }
 
     std::string connId_;
@@ -604,41 +602,6 @@ void Win32PaneBackend::paste(std::string_view utf8) {
     else if (r != EnqueueResult::Ok) std::fprintf(stderr, "[pane] paste %d (%zu bytes)\n", int(r), bytes.size());
 }
 
-void Win32PaneBackend::pasteFromClipboard() {
-    if (!OpenClipboard(hwnd_)) return;
-    std::string utf8;
-    if (HANDLE hd = GetClipboardData(CF_UNICODETEXT)) {
-        if (auto *w = static_cast<const wchar_t *>(GlobalLock(hd))) {
-            int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
-            if (n > 1) { utf8.resize(size_t(n)); WideCharToMultiByte(CP_UTF8, 0, w, -1, utf8.data(), n, nullptr, nullptr); utf8.resize(size_t(n - 1)); }
-            GlobalUnlock(hd);
-        }
-    }
-    CloseClipboard();
-    if (!utf8.empty()) paste(utf8);
-}
-
-void Win32PaneBackend::copySelection(bool clearAfter) {
-    if (!core_ || !itcore_selection_active(core_)) return;
-    itcore_buffer *b = nullptr;
-    if (itcore_selection_text(core_, &b) != 0 || !b) return;
-    std::string t(reinterpret_cast<const char *>(b->data), b->length);
-    itcore_buffer_release(b);
-    int n = MultiByteToWideChar(CP_UTF8, 0, t.data(), int(t.size()), nullptr, 0);
-    if (n > 0 && OpenClipboard(hwnd_)) {
-        if (HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, size_t(n + 1) * sizeof(wchar_t))) {
-            auto *w = static_cast<wchar_t *>(GlobalLock(g));
-            MultiByteToWideChar(CP_UTF8, 0, t.data(), int(t.size()), w, n);
-            w[n] = 0;
-            GlobalUnlock(g);
-            EmptyClipboard();
-            if (!SetClipboardData(CF_UNICODETEXT, g)) GlobalFree(g);
-        }
-        CloseClipboard();
-    }
-    if (clearAfter) { itcore_selection_clear(core_); selectionChanged(); }
-}
-
 // 特殊键：决策在 planKey（Linux 单测），这里只取 ToUnicode / MapVirtualKey 的结果。
 void Win32PaneBackend::sendKey(unsigned vk, unsigned mods) {
     if (!transport_ || !core_ || closing_ || finished_) return;
@@ -660,13 +623,6 @@ void Win32PaneBackend::sendKey(unsigned vk, unsigned mods) {
             wchar_t b2[4] = {};
             if (ToUnicode(vk, MapVirtualKeyW(vk, MAPVK_VK_TO_VSC), ks, b2, 4, 0x4) == 1) base = b2[0];
         }
-    }
-    // 剪贴板快捷键先于普通编码（PASTE-01）
-    switch (planClipboardKey(vk, mods, itcore_selection_active(core_) != 0, !cfg_ || cfg_->interceptCtrlV)) {
-    case ClipKey::Paste: pasteFromClipboard(); return;
-    case ClipKey::Copy: copySelection(false); return;
-    case ClipKey::CopyAndClear: copySelection(true); return;
-    case ClipKey::None: break;
     }
     KeyPlan plan = planKey(vk, mods, translated, base);
     if (plan.kind == KeyPlan::Ignore) return;

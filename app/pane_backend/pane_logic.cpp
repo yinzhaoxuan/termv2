@@ -222,19 +222,6 @@ std::string transformPaste(std::string_view in, bool bracketed) {
     return out;
 }
 
-ClipKey planClipboardKey(unsigned vk, unsigned uiMods, bool hasSelection, bool interceptCtrlV) {
-    const bool shift = uiMods & 1, alt = uiMods & 2, ctrl = uiMods & 4;
-    if (alt) return ClipKey::None;
-    if (vk == 0x2D /*VK_INSERT*/ && shift && !ctrl) return ClipKey::Paste;
-    if (!ctrl) return ClipKey::None;
-    if (vk == 'V') return (shift || interceptCtrlV) ? ClipKey::Paste : ClipKey::None;
-    if (vk == 'C') {
-        if (shift) return ClipKey::Copy;
-        return hasSelection ? ClipKey::CopyAndClear : ClipKey::None;
-    }
-    return ClipKey::None;
-}
-
 KeyPlan planKey(unsigned vk, unsigned uiMods, uint32_t translated, uint32_t base) {
     KeyPlan p;
     if (vk == 0xE5 || vk == 0) return p;  // VK_PROCESSKEY：输入法组字中
