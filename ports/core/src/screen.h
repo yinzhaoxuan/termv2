@@ -215,6 +215,7 @@ private:
 struct ScreenModes {
     bool wrap = true;          // DECAWM
     bool insert = false;       // IRM
+    bool lnm = false;          // LNM (ANSI 20)：LF/VT/FF 同时回车
     bool cursor_visible = true;// DECTCEM
     bool alt = false;          // 当前是否备用屏
     bool bracketed_paste = false;
@@ -269,8 +270,12 @@ public:
     SnapshotData take_snapshot(int32_t first_row, uint16_t row_count) const;
     // DECRQM 语义：0 不支持 / 1 置位 / 2 复位（DEC 私有模式号）
     int dec_mode_state(int mode) const;
+    int ansi_mode_state(int mode) const;  // ANSI 模式（CSI Ps $ p）
+    // 历史在当前列宽下的显示行数（备用屏为 0）
+    size_t history_display_rows() const;
     // ---- 选区（字符粒度；坐标为视口相对，first_row 同 take_snapshot）----
-    bool sel_start(int32_t first_row, uint16_t col, uint16_t row);
+    // unit：0 字符 / 1 词 / 2 逻辑行（跨软换行）。词/行模式下 extend 以起点所在的词/行为锚扩展。
+    bool sel_start(int32_t first_row, uint16_t col, uint16_t row, int unit = 0);
     bool sel_extend(int32_t first_row, uint16_t col, uint16_t row);
     void sel_clear();
     bool sel_active() const { return sel_.active; }
@@ -323,7 +328,7 @@ private:
     uint32_t link_id_ = 0;
     bool join_cluster(uint32_t cp, const uint8_t *utf8, size_t utf8_len);
     // 选区
-    struct Selection { bool active = false, alt = false; SelPos anchor, head; };
+    struct Selection { bool active = false, alt = false; int unit = 0; SelPos anchor, head; };
     struct Seg { uint64_t id; std::vector<const Cell *> chars; bool hard; };
     Selection sel_;
     uint64_t sel_serial_ = 0;
@@ -331,8 +336,14 @@ private:
     bool sel_pos_at(int32_t first_row, uint16_t col, uint16_t row, SelPos *out) const;
     // 视口 [first_row, first_row+n) 每行每列的选区坐标
     std::vector<std::vector<SelPos>> view_positions(int32_t first_row, uint16_t n) const;
-    bool sel_range(const std::vector<Seg> &segs, std::pair<size_t, uint32_t> *s, std::pair<size_t, uint32_t> *e) const;
-    void sel_touch();
+    using SegPos = std::pair<size_t, uint32_t>;  // (段序号, 字符序号)
+    bool sel_range(const Selection &sel, const std::vector<Seg> &segs, SegPos *s, SegPos *e) const;
+    bool sel_range(const std::vector<Seg> &segs, SegPos *s, SegPos *e) const { return sel_range(sel_, segs, s, e); }
+    void unit_range(const std::vector<Seg> &segs, SegPos p, int unit, SegPos *lo, SegPos *hi) const;
+    int char_class(const Cell *c) const;
+    // 选区变化：新旧选区覆盖到的网格行全部取新 revision（全局计数器），历史行随计数器一起变
+    void sel_touch(const Selection &old);
+    size_t sel_hist_segments_ = 0;
 };
 
 }  // namespace itcore

@@ -133,6 +133,10 @@ itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t dec_private_m
    端点按 (逻辑段, 字符序号) 存储，跟随滚动历史、重排与 resize；切换主/备用屏、RIS、ED 3 时清除。
    start/extend 返回 1 表示选区（或其显示）有变化，0 表示无变化或坐标无效。 */
 int  itcore_selection_start(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row);
+/* 按单位开始选区：unit 0=字符 1=词（双击） 2=逻辑行（三击，跨软换行）。后续 extend 按同一单位吸附 */
+int  itcore_selection_start_unit(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row, int unit);
+/* 当前列宽下历史的显示行数（备用屏为 0）；视口 first_row 的下限为 -itcore_history_rows */
+uint32_t itcore_history_rows(const itcore_core *c);
 int  itcore_selection_extend(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row);
 void itcore_selection_clear(itcore_core *c);
 int  itcore_selection_active(const itcore_core *c);

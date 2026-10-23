@@ -527,6 +527,7 @@ std::string apply_csi_defaults(Token &t) {
     }
     if (priv == '?' && (f == 'h' || f == 'l') && no_inter) return f == 'h' ? "DECSET" : "DECRST";
     if (priv == '?' && f == 'p' && inter == "$") { set_param_if_default(t, 0, 0); return "DECRQM"; }
+    if (priv == 0 && f == 'p' && inter == "$") { set_param_if_default(t, 0, 0); return "DECRQM_ANSI"; }
     if (priv == '>' && f == 'c' && no_inter) { set_param_if_default(t, 0, 0); return "DA2"; }
     if (priv != 0) return "";  // 其它私有：消费但不填默认
 
@@ -974,6 +975,7 @@ void Screen::set_mode(const Token &t, bool set) {
             }
         } else {
             if (p == 4) modes_.insert = set;
+            else if (p == 20) modes_.lnm = set;
         }
     }
     bump();
@@ -1018,8 +1020,8 @@ void Screen::full_reset() {
     modes_ = ScreenModes{};
     pen_ = Pen{};
     saved_main_ = SavedCursor{}; saved_alt_ = SavedCursor{};
+    if (sel_.active) ++sel_serial_;
     sel_ = Selection{};
-    ++sel_serial_;
     scrollback_.clear();
     main_.reset(cols, rows);
     alt_.reset(cols, rows);
@@ -1070,7 +1072,7 @@ void Screen::apply_one(const Token &t, std::string *reply) {
         case 0x07: break;  // BEL：事件层处理
         case 0x08: backspace(); break;
         case 0x09: tab(); break;
-        case 0x0A: case 0x0B: case 0x0C: linefeed(true); break;
+        case 0x0A: case 0x0B: case 0x0C: linefeed(true); if (modes_.lnm) grid().cursor().x = 0; break;
         case 0x0D: carriage_return(); break;
         default: break;
         }
@@ -1139,6 +1141,10 @@ void Screen::apply_one(const Token &t, std::string *reply) {
             int p = param_or(t2, 0, 0);
             if (reply) *reply += "\x1b[?" + std::to_string(p) + ";" + std::to_string(dec_mode_state(p)) + "$y";
         }
+        else if (cmd == "DECRQM_ANSI") {
+            int p = param_or(t2, 0, 0);
+            if (reply) *reply += "\x1b[" + std::to_string(p) + ";" + std::to_string(ansi_mode_state(p)) + "$y";
+        }
         else if (cmd == "DECSET") set_mode(t2, true);
         else if (cmd == "DECRST") set_mode(t2, false);
         else if (cmd == "SM") set_mode(t2, true);
@@ -1181,8 +1187,11 @@ Screen::SnapshotData Screen::take_snapshot(int32_t first_row, uint16_t row_count
     sn.rows = grid().rows();
     sn.cursor_col = std::min(grid().cursor().x, (int)sn.cols - 1);
     if (sn.cursor_col < 0) sn.cursor_col = 0;
-    sn.cursor_row = grid().cursor().y;
-    sn.cursor_visible = modes_.cursor_visible;
+    // 视口偏移（first_row<0 看历史）：光标按视口相对行给出，移出视口则不可见
+    int64_t crow = int64_t(grid().cursor().y) - first_row;
+    bool cin = crow >= 0 && crow < row_count;
+    sn.cursor_row = cin ? int(crow) : 0;
+    sn.cursor_visible = modes_.cursor_visible && cin;
     sn.mouse_mode = modes_.mouse_mode;
     sn.pool = pool_.ref();  // 增量引用：O(1)，不拷贝
     sn.epoch = sn.pool.epoch;
@@ -1218,7 +1227,7 @@ Screen::SnapshotData Screen::take_snapshot(int32_t first_row, uint16_t row_count
     // 选区叠加：选中格带 ITCORE_CELL_SELECTED，并翻转 INVERSE 以便现有渲染器直接画出
     if (sel_.active && sel_.alt == modes_.alt) {
         auto segs = sel_segments();
-        std::pair<size_t, uint32_t> a, b;
+        SegPos a, b;
         if (sel_range(segs, &a, &b)) {
             std::unordered_map<uint64_t, size_t> ord;
             for (size_t k = 0; k < segs.size(); ++k) ord[segs[k].id] = k;
@@ -1256,6 +1265,22 @@ int Screen::dec_mode_state(int mode) const {
     case 2004: return st(modes_.bracketed_paste);
     default: return 0;
     }
+}
+
+// 上游 VT100Terminal 的 ANSI DECRQM：只回答实现了的模式，其余 Pm=0
+int Screen::ansi_mode_state(int mode) const {
+    switch (mode) {
+    case 4: return modes_.insert ? 1 : 2;
+    case 20: return modes_.lnm ? 1 : 2;
+    default: return 0;
+    }
+}
+
+size_t Screen::history_display_rows() const {
+    if (modes_.alt) return 0;
+    std::vector<Row> hist;
+    reflow_merged(scrollback_, grid().cols(), hist);
+    return hist.size();
 }
 
 // ---- 选区 ----
@@ -1315,35 +1340,110 @@ bool Screen::sel_pos_at(int32_t first_row, uint16_t col, uint16_t row, SelPos *o
     return out->seg != 0;
 }
 
+// 词字符：字母数字、非 ASCII（含 CJK）与上游默认的 "/-+\~_."；空白一类；其余标点各自成词
+int Screen::char_class(const Cell *c) const {
+    if (!c || !c->grapheme_id) return 0;
+    size_t n = 0;
+    const char *t = pool_.get(c->grapheme_id, &n);
+    if (!t || !n) return 0;
+    unsigned char ch = static_cast<unsigned char>(t[0]);
+    if (ch == ' ' || ch == '\t') return 0;
+    if (ch >= 0x80 || std::isalnum(ch) || std::strchr("/-+\\~_.", ch)) return 1;
+    return 2;
+}
+
+void Screen::unit_range(const std::vector<Seg> &segs, SegPos p, int unit, SegPos *lo, SegPos *hi) const {
+    *lo = *hi = p;
+    if (unit == 0 || segs.empty()) return;
+    size_t k0 = p.first, k1 = p.first;
+    while (k0 > 0 && !segs[k0 - 1].hard) --k0;
+    while (k1 + 1 < segs.size() && !segs[k1].hard) ++k1;
+    if (unit == 2) {
+        *lo = {k0, 0};
+        *hi = {k1, segs[k1].chars.empty() ? 0u : uint32_t(segs[k1].chars.size() - 1)};
+        return;
+    }
+    std::vector<SegPos> flat;
+    std::vector<const Cell *> cells;
+    size_t at = SIZE_MAX;
+    for (size_t k = k0; k <= k1; ++k)
+        for (uint32_t i = 0; i < segs[k].chars.size(); ++i) {
+            if (k == p.first && i == p.second) at = flat.size();
+            flat.push_back({k, i});
+            cells.push_back(segs[k].chars[i]);
+        }
+    if (flat.empty()) return;
+    if (at == SIZE_MAX) {  // 点在行尾之后：取同段最后一个字符
+        for (size_t i = flat.size(); i-- > 0;) if (flat[i].first <= p.first) { at = i; break; }
+        if (at == SIZE_MAX) at = 0;
+    }
+    int cls = char_class(cells[at]);
+    size_t a = at, b = at;
+    if (cls != 2) {
+        while (a > 0 && char_class(cells[a - 1]) == cls) --a;
+        while (b + 1 < cells.size() && char_class(cells[b + 1]) == cls) ++b;
+    }
+    *lo = flat[a]; *hi = flat[b];
+}
+
 // 端点 → (段序号, 字符序号)，按文档序排好。段已被淘汰（历史裁剪）时夹到最前；网格 resize 截掉的段夹到最后。
-bool Screen::sel_range(const std::vector<Seg> &segs, std::pair<size_t, uint32_t> *s, std::pair<size_t, uint32_t> *e) const {
-    if (!sel_.active || segs.empty()) return false;
-    auto locate = [&](SelPos p, bool *found) -> std::pair<size_t, uint32_t> {
+bool Screen::sel_range(const Selection &sel, const std::vector<Seg> &segs, SegPos *s, SegPos *e) const {
+    if (!sel.active || segs.empty()) return false;
+    auto locate = [&](SelPos p, bool *found) -> SegPos {
         for (size_t k = 0; k < segs.size(); ++k) if (segs[k].id == p.seg) { *found = true; return {k, p.off}; }
         *found = false;
         if (p.seg < segs.front().id) return {0, 0};
         return {segs.size() - 1, uint32_t(segs.back().chars.size())};
     };
     bool fa = false, fb = false;
-    auto a = locate(sel_.anchor, &fa), b = locate(sel_.head, &fb);
+    SegPos a = locate(sel.anchor, &fa), b = locate(sel.head, &fb);
     if (!fa && !fb) return false;
-    if (b < a) std::swap(a, b);
-    *s = a; *e = b;
+    if (sel.unit == 0) {
+        if (b < a) std::swap(a, b);
+        *s = a; *e = b;
+        return true;
+    }
+    SegPos alo, ahi, hlo, hhi;
+    if (fa) unit_range(segs, a, sel.unit, &alo, &ahi); else alo = ahi = a;
+    if (fb) unit_range(segs, b, sel.unit, &hlo, &hhi); else hlo = hhi = b;
+    if (b < alo) { *s = hlo; *e = ahi; }
+    else { *s = alo; *e = std::max(ahi, hhi); }
     return true;
 }
 
-void Screen::sel_touch() {
+void Screen::sel_touch(const Selection &old) {
     ++sel_serial_;
-    main_.touch_all_rows();
-    alt_.touch_all_rows();
+    // 至少推进一次全局计数：历史行的 revision 取当前计数，因此可见的历史行都会被重画
+    main_.next_rev();
+    for (int pass = 0; pass < 2; ++pass) {
+        const Selection &sl = pass ? sel_ : old;
+        if (!sl.active) continue;
+        Selection probe = sel_;
+        Selection saved = sel_;
+        probe = sl;
+        // sel_segments 按 sel_.alt 选网格；临时切换
+        sel_ = probe;
+        auto segs = sel_segments();
+        SegPos a, b;
+        bool ok = sel_range(sl, segs, &a, &b);
+        sel_ = saved;
+        if (!ok) continue;
+        size_t hist = sl.alt ? 0 : scrollback_.logical_count();
+        Grid &g = sl.alt ? alt_ : main_;
+        for (size_t k = std::max(a.first, hist); k <= b.first && k < segs.size(); ++k) {
+            int y = int(k - hist);
+            if (y >= 0 && y < g.rows()) g.row(y).revision = g.next_rev();
+        }
+    }
     bump();
 }
 
-bool Screen::sel_start(int32_t first_row, uint16_t col, uint16_t row) {
+bool Screen::sel_start(int32_t first_row, uint16_t col, uint16_t row, int unit) {
     SelPos p;
     if (!sel_pos_at(first_row, col, row, &p)) { sel_clear(); return false; }
-    sel_ = Selection{true, modes_.alt, p, p};
-    sel_touch();
+    Selection old = sel_;
+    sel_ = Selection{true, modes_.alt, unit < 0 || unit > 2 ? 0 : unit, p, p};
+    sel_touch(old);
     return true;
 }
 bool Screen::sel_extend(int32_t first_row, uint16_t col, uint16_t row) {
@@ -1351,21 +1451,23 @@ bool Screen::sel_extend(int32_t first_row, uint16_t col, uint16_t row) {
     SelPos p;
     if (!sel_pos_at(first_row, col, row, &p)) return false;
     if (p.seg == sel_.head.seg && p.off == sel_.head.off) return true;
+    Selection old = sel_;
     sel_.head = p;
-    sel_touch();
+    sel_touch(old);
     return true;
 }
 void Screen::sel_clear() {
     if (!sel_.active) return;
+    Selection old = sel_;
     sel_ = Selection{};
-    sel_touch();
+    sel_touch(old);
 }
 
 // 复制文本（上游 iTerm2 默认行为）：空格补空白格，宽字符只出一次，软换行拼接，
 // 硬换行出 '\n' 并去掉该行尾部空白；跨到行尾之后（点在内容右侧）不额外补换行。
 std::string Screen::sel_text() const {
     auto segs = sel_segments();
-    std::pair<size_t, uint32_t> a, b;
+    SegPos a, b;
     if (sel_.alt != modes_.alt || !sel_range(segs, &a, &b)) return {};
     std::string out, line;
     auto rtrim = [](std::string &t) { while (!t.empty() && t.back() == ' ') t.pop_back(); };

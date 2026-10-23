@@ -186,6 +186,18 @@ int itcore_selection_start(itcore_core *c, int32_t first_row, uint16_t col, uint
     c->push(ITCORE_EV_RENDER_INVALIDATED);
     return 1;
 }
+int itcore_selection_start_unit(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row, int unit) {
+    if (!c || !c->screen) return 0;
+    uint64_t before = c->screen->sel_serial();
+    c->screen->sel_start(first_row, col, row, unit);
+    if (c->screen->sel_serial() == before) return 0;
+    c->push(ITCORE_EV_RENDER_INVALIDATED);
+    return 1;
+}
+uint32_t itcore_history_rows(const itcore_core *c) {
+    if (!c || !c->screen) return 0;
+    return static_cast<uint32_t>(c->screen->history_display_rows());
+}
 int itcore_selection_extend(itcore_core *c, int32_t first_row, uint16_t col, uint16_t row) {
     if (!c || !c->screen) return 0;
     uint64_t before = c->screen->sel_serial();

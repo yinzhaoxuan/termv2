@@ -1,6 +1,8 @@
 // T08 PaneBackend 的平台无关部分（Linux 单测）：括号粘贴、响铃/标题限流、20×5 最小网格与
 // resize generation、跨线程 → UI 线程的事件派发队列。Win32 实现见 win32_pane_backend.cpp。
 #pragma once
+#include <chrono>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -56,40 +58,66 @@ private:
 };
 
 // 任意线程 post，UI 线程 drain。队列由空变非空时调用 wake（可在任意线程，须廉价，如 PostMessage）。
+// wake 在锁内调用：close() 返回后 wake 不会再运行，持有者可以放心销毁 wake 引用的对象。
 // close() 后 post 被丢弃。drain 中回调再 post 的任务留到下一次 drain，避免饿死消息循环。
+// OwnerTask：任务不捕获窗格指针，由 drain(owner) 在 UI 线程把当时还活着的窗格传进来。
 class UiDispatchQueue {
 public:
     using Task = std::function<void()>;
+    using OwnerTask = std::function<void(void *owner)>;
     explicit UiDispatchQueue(std::function<void()> wake = {}) : wake_(std::move(wake)) {}
     void setWake(std::function<void()> wake);
     bool post(Task t);
-    std::size_t drain();
+    bool postOwner(OwnerTask t);
+    std::size_t drain(void *owner = nullptr);
     void close();
+    bool closed() const;
     std::size_t size() const;
 private:
     mutable std::mutex mu_;
-    std::deque<Task> q_;
+    std::deque<OwnerTask> q_;
     std::function<void()> wake_;
     bool closed_ = false;
 };
+// 类型安全的投递：f(Owner&) 只在 drain(&owner) 时执行
+template <class Owner, class F>
+bool postTo(UiDispatchQueue &q, F f) {
+    return q.postOwner([f = std::move(f)](void *o) mutable { if (o) f(*static_cast<Owner *>(o)); });
+}
 
-// ---- 非阻塞关闭（T08 R1）----
-// 每个会话自己的关闭线程：job 在该线程上跑完 T03A 九步关闭与超时强杀（可阻塞），
-// 结果 post 到 UI 队列，done 在 UI 线程 drain 时执行。start() 立即返回；多个会话并行关闭。
-// 队列被 close（UI 侧对象销毁）后结果丢弃，done 不会再被调用；线程 detach，不被 join。
+// ---- 非阻塞关闭（T08 R1/R2）----
 struct CloseOutcome {
     bool ok = true;         // 正常结束（Exited）
     bool timedOut = false;  // 超出预算被强杀
     std::string detail;
 };
+// 会话共享状态：窗格与关闭线程 / 传输回调之间唯一共享的东西。不含窗格指针、不含 PaneEvents。
+struct SessionShared {
+    std::shared_ptr<UiDispatchQueue> queue = std::make_shared<UiDispatchQueue>();
+    std::atomic<bool> pumpPending{false};
+    std::shared_ptr<void> transport;  // 传输层对象；最后一个持有者（通常是关闭线程）负责析构
+    void setCloseResult(CloseOutcome r);
+    std::optional<CloseOutcome> takeCloseResult();
+private:
+    std::mutex mu_;
+    std::optional<CloseOutcome> result_;
+};
+// 每个会话自己的关闭线程：job 在该线程上跑完 T03A 九步关闭与超时强杀（可阻塞），
+// 结果写进 SessionShared 并 post 一个空任务唤醒 UI；UI drain 后 takeCloseResult 取结果。
+// 线程只持有 shared_ptr<SessionShared>；窗格销毁（队列 close）后结果无人领取，随共享状态释放。
+// 线程 detach；全局登记活跃数，程序退出时 shutdownAll 等待其结束。
 class SessionCloser {
 public:
-    using Job = std::function<CloseOutcome()>;
-    using Done = std::function<void(const CloseOutcome &)>;
-    // 只有第一次调用生效；返回是否本次启动。after（可空）在 post 结果之后、仍在关闭线程上执行，
+    using Job = std::function<CloseOutcome(SessionShared &)>;
+    using After = std::function<void(SessionShared &)>;
+    // 只有第一次调用生效；返回是否本次启动。after（可空）在结果写入之后、仍在关闭线程上执行，
     // 用于超时上报后继续等待传输层真正结束并在该线程上析构。
-    bool start(std::shared_ptr<UiDispatchQueue> q, Job job, Done done, std::function<void()> after = {});
+    bool start(std::shared_ptr<SessionShared> st, Job job, After after = {});
     bool started() const { return started_; }
+    // 等待所有关闭线程结束（程序退出时在 UI 线程调用）。超时返回 false：剩余线程保持 detach，
+    // 子进程由 Job 对象 KILL_ON_JOB_CLOSE 随进程退出回收；登记表故意泄漏，不参与静态析构。
+    static bool shutdownAll(std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));
+    static int liveThreads();
 private:
     bool started_ = false;
 };
@@ -111,5 +139,37 @@ private:
     bool pressed_ = false, dragging_ = false;
     Cell press_;
 };
+
+// 多击计数：同一格、间隔不超过系统双击时间的连续按下累加 1→2→3→1（3 = 三击选行）
+class ClickCounter {
+public:
+    int press(int col, int row, uint64_t nowMs, uint32_t intervalMs);
+    void reset() { count_ = 0; }
+private:
+    int count_ = 0, col_ = -1, row_ = -1;
+    uint64_t last_ = 0;
+};
+
+// 视口：offset = 离底部的行数（0 = 跟随输出）；first_row = -offset。history = 历史显示行数。
+class Viewport {
+public:
+    int offset() const { return offset_; }
+    int history() const { return history_; }
+    int32_t firstRow() const { return -offset_; }
+    bool scroll(int lines);              // 负数 = 往历史里翻；超出范围截断。返回是否变化
+    bool toBottom() { return set(0); }
+    // 历史行数变化：已上翻时把 offset 同步增加，保持看着同一段内容；历史被裁剪/清空时截断
+    bool updateHistory(int history);
+private:
+    bool set(int off);
+    int offset_ = 0, history_ = 0;
+};
+
+// 滚轮路由：鼠标模式 → 转发给程序；备用屏无鼠标模式 → 上下方向键；否则滚动视口
+enum class WheelRoute { Forward, Arrows, Scroll };
+inline WheelRoute routeWheel(bool mouseMode, bool altScreen) {
+    if (mouseMode) return WheelRoute::Forward;
+    return altScreen ? WheelRoute::Arrows : WheelRoute::Scroll;
+}
 
 }  // namespace it2app

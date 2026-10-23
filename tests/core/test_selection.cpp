@@ -1,5 +1,8 @@
 // CORE-11 模式查询 / DECRQM；CORE-12 选区；ENC-02 粘贴标记清洗
 #include "itcore.h"
+#include "cell_style.h"
+#include <algorithm>
+#include <vector>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -164,15 +167,123 @@ static void test_selection_alt_clear() {
     itcore_destroy(c);
 }
 
+static bool has(const std::vector<uint16_t> &v, uint16_t r) { return std::find(v.begin(), v.end(), r) != v.end(); }
+static std::vector<uint16_t> dirty(itcore_core *c, itren::DirtyRows &d, int32_t first, uint16_t rows) {
+    itcore_snapshot *s = itcore_acquire_snapshot(c, first, rows);
+    auto v = d.collect(s);
+    itcore_snapshot_release(s);
+    return v;
+}
+
+// 拖选过程中每一步只有受影响的行拿到新 revision；DirtyRows 能据此得到脏行
+static void test_selection_dirty_rows() {
+    itcore_core *c = make(10, 4);
+    feed(c, "r0\r\nr1 aaa\r\nr2 bbb\r\nr3");
+    itren::DirtyRows d;
+    dirty(c, d, 0, 4);
+    CHECK(dirty(c, d, 0, 4).empty());
+    itcore_selection_start(c, 0, 1, 1);
+    auto v = dirty(c, d, 0, 4);
+    CHECK(has(v, 1) && !has(v, 0) && !has(v, 2) && !has(v, 3));
+    itcore_selection_extend(c, 0, 2, 2);
+    v = dirty(c, d, 0, 4);
+    CHECK(has(v, 1) && has(v, 2) && !has(v, 0) && !has(v, 3));
+    itcore_selection_extend(c, 0, 0, 1);  // 往回缩：第 2 行要去掉高亮
+    v = dirty(c, d, 0, 4);
+    CHECK(has(v, 1) && has(v, 2) && !has(v, 0) && !has(v, 3));
+    itcore_selection_clear(c);
+    v = dirty(c, d, 0, 4);
+    CHECK(has(v, 1) && !has(v, 2) && !has(v, 0));
+    CHECK(dirty(c, d, 0, 4).empty());
+    // 输出导致清除（ED 3）：原选区行变脏
+    itcore_selection_start(c, 0, 0, 3);
+    dirty(c, d, 0, 4);
+    feed(c, "\x1b[3J");
+    CHECK(!itcore_selection_active(c));
+    CHECK(has(dirty(c, d, 0, 4), 3));
+    // 视口在历史里：历史行随全局计数器一起变脏
+    itcore_core *h = make(10, 2);
+    feed(h, "a\r\nb\r\nc\r\nd");
+    itren::DirtyRows dh;
+    dirty(h, dh, -2, 2);
+    itcore_selection_start(h, -2, 0, 0);
+    CHECK(has(dirty(h, dh, -2, 2), 0));
+    itcore_destroy(h);
+    itcore_destroy(c);
+}
+
+static void test_selection_units() {
+    itcore_core *c = make(10, 3);
+    feed(c, "ab cd/e.f;g\r\nxy");  // 第 0 行软换行到第 1 行："ab cd/e.f;" + "g"
+    itcore_selection_start_unit(c, 0, 4, 0, 1);
+    CHECK(sel(c) == "cd/e.f");
+    itcore_selection_start_unit(c, 0, 9, 0, 1);
+    CHECK(sel(c) == ";");
+    itcore_selection_start_unit(c, 0, 0, 0, 1);
+    itcore_selection_extend(c, 0, 4, 0);
+    CHECK(sel(c) == "ab cd/e.f");
+    itcore_selection_start_unit(c, 0, 1, 1, 2);  // 三击软换行的续行：整条逻辑行
+    CHECK(sel(c) == "ab cd/e.f;g");
+    itcore_selection_extend(c, 0, 0, 2);
+    CHECK(sel(c) == "ab cd/e.f;g\nxy");
+    itcore_selection_start_unit(c, 0, 0, 2, 2);
+    itcore_selection_extend(c, 0, 0, 0);  // 反向扩展
+    CHECK(sel(c) == "ab cd/e.f;g\nxy");
+    // 历史行数
+    itcore_core *h = make(10, 2);
+    CHECK(itcore_history_rows(h) == 0);
+    feed(h, "1\r\n2\r\n3\r\n4");
+    CHECK(itcore_history_rows(h) == 2);
+    feed(h, "\x1b[?1049h");
+    CHECK(itcore_history_rows(h) == 0);
+    itcore_destroy(h);
+    itcore_destroy(c);
+}
+
+static void test_ansi_decrqm() {
+    itcore_core *c = make();
+    for (int m : {2004, 1049, 25}) {
+        std::string ms = std::to_string(m);
+        feed(c, "\x1b[?" + ms + "h");
+        CHECK(feed(c, "\x1b[?" + ms + "$p") == "\x1b[?" + ms + ";1$y");
+        feed(c, "\x1b[?" + ms + "l");
+        CHECK(feed(c, "\x1b[?" + ms + "$p") == "\x1b[?" + ms + ";2$y");
+    }
+    CHECK(feed(c, "\x1b[?9999$p") == "\x1b[?9999;0$y");
+    CHECK(feed(c, "\x1b[9999$p") == "\x1b[9999;0$y");
+    CHECK(feed(c, "\x1b[4$p") == "\x1b[4;2$y");
+    feed(c, "\x1b[4h");
+    CHECK(feed(c, "\x1b[4$p") == "\x1b[4;1$y");
+    feed(c, "\x1b[4l");
+    CHECK(feed(c, "\x1b[4$p") == "\x1b[4;2$y");
+    CHECK(feed(c, "\x1b[20$p") == "\x1b[20;2$y");
+    feed(c, "\x1b[20h");
+    CHECK(feed(c, "\x1b[20$p") == "\x1b[20;1$y");
+    CHECK(feed(c, "\x1b[25$p") == "\x1b[25;0$y");  // ANSI 25 与 DEC ?25 分开
+    // LNM：LF 兼回车
+    feed(c, "\x1b[2J\x1b[Hab\ncd");
+    itcore_snapshot *s = itcore_acquire_snapshot(c, 0, 3);
+    uint16_t col = 9, row = 9; int vis = 0;
+    itcore_snapshot_cursor(s, &col, &row, &vis);
+    CHECK(row == 1 && col == 2);
+    itcore_snapshot_release(s);
+    feed(c, "\x1b[20l");
+    CHECK(feed(c, "\x1b[20$p") == "\x1b[20;2$y");
+    itcore_destroy(c);
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "all" || w == "modes") test_modes();
     if (w == "all" || w == "paste") test_paste_markers();
+    if (w == "all" || w == "ansi") test_ansi_decrqm();
     if (w == "all" || w == "sel") {
         test_selection_basic();
         test_selection_wrap_wide();
         test_selection_follows_scroll_resize();
         test_selection_alt_clear();
+        test_selection_dirty_rows();
+        test_selection_units();
     }
     if (failures) std::printf("%d failures\n", failures);
     return failures ? 1 : 0;

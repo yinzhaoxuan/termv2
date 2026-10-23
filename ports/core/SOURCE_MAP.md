@@ -75,3 +75,10 @@
 - 压缩触发：池字节数 > 预算 75%（预算默认 `max(1 MiB, mem_limit/8)`，压缩后阈值取 `max(75% 预算, 2×存活字节)` 防抖）、RIS（`ESC c`）、ED 3。
 - 压缩从主屏、备用屏、滚动历史、REP/字素簇续写状态与当前 OSC 8 链接收集仍在用的 grapheme/hyperlink id，重建新 store，重映射所有 Cell；epoch +1，所有行 revision 以全局单调计数推进；`bytes_` 按存活条目重新计算。旧快照持有旧 store，不受影响。
 - 行 revision 由 Screen 级单调计数器分配（主/备用屏共享），滚动/插删行/reset/清池都会取新值；resize 保留原 revision。历史行在快照中以当前计数作 revision。快照 `itcore_snapshot_epoch()` 暴露池 epoch。
+
+## 选区粒度 / 视口 / ANSI DECRQM（T08 R2）
+
+- `itcore_selection_start_unit(unit)`：0 字符、1 词、2 逻辑行。词类沿用上游默认 "Characters considered part of a word"：`/-+\~_.`、字母数字、非 ASCII；空白一类，其它标点各自成词。逻辑行沿软换行段向两侧扩展。扩展时按头点与锚点单位范围的先后关系吸附（同上游 `iTermSelection` 的 word/line 模式）。
+- 选区变化：`sel_touch(old)` 只给新旧范围内的网格行取新 revision，全局计数推进一次，历史行随之变脏。
+- `itcore_history_rows`：当前列宽下历史显示行数（备用屏为 0）。快照的 `first_row<0` 显示历史；光标按视口相对行给出，移出视口则不可见。
+- ANSI DECRQM（`CSI Ps $ p`）：对应上游 `VT100Terminal` 的 ANSI 分支，4→IRM、20→LNM，其余 Pm=0。LNM 置位时 LF/VT/FF 兼回车。

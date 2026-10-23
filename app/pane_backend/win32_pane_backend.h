@@ -23,5 +23,8 @@ struct PaneBackendConfig {
 };
 
 uishell::PaneBackendFactory makeWin32PaneBackendFactory(PaneBackendConfig cfg);
+// 程序退出时（所有窗格销毁之后、WinMain 返回之前）在 UI 线程调用：等待所有会话关闭线程结束。
+// 超时返回 false，剩余线程保持 detach，子进程由 Job 对象 KILL_ON_JOB_CLOSE 随进程退出回收。
+bool shutdownPaneBackends(unsigned timeoutMs = 3000);
 
 }  // namespace it2app

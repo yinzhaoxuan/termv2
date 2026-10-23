@@ -89,7 +89,8 @@ public:
         : connId_(std::move(connectionId)), ev_(std::move(ev)), cfg_(std::move(cfg)) {
         status_ = {uishell::SessionState::Starting, 0, false, {}, {}};
     }
-    ~Win32PaneBackend() override { teardown(); }
+    // 析构：先断开 PaneEvents，再 teardown（close 队列 → 之后的投递一律丢弃）
+    ~Win32PaneBackend() override { ev_ = {}; teardown(); }
 
     bool attach(void *parentHwnd, const uishell::PixelRect &rc, float dpi) override;
     void setBounds(const uishell::PixelRect &rc, float dpi) override;
@@ -101,6 +102,8 @@ public:
     std::string selectedText() const override;
     void clearSelection() override;
     void requestClose() override;
+    void scrollViewport(int lines) override;
+    void scrollToBottom() override;
 
 private:
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -123,11 +126,18 @@ private:
     void onCloseDone(const CloseOutcome &r);
     void syncSelection();               // 选区有/无变化 → onSelectionChanged
     void selectionChanged();            // 选区显示变化：重绘
+    void drainUi();                     // UI 线程：执行投递任务，领取关闭结果
+    void syncViewport(bool force = false);  // 历史行数 / 偏移变化 → onViewportChanged
+    void handleWheel(WPARAM wp, LPARAM lp);
+    void autoScrollTick();
+    bool altScreen() const { return core_ && itcore_mode_query(core_, 1049) == ITCORE_MODE_SET; }
 
     std::string connId_;
     uishell::PaneEvents ev_;
     std::shared_ptr<const PaneBackendConfig> cfg_;
-    std::shared_ptr<UiDispatchQueue> queue_ = std::make_shared<UiDispatchQueue>();
+    // 与关闭线程 / 传输回调共享的唯一状态（不含 this、不含 PaneEvents）
+    std::shared_ptr<SessionShared> shared_ = std::make_shared<SessionShared>();
+    std::shared_ptr<UiDispatchQueue> queue_ = shared_->queue;
     std::atomic<HWND> hwnd_{nullptr};
     HWND parent_ = nullptr;
     std::unique_ptr<iterm_app::HwndSwapChainHost> host_;
@@ -135,7 +145,7 @@ private:
     itren::GridMetrics metrics_{};
     itcore_core *core_ = nullptr;
     itcore_snapshot *snap_ = nullptr;
-    // shared：关闭线程持有一份，传输层的阻塞关闭与析构都在那条线程上完成
+    // 同一对象也挂在 shared_->transport：关闭线程经共享状态持有，阻塞关闭与析构都在那条线程上完成
     std::shared_ptr<Transport> transport_;
     SessionCloser closer_;
     std::optional<CloseOutcome> closeOutcome_;
@@ -144,7 +154,13 @@ private:
     ResizeTracker resize_;
     RateLimiter bell_{1000};
     TitleThrottle title_{100};
-    std::shared_ptr<std::atomic<bool>> pumpPending_ = std::make_shared<std::atomic<bool>>(false);
+    Viewport vp_;
+    bool vpNotified_ = false;
+    ClickCounter clicks_;
+    int clickUnit_ = 0;                 // 0 字符 / 1 词 / 2 行（双击 / 三击后拖动按单位扩展）
+    int dragEdge_ = 0;                  // 拖选到上(-1)/下(+1)边缘外：tick 自动滚动
+    int dragCol_ = 0;
+    int wheelAccum_ = 0;
     mutable std::mutex statusMu_;
     uishell::SessionStatus status_;
     std::optional<SshExitInfo> sshExit_;
@@ -194,8 +210,8 @@ bool Win32PaneBackend::attach(void *parentHwnd, const uishell::PixelRect &rc, fl
     if (!renderer_->init(metrics_, cfg_->fontFamily.c_str(), cfg_->fontSizePt))
         std::fprintf(stderr, "[pane] D2DRenderer::init 失败（设备丢失时 present 内重试）\n");
     // 传输线程的 post 从这里开始能唤醒 UI 线程；attach 之前排队的任务立即补唤醒
-    // wake 只在队列未 close 时被调用（close 在析构最先执行），故可引用 this
-    queue_->setWake([this] { if (HWND w = hwnd_.load()) PostMessageW(w, WM_PANE_WAKE, 0, 0); });
+    // wake 在队列锁内调用、close 时清空，只捕获窗口句柄（不捕获 this）
+    queue_->setWake([h] { PostMessageW(h, WM_PANE_WAKE, 0, 0); });
     SetTimer(h, kTickTimer, kTickMs, nullptr);
     if (!startSession()) return true;  // 窗口已建，状态为 Failed，UI 可显示错误
     return true;
@@ -214,15 +230,17 @@ bool Win32PaneBackend::startSession() {
     renderer_->set_expected_generation(resize_.generation());
 
     GridSize gs{resize_.dims().cols, resize_.dims().rows};
-    // 传输线程回调只捕获共享队列（不捕获 this）：窗格销毁后传输仍可能在关闭线程上回调，
-    // 此时队列已 close，post 被丢弃；被 post 的任务只在 UI 线程 drain 时（对象存活）执行。
-    auto q = queue_;
-    auto pending = pumpPending_;
-    auto onState = [this, q](SessionId, AttemptId, TransportState s, std::optional<TransportFault> f) {
-        q->post([this, s, f] { onTransportState(s, f); });
+    // 传输线程回调只捕获共享状态的 weak_ptr（传输本身挂在共享状态上，避免环），不捕获 this。
+    // 投递的任务以 Win32PaneBackend& 为参数，只在 UI 线程 drain(this) 时执行；窗格销毁后队列已 close，投递被丢弃。
+    std::weak_ptr<SessionShared> ws = shared_;
+    using P = Win32PaneBackend;
+    auto onState = [ws](SessionId, AttemptId, TransportState s, std::optional<TransportFault> f) {
+        if (auto sh = ws.lock()) postTo<P>(*sh->queue, [s, f](P &p) { p.onTransportState(s, f); });
     };
-    auto onOut = [this, q, pending](SessionId, AttemptId) {
-        if (!pending->exchange(true)) q->post([this, pending] { *pending = false; pump(); });
+    auto onOut = [ws](SessionId, AttemptId) {
+        auto sh = ws.lock();
+        if (sh && !sh->pumpPending.exchange(true))
+            postTo<P>(*sh->queue, [](P &p) { p.shared_->pumpPending = false; p.pump(); });
     };
     auto onDiag = [](SessionId, AttemptId, const DiagRecord &d) {
         std::fprintf(stderr, "[pane] diag %s %llums %s\n", d.stage.c_str(), (unsigned long long)d.elapsedMs, d.detail.c_str());
@@ -231,7 +249,9 @@ bool Win32PaneBackend::startSession() {
         TransportCallbacks cb;
         cb.onStateChanged = onState;
         cb.onOutputAvailable = onOut;
-        cb.onExited = [this, q](SessionId, AttemptId, uint32_t code) { q->post([this, code] { localExit_ = code; }); };
+        cb.onExited = [ws](SessionId, AttemptId, uint32_t code) {
+            if (auto sh = ws.lock()) postTo<P>(*sh->queue, [code](P &p) { p.localExit_ = code; });
+        };
         cb.onDiagnostic = onDiag;
         auto lt = std::make_unique<LocalT>();
         lt->t = std::make_unique<ConPtyTransport>(cb);
@@ -245,6 +265,7 @@ bool Win32PaneBackend::startSession() {
         spec.initialSize = gs;  // environment 为空 → 继承
         auto *raw = lt->t.get();
         transport_ = std::move(lt);
+        shared_->transport = transport_;
         if (!raw->start(SessionId{1}, AttemptId{1}, spec)) { fail("本地 shell 启动失败"); return false; }
     } else {
         std::string err;
@@ -254,12 +275,15 @@ bool Win32PaneBackend::startSession() {
         SshCallbacks cb;
         cb.onStateChanged = onState;
         cb.onOutputAvailable = onOut;
-        cb.onFinished = [this, q](SessionId, AttemptId, const SshExitInfo &x) { q->post([this, x] { sshExit_ = x; }); };
+        cb.onFinished = [ws](SessionId, AttemptId, const SshExitInfo &x) {
+            if (auto sh = ws.lock()) postTo<P>(*sh->queue, [x](P &p) { p.sshExit_ = x; });
+        };
         cb.onDiagnostic = onDiag;
         auto st = std::make_unique<SshT>();
         st->t = std::make_unique<SshTransport>(cb);
         auto *raw = st->t.get();
         transport_ = std::move(st);
+        shared_->transport = transport_;
         if (auto se = raw->start(SessionId{1}, AttemptId{1}, *o)) {
             fail("SSH 配置快照无效：" + se->field + " " + se->reason);
             return false;
@@ -376,15 +400,15 @@ void Win32PaneBackend::pump() {
     drainCoreEvents();
     if (any) syncSelection();  // 输出可能清掉选区（切备用屏 / RIS / ED 3）
     if (any) {
+        syncViewport();        // 已上翻时偏移随历史增长，视图停在原处
         present();
-        if (ev_.onRedrawRequested) ev_.onRedrawRequested();
     }
 }
 
 void Win32PaneBackend::present() {
     if (!renderer_ || !core_) return;
     releaseSnap();
-    snap_ = itcore_acquire_snapshot(core_, 0, resize_.dims().rows);
+    snap_ = itcore_acquire_snapshot(core_, vp_.firstRow(), resize_.dims().rows);  // 视口偏移：负 first_row 显示历史
     if (!snap_) return;
     renderer_->set_expected_generation(resize_.generation());
     renderer_->set_snapshot(snap_);
@@ -424,12 +448,14 @@ void Win32PaneBackend::setFocused(bool f) {
 
 void Win32PaneBackend::sendInput(std::string_view utf8) {
     if (!transport_ || closing_ || finished_ || utf8.empty()) return;
+    scrollToBottom();  // 用户一有输入就回到底部
     auto r = transport_->input(utf8);
     if (r != EnqueueResult::Ok) std::fprintf(stderr, "[pane] enqueueUserInput %d\n", int(r));
 }
 
 void Win32PaneBackend::paste(std::string_view utf8) {
     if (!transport_ || !core_ || closing_ || finished_ || utf8.empty()) return;
+    scrollToBottom();
     auto rejected = [&] { if (ev_.onPasteRejected) ev_.onPasteRejected(utf8.size(), kPasteLimitBytes); };
     // 核心按 DECSET 2004 决定是否加括号标记，并清洗正文（NUL / 内嵌起止标记）
     itcore_buffer *enc = nullptr;
@@ -469,17 +495,50 @@ uishell::SessionStatus Win32PaneBackend::status() const {
 // 关闭线程预算：传输层自身 3 s 预算（含强杀）+ 余量；超出即上报 Failed，线程继续等传输结束
 constexpr DWORD kCloserBudgetMs = 5000;
 
+// 关闭线程只拿 shared_ptr<SessionShared>：结果写进共享状态，UI drain 时 drainUi() 领取并调 onCloseDone。
+// 窗格先销毁则无人领取；传输在本线程等到真正结束后析构（超时仍不结束时由 Job KILL_ON_JOB_CLOSE 兜底）。
 void Win32PaneBackend::startCloser(CloseReason why) {
-    std::shared_ptr<Transport> t = transport_;
-    closer_.start(queue_,
-        [t, why]() {
+    if (!shared_->transport) return;
+    closer_.start(shared_,
+        [why](SessionShared &sh) {
             CloseOutcome r;
+            auto t = std::static_pointer_cast<Transport>(sh.transport);
             t->close(why);  // T03A §1.4 九步由传输层 closer 线程执行；这里只等它在预算内结束
             if (!t->waitClosed(kCloserBudgetMs)) { r.ok = false; r.timedOut = true; r.detail = "关闭超时，已强制结束"; }
             return r;
         },
-        [this](const CloseOutcome &r) { onCloseDone(r); },
-        [t]() mutable { t->waitClosed(INFINITE); t.reset(); });
+        [](SessionShared &sh) {
+            if (auto t = std::static_pointer_cast<Transport>(sh.transport)) t->waitClosed(INFINITE);
+            sh.transport.reset();
+        });
+}
+
+void Win32PaneBackend::drainUi() {
+    queue_->drain(this);
+    if (auto r = shared_->takeCloseResult()) onCloseDone(*r);
+}
+
+void Win32PaneBackend::syncViewport(bool force) {
+    if (!core_) return;
+    bool changed = vp_.updateHistory(int(itcore_history_rows(core_)));
+    if ((changed || force || !vpNotified_) && ev_.onViewportChanged) {
+        vpNotified_ = true;
+        ev_.onViewportChanged(vp_.offset(), vp_.history());
+    }
+}
+
+void Win32PaneBackend::scrollViewport(int lines) {
+    if (!core_ || !lines) return;
+    vp_.updateHistory(int(itcore_history_rows(core_)));
+    if (!vp_.scroll(lines)) return;
+    present();
+    syncViewport(true);
+}
+
+void Win32PaneBackend::scrollToBottom() {
+    if (!core_ || !vp_.toBottom()) return;
+    present();
+    syncViewport(true);
 }
 
 void Win32PaneBackend::onCloseDone(const CloseOutcome &r) {
@@ -513,7 +572,6 @@ void Win32PaneBackend::clearSelection() {
 void Win32PaneBackend::selectionChanged() {
     drainCoreEvents();
     present();
-    if (ev_.onRedrawRequested) ev_.onRedrawRequested();
     syncSelection();
 }
 
@@ -551,7 +609,7 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
         me.struct_size = sizeof(me);
         me.col = c; me.row = r;
         me.button = msg == WM_MOUSEMOVE ? ((wp & MK_LBUTTON) ? ITCORE_MBUTTON_LEFT : ITCORE_MBUTTON_NONE) : ITCORE_MBUTTON_LEFT;
-        me.action = msg == WM_LBUTTONDOWN ? ITCORE_MOUSE_PRESS : msg == WM_LBUTTONUP ? ITCORE_MOUSE_RELEASE : ITCORE_MOUSE_MOVE;
+        me.action = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) ? ITCORE_MOUSE_PRESS : msg == WM_LBUTTONUP ? ITCORE_MOUSE_RELEASE : ITCORE_MOUSE_MOVE;
         if (wp & MK_CONTROL) me.modifiers |= ITCORE_MOD_CTRL;
         itcore_buffer *b = nullptr;
         if (itcore_encode_mouse(core_, &me, &b) == 0 && b) {
@@ -560,28 +618,50 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
         }
         return;
     }
-    // 本地：拖动选择（核心存 (逻辑行, 字符) 端点，跟随滚动/重排），单击清选区并检查链接
+    // 本地：拖动选择（核心存 (逻辑行, 字符) 端点，跟随滚动/重排），单击清选区并检查链接；
+    // 双击选词、三击选逻辑行，之后拖动按同一单位扩展；拖出上下边缘由 tick 自动滚动
     if (!core_) return;
+    const int32_t first = vp_.firstRow();
     DragSelect::Cell cell{c, r};
-    if (msg == WM_LBUTTONDOWN) { downCol_ = c; downRow_ = r; drag_.down(cell); dragSelStarted_ = false; return; }
+    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+        downCol_ = c; downRow_ = r; drag_.down(cell); dragSelStarted_ = false; dragEdge_ = 0;
+        int n = clicks_.press(c, r, GetTickCount64(), GetDoubleClickTime());
+        clickUnit_ = n >= 2 ? n - 1 : 0;
+        if (clickUnit_) {
+            itcore_selection_start_unit(core_, first, c, r, clickUnit_);
+            dragSelStarted_ = true;
+            selectionChanged();
+        }
+        return;
+    }
+    if (msg == WM_MOUSEMOVE && drag_.pressed()) {
+        RECT rc{};
+        GetClientRect(hwnd_, &rc);
+        dragEdge_ = y < 0 ? -1 : y >= rc.bottom ? 1 : 0;
+        dragCol_ = c;
+    }
     auto startSel = [&] {
         auto p = drag_.pressCell();
-        itcore_selection_start(core_, 0, uint16_t(p.col), uint16_t(p.row));
+        itcore_selection_start(core_, first, uint16_t(p.col), uint16_t(p.row));
         dragSelStarted_ = true;
     };
     DragSelect::Act act = msg == WM_LBUTTONUP ? drag_.up(cell) : drag_.move(cell);
+    if (clickUnit_ && act != DragSelect::Act::None) {
+        if (act != DragSelect::Act::Click && itcore_selection_extend(core_, first, c, r)) selectionChanged();
+        act = DragSelect::Act::None;
+    }
     switch (act) {
     case DragSelect::Act::Start:
         startSel();
-        itcore_selection_extend(core_, 0, c, r);
+        itcore_selection_extend(core_, first, c, r);
         selectionChanged();
         break;
     case DragSelect::Act::Extend:
-        if (itcore_selection_extend(core_, 0, c, r)) selectionChanged();
+        if (itcore_selection_extend(core_, first, c, r)) selectionChanged();
         break;
     case DragSelect::Act::Finish:
         if (!dragSelStarted_) startSel();
-        itcore_selection_extend(core_, 0, c, r);
+        itcore_selection_extend(core_, first, c, r);
         selectionChanged();
         break;
     case DragSelect::Act::Click:
@@ -590,15 +670,72 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case DragSelect::Act::None: break;
     }
-    if (msg == WM_LBUTTONUP) downCol_ = downRow_ = -1;
+    if (msg == WM_LBUTTONUP) { downCol_ = downRow_ = -1; dragEdge_ = 0; }
+}
+
+// 拖选越过上/下边缘：每个 tick 滚 1 行并把选区端点延到边缘行
+void Win32PaneBackend::autoScrollTick() {
+    if (!dragEdge_ || !drag_.pressed() || !core_ || !dragSelStarted_) return;
+    uint16_t rows = resize_.dims().rows;
+    scrollViewport(dragEdge_ < 0 ? -1 : 1);
+    uint16_t row = dragEdge_ < 0 ? 0 : uint16_t(rows - 1);
+    if (itcore_selection_extend(core_, vp_.firstRow(), uint16_t(dragCol_), row)) selectionChanged();
+}
+
+// 滚轮：鼠标模式转发给程序（Shift 强制本地）；备用屏无鼠标模式发上/下方向键；否则滚动视口。每格 3 行。
+void Win32PaneBackend::handleWheel(WPARAM wp, LPARAM lp) {
+    if (!core_) return;
+    wheelAccum_ += GET_WHEEL_DELTA_WPARAM(wp);
+    int notches = wheelAccum_ / WHEEL_DELTA;
+    if (!notches) return;
+    wheelAccum_ -= notches * WHEEL_DELTA;
+    UINT keys = GET_KEYSTATE_WPARAM(wp);
+    bool mouseMode = snap_ && itcore_snapshot_mouse_mode(snap_) != 0 && !(keys & MK_SHIFT);
+    switch (routeWheel(mouseMode, altScreen())) {
+    case WheelRoute::Forward: {
+        POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        ScreenToClient(hwnd_, &pt);
+        uint16_t c = 0, r = 0;
+        metrics_.hit_test(pt.x, pt.y, itcore_snapshot_columns(snap_), itcore_snapshot_rows(snap_), c, r);
+        for (int i = 0; i < std::abs(notches); ++i) {
+            itcore_mouse_event me{};
+            me.struct_size = sizeof(me);
+            me.col = c; me.row = r;
+            me.button = notches > 0 ? ITCORE_MBUTTON_WHEEL_UP : ITCORE_MBUTTON_WHEEL_DOWN;
+            me.action = ITCORE_MOUSE_WHEEL;
+            if (keys & MK_CONTROL) me.modifiers |= ITCORE_MOD_CTRL;
+            itcore_buffer *b = nullptr;
+            if (itcore_encode_mouse(core_, &me, &b) == 0 && b) {
+                sendInput(std::string_view(reinterpret_cast<const char *>(b->data), b->length));
+                itcore_buffer_release(b);
+            }
+        }
+        break;
+    }
+    case WheelRoute::Arrows:
+        for (int i = 0; i < std::abs(notches) * 3; ++i) {
+            itcore_key_event ke{};
+            ke.struct_size = sizeof(ke);
+            ke.vk = notches > 0 ? ITCORE_VK_UP : ITCORE_VK_DOWN;
+            itcore_buffer *b = nullptr;
+            if (itcore_encode_key(core_, &ke, &b) == 0 && b) {
+                sendInput(std::string_view(reinterpret_cast<const char *>(b->data), b->length));
+                itcore_buffer_release(b);
+            }
+        }
+        break;
+    case WheelRoute::Scroll:
+        scrollViewport(-notches * 3);  // 向上滚（delta>0）= 往历史里翻
+        break;
+    }
 }
 
 LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     HWND h = hwnd_;
     switch (m) {
-    case WM_PANE_WAKE: queue_->drain(); return 0;
+    case WM_PANE_WAKE: drainUi(); return 0;
     case WM_TIMER:
-        if (w == kTickTimer) { queue_->drain(); pump(); flushTitle(); }
+        if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); }
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -612,7 +749,8 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
         // 点击窗格：交给 UI 决定焦点（UI 再调 setFocused）
         if (parent_) SendMessageW(parent_, m, w, l);
         return MA_ACTIVATE;
-    case WM_LBUTTONDOWN: SetCapture(h); handleMouse(m, w, l); return 0;
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: SetCapture(h); handleMouse(m, w, l); return 0;
+    case WM_MOUSEWHEEL: handleWheel(w, l); return 0;
     case WM_LBUTTONUP: ReleaseCapture(); handleMouse(m, w, l); return 0;
     case WM_MOUSEMOVE: if (w & MK_LBUTTON) handleMouse(m, w, l); return 0;
     // 键盘：接口约定按键由 UI 翻译，子窗口拿到焦点后原样转给父窗口（外壳）处理，再由它调 sendInput
@@ -714,6 +852,7 @@ void Win32PaneBackend::teardown() {
     queue_->close();
     if (transport_ && !closer_.started()) startCloser(CloseReason::User);
     transport_.reset();
+    if (!closer_.started()) shared_->transport.reset();
     releaseSnap();
     if (renderer_) { renderer_->shutdown(); renderer_.reset(); }
     if (HWND h = hwnd_.exchange(nullptr)) {
@@ -722,6 +861,10 @@ void Win32PaneBackend::teardown() {
     }
     host_.reset();
     if (core_) { itcore_destroy(core_); core_ = nullptr; }
+}
+
+bool shutdownPaneBackends(unsigned timeoutMs) {
+    return SessionCloser::shutdownAll(std::chrono::milliseconds(timeoutMs));
 }
 
 uishell::PaneBackendFactory makeWin32PaneBackendFactory(PaneBackendConfig cfg) {

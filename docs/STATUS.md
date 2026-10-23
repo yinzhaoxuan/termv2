@@ -66,16 +66,42 @@
 4. **选区在核心**：`itcore_selection_start/extend/clear/active/text`。端点存为 (逻辑段 id, 字符序号)，跟随滚动进历史、历史按宽度重排和 resize。起点被历史裁掉时夹到最早一行；切主/备用屏、RIS、ED 3 时清除。复制规则：软换行拼接，硬换行出 `\n`，行尾空白去掉，宽字符只出一次，WIDE 换行补的空格不算内容。快照里选中格带 `ITCORE_CELL_SELECTED` 并翻转 INVERSE，选区变化会 touch 全部行，触发脏行重绘。后端：本地模式（无鼠标报告或按住 Shift）下，移到另一格才开始拖选；单击清除选区并检查链接。`selectedText()`/`clearSelection()` 已实现；选区有/无变化（含被输出清掉）时发 `onSelectionChanged`。单测 CORE-12。
 - 剩余 UI 接口需求：见下“接口问题”。
 
+### T08 第二轮（对齐 UI 头 a44c631）
+1. **选区按行取 revision**：start/extend/clear 以及被输出清掉（切屏、RIS、ED 3）时，`sel_touch(old)` 把新、旧选区覆盖到的网格行都从 Screen 全局计数器取新 revision，不再 touch 全部行。全局计数至少推进一次，所以可见历史行（快照里 revision 取当前计数）也会重画。CORE-12 增加 `DirtyRows` 拖选用例：起点、扩展、回缩、清除、ED 3 清除、视口位于历史中，每一步只有受影响的行变脏。
+2. **关闭线程生命周期**：
+   - 新增 `SessionShared`，包含队列、pumpPending、传输对象和关闭结果，是窗格与后台之间唯一共享的状态。
+   - 关闭线程只持有 `shared_ptr<SessionShared>`，结果写进共享状态并 post 一个空任务唤醒 UI；`drainUi()` 领取结果后调 `onCloseDone`。
+   - 传输回调只捕获 `weak_ptr`，投递 `postTo<Win32PaneBackend>` 任务（`drain(this)` 时才得到窗格引用），不捕获 this。
+   - wake 只捕获 HWND，在队列锁内调用，close 时清空。
+   - 析构顺序：`ev_ = {}` → 关闭队列 → 交出传输。
+   - `SessionCloser::shutdownAll(3s)` 使用故意泄漏的全局登记表（活跃数 + 条件变量）。超时返回 false，线程保持 detach，由 Job `KILL_ON_JOB_CLOSE` 兜底。对外入口是 `it2app::shutdownPaneBackends(ms)`。
+   - 单测 PANE-02：8 个窗格创建后立即销毁，循环 100 次，期间有并发投递；验证 shutdownAll 后活跃线程为 0，以及卡住线程时的超时路径。ASan/UBSan、TSan 下全部 65 项通过。
+3. **视口**：
+   - `scrollViewport(lines)` 截断到 [0, 历史行数]；`scrollToBottom()`；`sendInput`/`paste` 先回到底部。
+   - 上翻时历史增长会同步增大偏移，视图停在原处。
+   - 快照用 `first_row = -offset` 取历史行，光标移出视口时不可见。
+   - `onViewportChanged(offset, history)` 在偏移或历史行数变化时触发。
+   - 新 ABI `itcore_history_rows`。
+   - `onRedrawRequested` 相关代码已删除。
+4. **鼠标**：
+   - 滚轮每格 3 行。鼠标模式下转发 WHEEL_UP/DOWN（Shift 强制本地）；备用屏无鼠标模式时发上/下方向键；否则滚动视口。
+   - 双击选词：词字符为字母数字、非 ASCII 以及 `/-+\~_.`（上游默认），其余标点单独成词。
+   - 三击选逻辑行（跨软换行）。双击/三击之后的拖动按同一单位扩展，新 ABI 为 `itcore_selection_start_unit`。
+   - 拖出上下边缘时，每 50ms tick 自动滚动 1 行。
+   - `pane_logic` 中的 `Viewport`、`ClickCounter`、`routeWheel` 由 PANE-03 覆盖。
+5. **DECRQM ANSI**：`CSI Ps $ p`（不带 ?）与私有模式分开处理，回复 `CSI Ps;Pm$y`。4（IRM）和 20（LNM）回 1 或 2，其余回 0；ANSI 25 与 `?25` 互不相干。新实现 LNM（LF/VT/FF 兼回车）。单测 CORE-13 覆盖 2004、1049、25 的开和关，`?9999`→0、`9999`→0，以及 4 和 20。
+
 ### 接口问题（未改头文件，待 UI 定夺）
 1. “UI 翻译按键”与子窗焦点冲突：子窗把 WM_KEY*/WM_CHAR SendMessage 给父窗，IME 留在子窗处理。
-2. 视口滚动（看历史）无接口：后端快照恒取 first_row=0；核心选区已支持负 first_row，需 UI 加 `scrollViewport(int lines)` / 滚轮转发约定。
-3. 双击选词 / 三击选行、选区自动滚动无接口与实现（核心按字符；可后续加 `itcore_selection_start` 粒度参数）。
-4. onRedrawRequested 语义不明：后端自行 present，同时触发该事件。
-5. SSH 下 hasForegroundJob 无法看到远端，Running 期间恒为 true（仅供参考）。
-6. attach 在会话启动失败时仍返回 true（状态 Failed）。
+2. **UI 须在退出时调用 `it2app::shutdownPaneBackends(3000)`**：在所有窗格销毁之后、WinMain 返回之前调用。头文件里没有对应的跨平台入口，建议在 `PaneBackendFactory` 旁边加一个 shutdown 钩子。
+3. Shift+PgUp 等滚动快捷键由 UI 调 `scrollViewport`。后端不处理键盘滚动，因为按键会转发给父窗。
+4. SSH 下 hasForegroundJob 无法看到远端，Running 期间恒为 true（仅供参考）。
+5. attach 在会话启动失败时仍返回 true（状态 Failed）。
+6. 词分隔符目前写死在核心，尚无配置接口。LNM 下回车键是否发 CR LF 未实现（上游 newlineMode），目前只影响输出侧的 LF。
+7. `itcore_history_rows` 每次都会重排历史（O(历史)），只在有输出时调用。大历史下的性能留作后续缓存项。
 
 ### T08 未实机项
-子窗交换链/DPI、IME 候选窗定位、焦点与按键转发、Job 进程计数（conhost 是否在 Job 内影响 >1 判定）、关闭顺序与多窗格并行关闭耗时、拖选与选区高亮、链接单击、SSH 实连。
+子窗交换链/DPI、IME 候选窗定位、焦点与按键转发、Job 进程计数（conhost 是否在 Job 内影响 >1 判定）、关闭顺序与多窗格并行关闭耗时、拖选与选区高亮、链接单击、SSH 实连；滚轮（精密触摸板小 delta 累加）、双击/三击时序、边缘自动滚动手感、视口偏移下的光标/IME 位置。
 
 ## 未实机项（须 Win11 + 真 ConPTY / D3D 验证）
 

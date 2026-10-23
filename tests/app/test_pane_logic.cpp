@@ -5,6 +5,8 @@
 #include <memory>
 #include <cstdio>
 #include <thread>
+#include <string>
+#include <functional>
 #include <vector>
 using namespace it2app;
 static int fails = 0;
@@ -61,37 +63,51 @@ using Clock = std::chrono::steady_clock;
 static long msSince(Clock::time_point t) {
     return long(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t).count());
 }
-// 模拟一个会话：job 在关闭线程上睡 sleepMs（代表九步关闭 / 超时强杀）
+// 模拟一个窗格：与 Win32PaneBackend 同构——共享状态 + 关闭线程 + 析构先断回调再 close 队列
 struct FakeSession {
-    std::shared_ptr<UiDispatchQueue> q = std::make_shared<UiDispatchQueue>();
+    std::shared_ptr<SessionShared> sh = std::make_shared<SessionShared>();
     SessionCloser closer;
     std::atomic<int> *jobsDone;
     std::thread::id uiThread = std::this_thread::get_id();
+    std::function<void(const CloseOutcome &)> onStatus;  // 代表 PaneEvents
     bool statusDelivered = false, statusOnUi = false, timedOut = false;
-    std::shared_ptr<int> transport = std::make_shared<int>(7);  // 代表传输层对象
-    explicit FakeSession(std::atomic<int> *d) : jobsDone(d) {}
-    void requestClose(int sleepMs, bool timeout = false) {
-        auto t = transport;  // job 持有传输层，析构在关闭线程
-        transport.reset();
-        closer.start(q, [t, sleepMs, timeout, d = jobsDone]() mutable {
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
-            t.reset();
-            d->fetch_add(1);
-            CloseOutcome r; r.ok = !timeout; r.timedOut = timeout;
-            return r;
-        }, [this](const CloseOutcome &r) {
+    explicit FakeSession(std::atomic<int> *d) : jobsDone(d) {
+        sh->transport = std::make_shared<int>(7);  // 代表传输层对象
+        onStatus = [this](const CloseOutcome &r) {
             statusDelivered = true;
             statusOnUi = std::this_thread::get_id() == uiThread;
             timedOut = r.timedOut;
-        });
+        };
     }
-    ~FakeSession() { q->close(); }
+    // 传输回调线程：经 weak_ptr 投递不捕获 this 的任务
+    void transportEvent() {
+        std::weak_ptr<SessionShared> w = sh;
+        if (auto s = w.lock()) postTo<FakeSession>(*s->queue, [](FakeSession &p) { p.events++; });
+    }
+    int events = 0;
+    void requestClose(int sleepMs, bool timeout = false) {
+        closer.start(sh, [sleepMs, timeout, d = jobsDone](SessionShared &) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+            d->fetch_add(1);
+            CloseOutcome r; r.ok = !timeout; r.timedOut = timeout;
+            return r;
+        }, [](SessionShared &s) { s.transport.reset(); });  // 传输层在关闭线程上析构
+    }
+    void drain() {
+        sh->queue->drain(this);
+        if (auto r = sh->takeCloseResult()) if (onStatus) onStatus(*r);
+    }
+    ~FakeSession() {
+        onStatus = nullptr;          // 先断开回调
+        sh->queue->close();          // 之后投递的事件一律丢弃
+        if (!closer.started()) requestClose(1);
+    }
 };
 static bool pumpUntil(std::vector<FakeSession *> ss, long budgetMs) {
     auto t0 = Clock::now();
     for (;;) {
         bool all = true;
-        for (auto *s : ss) { s->q->drain(); all = all && s->statusDelivered; }
+        for (auto *s : ss) { s->drain(); all = all && s->statusDelivered; }
         if (all) return true;
         if (msSince(t0) > budgetMs) return false;
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -99,10 +115,11 @@ static bool pumpUntil(std::vector<FakeSession *> ss, long budgetMs) {
 }
 static void closer() {
     std::atomic<int> done{0};
+    int expect = 0;
     {
         FakeSession s(&done);
         auto t0 = Clock::now();
-        s.requestClose(150);
+        s.requestClose(150); ++expect;
         CHECK(msSince(t0) < 50);               // 立即返回
         s.requestClose(150);                   // 重复请求无效
         CHECK(!s.statusDelivered);             // 不在调用线程同步回调
@@ -110,10 +127,12 @@ static void closer() {
         CHECK(!s.statusDelivered);             // 未 drain 前不回调（只经 UI 队列）
         CHECK(pumpUntil({&s}, 2000));
         CHECK(s.statusOnUi && !s.timedOut);
+        s.transportEvent(); s.drain();
+        CHECK(s.events == 1);
     }
     {   // 超时强杀路径
         FakeSession s(&done);
-        s.requestClose(10, true);
+        s.requestClose(10, true); ++expect;
         CHECK(pumpUntil({&s}, 2000) && s.timedOut);
     }
     {   // 8 个会话并行关闭：总耗时 ≈ 单个，而非 8 倍
@@ -121,34 +140,97 @@ static void closer() {
         std::vector<FakeSession *> raw;
         for (int i = 0; i < 8; ++i) { v.push_back(std::make_unique<FakeSession>(&done)); raw.push_back(v.back().get()); }
         auto t0 = Clock::now();
-        for (auto *s : raw) s->requestClose(200);
+        for (auto *s : raw) { s->requestClose(200); ++expect; }
         CHECK(msSince(t0) < 50);
         CHECK(pumpUntil(raw, 3000));
         long total = msSince(t0);
         CHECK(total < 800);
         for (auto *s : raw) CHECK(s->statusOnUi);
     }
-    {   // 关闭中销毁：析构立即返回，done 不再被调用（队列已 close）
+    {   // 关闭中销毁：析构立即返回，结果与之后的事件都被丢弃
         int before = done.load();
         auto t0 = Clock::now();
-        auto q = std::shared_ptr<UiDispatchQueue>();
+        std::shared_ptr<SessionShared> sh;
         {
             FakeSession s(&done);
-            q = s.q;
-            s.requestClose(150);
+            sh = s.sh;
+            s.requestClose(150); ++expect;
         }
         CHECK(msSince(t0) < 50);
+        CHECK(!postTo<FakeSession>(*sh->queue, [](FakeSession &p) { p.events++; }));
         auto t1 = Clock::now();
         while (done.load() == before && msSince(t1) < 2000) std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(done.load() == before + 1);      // 关闭仍在后台跑完
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        CHECK(q->drain() == 0);                // 结果被丢弃
+        CHECK(SessionCloser::shutdownAll(std::chrono::milliseconds(3000)));
+        CHECK(sh->queue->drain() == 0);        // 结果被丢弃
+        CHECK(sh.use_count() == 1 && !sh->transport);
     }
-    // 等所有 detach 线程收尾
-    auto t2 = Clock::now();
-    while (done.load() < 11 && msSince(t2) < 3000) std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    CHECK(done.load() == 11);
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(SessionCloser::shutdownAll(std::chrono::milliseconds(3000)));
+    CHECK(done.load() == expect);
+    CHECK(SessionCloser::liveThreads() == 0);
+}
+// 创建后立即销毁 8 个窗格，循环 100 次：不崩溃、不残留线程（ASan/TSan 下同样跑）
+static void churn() {
+    std::atomic<int> done{0};
+    for (int round = 0; round < 100; ++round) {
+        std::vector<std::unique_ptr<FakeSession>> v;
+        for (int i = 0; i < 8; ++i) v.push_back(std::make_unique<FakeSession>(&done));
+        // 一半先 requestClose 再销毁，一半直接销毁（析构里启动关闭）；期间有传输线程在投递
+        for (int i = 0; i < 8; i += 2) v[size_t(i)]->requestClose(0);
+        std::vector<std::weak_ptr<SessionShared>> ws;
+        for (auto &s : v) ws.push_back(s->sh);
+        std::thread producer([&ws] {
+            for (int k = 0; k < 50; ++k)
+                for (auto &w : ws) if (auto s = w.lock()) postTo<FakeSession>(*s->queue, [](FakeSession &p) { p.events++; });
+        });
+        v.clear();
+        producer.join();
+        for (auto &w : ws) if (auto s = w.lock()) CHECK(s->queue->closed());
+    }
+    CHECK(SessionCloser::shutdownAll(std::chrono::milliseconds(3000)));
+    CHECK(SessionCloser::liveThreads() == 0);
+    CHECK(done.load() == 800);
+    // 超时路径：卡住的关闭线程 → shutdownAll 返回 false 而不是挂死
+    {
+        auto sh = std::make_shared<SessionShared>();
+        SessionCloser c;
+        std::atomic<bool> release{false};
+        c.start(sh, [&release](SessionShared &) {
+            while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            return CloseOutcome{};
+        });
+        auto t0 = Clock::now();
+        CHECK(!SessionCloser::shutdownAll(std::chrono::milliseconds(100)));
+        CHECK(msSince(t0) < 1000);
+        CHECK(SessionCloser::liveThreads() == 1);
+        release = true;
+        CHECK(SessionCloser::shutdownAll(std::chrono::milliseconds(3000)));
+    }
+}
+static void viewport() {
+    Viewport vp;
+    CHECK(!vp.scroll(-5));                 // 无历史
+    vp.updateHistory(10);
+    CHECK(vp.offset() == 0);               // 在底部时跟随输出
+    CHECK(vp.scroll(-3) && vp.offset() == 3 && vp.firstRow() == -3);
+    CHECK(vp.scroll(-100) && vp.offset() == 10);  // 截断
+    CHECK(!vp.scroll(-1));
+    CHECK(vp.scroll(4) && vp.offset() == 6);
+    CHECK(vp.updateHistory(12) && vp.offset() == 8);  // 上翻时输出不挪动视图
+    CHECK(vp.updateHistory(2) && vp.offset() == 2);   // 历史被裁剪
+    CHECK(vp.toBottom() && vp.offset() == 0);
+    CHECK(!vp.toBottom());
+    CHECK(routeWheel(true, false) == WheelRoute::Forward);
+    CHECK(routeWheel(true, true) == WheelRoute::Forward);
+    CHECK(routeWheel(false, true) == WheelRoute::Arrows);
+    CHECK(routeWheel(false, false) == WheelRoute::Scroll);
+    ClickCounter cc;
+    CHECK(cc.press(1, 1, 0, 500) == 1);
+    CHECK(cc.press(1, 1, 100, 500) == 2);
+    CHECK(cc.press(1, 1, 200, 500) == 3);
+    CHECK(cc.press(1, 1, 300, 500) == 1);
+    CHECK(cc.press(1, 1, 1000, 500) == 1);  // 超时
+    CHECK(cc.press(2, 1, 1100, 500) == 1);  // 换格
 }
 static void drag() {
     DragSelect d;
@@ -168,9 +250,12 @@ static void drag() {
     d.down({1, 1}); d.cancel();
     CHECK(d.up({1, 1}) == A::None);
 }
-int main() {
-    limits(); grid(); queue(); closer(); drag();
+int main(int argc, char **argv) {
+    std::string w = argc > 1 ? argv[1] : "all";
+    if (w == "churn") churn();
+    else if (w == "viewport") viewport();
+    else { limits(); grid(); queue(); closer(); drag(); if (w == "all") { churn(); viewport(); } }
     if (fails) return 1;
-    std::puts("PANE-01 ok");
+    std::printf("PANE %s ok\n", w.c_str());
     return 0;
 }
