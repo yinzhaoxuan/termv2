@@ -10,6 +10,8 @@ extern "C" {
 itcore_snapshot *itmock_snapshot_from_utf8(const char *utf8, size_t len, uint16_t columns, uint16_t rows);
 /* 为指定格设置样式与颜色（测试 SGR 渲染用） */
 void itmock_set_style(itcore_snapshot *s, uint16_t row, uint16_t col, uint16_t flags, uint32_t fg, uint32_t bg);
+/* 为 [col0,col1) 设置 hyperlink_id，并登记 URL（id=0 清除）；测试链接悬停用 */
+void itmock_set_hyperlink(itcore_snapshot *s, uint16_t row, uint16_t col0, uint16_t col1, uint32_t id, const char *url);
 /* 模拟字素池换存储（RIS/ED 3/压缩） */
 void itmock_bump_epoch(itcore_snapshot *s);
 #ifdef __cplusplus

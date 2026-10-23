@@ -1,6 +1,7 @@
 #include "itcore_mock.h"
 #include <string>
 #include <vector>
+#include <map>
 
 struct itcore_snapshot {
   uint16_t cols, rows;
@@ -13,6 +14,7 @@ struct itcore_snapshot {
   std::vector<uint64_t> row_rev;
   std::vector<std::string> graphemes;  // id 0 = 空格
   uint16_t cur_col = 0, cur_row = 0;
+  std::map<uint32_t, std::string> links;
 };
 
 static uint32_t decode(const unsigned char *&p, const unsigned char *e) {
@@ -89,3 +91,18 @@ extern "C" void itcore_snapshot_release(itcore_snapshot *s) { delete s; }
 
 extern "C" uint64_t itcore_snapshot_epoch(const itcore_snapshot *s) { return s ? s->epoch : 0; }
 extern "C" void itmock_bump_epoch(itcore_snapshot *s) { if (s) s->epoch++; }
+
+extern "C" void itmock_set_hyperlink(itcore_snapshot *s, uint16_t row, uint16_t col0, uint16_t col1, uint32_t id, const char *url) {
+  for (uint16_t c = col0; c < col1 && c < s->cols; ++c) s->grid[row][c].hyperlink_id = id;
+  if (id && url) s->links[id] = url;
+  s->row_rev[row]++; s->revision++;
+}
+extern "C" int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t id, const char **url, size_t *url_len, const char **pid, size_t *id_len) {
+  auto it = s->links.find(id);
+  if (!id || it == s->links.end()) return 0;
+  if (url) *url = it->second.data();
+  if (url_len) *url_len = it->second.size();
+  if (pid) *pid = "";
+  if (id_len) *id_len = 0;
+  return 1;
+}

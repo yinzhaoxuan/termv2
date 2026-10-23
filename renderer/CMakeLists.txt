@@ -31,3 +31,8 @@ add_test(NAME renderer_cell_style COMMAND test_renderer_cell_style)
 add_executable(test_renderer_frame_policy ${PROJECT_SOURCE_DIR}/tests/renderer/test_frame_policy.cpp)
 target_include_directories(test_renderer_frame_policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/d2d ${PROJECT_SOURCE_DIR}/ports/core/include)
 add_test(NAME renderer_frame_policy COMMAND test_renderer_frame_policy)
+
+# DECSCUSR 光标几何、闪烁与 OSC 8 链接悬停下划线
+add_executable(test_renderer_cursor_geometry ${PROJECT_SOURCE_DIR}/tests/renderer/test_cursor_geometry.cpp)
+target_link_libraries(test_renderer_cursor_geometry PRIVATE itcore_mock itrender_layout)
+add_test(NAME renderer_cursor_geometry COMMAND test_renderer_cursor_geometry)
