@@ -399,6 +399,56 @@ static void font() {
     CHECK(m15.cell_w_px() == 11 && m15.cell_h_px() == 20);
 }
 
+// PASTE-01：剪贴板快捷键决策 + 粘贴变换
+static void paste_keys() {
+    const unsigned S = 1, A = 2, C = 4;
+    CHECK(planClipboardKey('V', C, false, true) == ClipKey::Paste);
+    CHECK(planClipboardKey('V', C | S, false, true) == ClipKey::Paste);
+    CHECK(planClipboardKey(0x2D, S, false, true) == ClipKey::Paste);       // Shift+Insert
+    CHECK(planClipboardKey('V', C, false, false) == ClipKey::None);        // 设置关：照常编码 0x16
+    CHECK(planClipboardKey('V', C | S, false, false) == ClipKey::Paste);   // Ctrl+Shift+V 总是粘贴
+    CHECK(planClipboardKey('C', C, true, true) == ClipKey::CopyAndClear);
+    CHECK(planClipboardKey('C', C, false, true) == ClipKey::None);         // 无选区：0x03
+    CHECK(planClipboardKey('C', C | S, false, true) == ClipKey::Copy);
+    CHECK(planClipboardKey('C', C | S, true, true) == ClipKey::Copy);
+    CHECK(planClipboardKey('V', 0, false, true) == ClipKey::None);
+    CHECK(planClipboardKey('V', C | A, false, true) == ClipKey::None);     // AltGr/Ctrl+Alt 不拦
+    CHECK(planClipboardKey(0x2D, 0, false, true) == ClipKey::None);
+    CHECK(planClipboardKey('A', C, true, true) == ClipKey::None);
+    // 设置关时 Ctrl+V 落到普通编码：核心给出 0x16
+    {
+        itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 20, 5, 100, 1u << 20};
+        itcore_core *c = nullptr; CHECK(itcore_create(&o, &c) == 0 && c);
+        auto kp = planKey('V', C, 0x16, 'v');
+        itcore_key_event ke{}; ke.struct_size = sizeof(ke); ke.vk = kp.vk; ke.modifiers = kp.coreMods; ke.unicode = kp.unicode;
+        itcore_buffer *b = nullptr;
+        CHECK(itcore_encode_key(c, &ke, &b) == 0 && b && b->length == 1 && b->data[0] == 0x16);
+        if (b) itcore_buffer_release(b);
+        itcore_destroy(c);
+    }
+    // 换行归一与标记剥离
+    CHECK(transformPaste("a\r\nb\nc\rd", false) == "a\rb\rc\rd");
+    CHECK(transformPaste("x", true) == "\x1b[200~x\x1b[201~");
+    CHECK(transformPaste("a\x1b[201~b", true) == "\x1b[200~ab\x1b[201~");     // 内嵌结束标记
+    CHECK(transformPaste("a\x1b[200~b", false) == "ab");                        // 内嵌开始标记
+    CHECK(transformPaste("\x1b[20\x1b[201~1~z", false) == "z");               // 剥离后拼出的标记也去掉
+    CHECK(transformPaste(std::string("a\0b", 3), false) == "ab");
+    // ?2004 粘贴当时实时查询：开 → 包；RIS 之后 → 不包
+    {
+        itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 20, 5, 100, 1u << 20};
+        itcore_core *c = nullptr; CHECK(itcore_create(&o, &c) == 0 && c);
+        auto feed = [&](const char *t) { itcore_feed(c, reinterpret_cast<const uint8_t *>(t), std::strlen(t));
+                                         while (itcore_event *e = itcore_next_event(c)) itcore_event_release(e); };
+        auto br = [&] { return itcore_mode_query(c, 2004) == ITCORE_MODE_SET; };
+        CHECK(transformPaste("p\n", br()) == "p\r");
+        feed("\x1b[?2004h");
+        CHECK(transformPaste("p\n", br()) == "\x1b[200~p\r\x1b[201~");
+        feed("\x1b" "c");  // RIS
+        CHECK(transformPaste("p\n", br()) == "p\r");
+        itcore_destroy(c);
+    }
+}
+
 // BUG-03：拖动中失去捕获（模态对话框）后，后续鼠标移动不得改变选区；已拖出的选区保留
 static void capture_loss() {
     using C = DragSelect::Cell;
@@ -452,7 +502,7 @@ int main(int argc, char **argv) {
     else if (w == "keys") keys();
     else if (w == "sync") syncfocus();
     else if (w == "font") font();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); paste_keys(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

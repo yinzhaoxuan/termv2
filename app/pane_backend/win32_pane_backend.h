@@ -23,6 +23,8 @@ struct PaneBackendConfig {
     std::wstring localShell;            // 空：%ComSpec%，再退回 System32\cmd.exe
     std::wstring fontFamily = L"Consolas";
     float fontSizePt = 12.f;
+    // Ctrl+V 是否由终端拦截为粘贴（默认是）；关掉后 Ctrl+V 照常编码发 0x16。Ctrl+Shift+V / Shift+Insert 总是粘贴
+    bool interceptCtrlV = true;
     uint32_t scrollbackLines = 5000;
     uint64_t memoryLimitBytes = 32ull << 20;
     // 配置色（前景/背景/光标/256 色）；空则用 itcore_default_colors。首次 feed 前经 itcore_set_colors 下发

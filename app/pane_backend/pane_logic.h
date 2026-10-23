@@ -16,8 +16,20 @@
 
 namespace it2app {
 
-// 粘贴：括号粘贴标记与正文清洗都在核心 itcore_encode_paste 里（由 DECSET 2004 决定），此处不再重复。
 inline constexpr std::size_t kPasteLimitBytes = 32u * 1024u;  // 与核心 / InputScheduler 上限一致
+
+// 粘贴正文变换（平台无关，PASTE-01）：
+// - 去掉内嵌的 ESC[200~ 与 ESC[201~（反复去除，防止拼接出新标记）和 NUL；
+// - CRLF 与单独 LF 都归一为 CR（终端的 Enter）；
+// - bracketed（调用方在粘贴当时用 itcore_mode_query(2004) 实时查询，不缓存）为真时包 ESC[200~ … ESC[201~。
+std::string transformPaste(std::string_view utf8, bool bracketed);
+
+// 剪贴板快捷键决策（平台无关，PASTE-01）。uiMods：Shift1 Alt2 Ctrl4。
+// - Ctrl+Shift+V、Shift+Insert：粘贴；Ctrl+V：interceptCtrlV（默认真）时粘贴，否则照常编码（0x16）。
+// - Ctrl+Shift+C：复制（无选区时什么都不做，不发 0x03）；Ctrl+C：有选区则复制并清除选区，否则照常编码（0x03）。
+// - 其余键：None，照常走 planKey/核心编码。
+enum class ClipKey { None, Paste, Copy, CopyAndClear };
+ClipKey planClipboardKey(unsigned vk, unsigned uiMods, bool hasSelection, bool interceptCtrlV);
 
 // 最小间隔限流：allow() 在距上次放行 ≥ intervalMs 时返回 true。
 class RateLimiter {
