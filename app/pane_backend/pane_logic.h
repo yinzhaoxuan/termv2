@@ -198,9 +198,14 @@ std::string applyNewlineMode(std::string_view in, bool lnm);
 class SyncGate {
 public:
     explicit SyncGate(uint64_t timeoutMs) : timeout_(timeoutMs) {}
-    // 返回 true 表示现在可以取快照并 present
-    bool allow(bool syncOn, uint64_t nowMs) {
+    // 返回 true 表示现在可以取快照并 present。
+    // syncEnds = itcore_sync_end_count：与上次不同说明期间有同步结束（同一批“关→内容→开”），放行并清零计时。
+    // 超时只是每 timeout 出一帧，不改变核心的同步状态。
+    bool allow(bool syncOn, uint64_t nowMs, uint64_t syncEnds = 0) {
+        const bool ended = syncEnds != ends_;
+        ends_ = syncEnds;
         if (!syncOn) { since_.reset(); return true; }
+        if (ended) { since_ = nowMs; return true; }
         if (!since_) { since_ = nowMs; return false; }
         if (nowMs - *since_ >= timeout_) { since_ = nowMs; return true; }  // 兜底帧，并重新计时
         return false;
@@ -208,6 +213,7 @@ public:
     bool holding() const { return since_.has_value(); }
 private:
     uint64_t timeout_;
+    uint64_t ends_ = 0;
     std::optional<uint64_t> since_;
 };
 

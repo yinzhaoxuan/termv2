@@ -344,6 +344,7 @@ itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t mode) {
     if (!c || !c->screen || mode > 0x7fffffffu) return ITCORE_MODE_NOT_RECOGNIZED;
     return static_cast<itcore_mode_state>(c->screen->dec_mode_state(int(mode)));
 }
+uint64_t itcore_sync_end_count(const itcore_core *c) { return c && c->screen ? c->screen->sync_end_count() : 0; }
 itcore_mode_state itcore_ansi_mode_query(const itcore_core *c, uint32_t mode) {
     if (!c || !c->screen || mode > 0x7fffffffu) return ITCORE_MODE_NOT_RECOGNIZED;
     return static_cast<itcore_mode_state>(c->screen->ansi_mode_state(int(mode)));

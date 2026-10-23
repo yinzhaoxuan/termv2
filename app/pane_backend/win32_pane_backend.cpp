@@ -136,7 +136,7 @@ private:
     void pushCellPixelSize();          // GridMetrics → itcore_set_cell_pixel_size
     void pump();                       // UI 线程：取输出 → 喂核心 → 事件 → present
     void drainCoreEvents();
-    void present();
+    void present(bool force = false);  // force：绕过 SyncGate（改尺寸）
     void releaseSnap();
     void onTransportState(TransportState, std::optional<TransportFault>);
     void finishSession();
@@ -476,10 +476,12 @@ void Win32PaneBackend::pump() {
     }
 }
 
-void Win32PaneBackend::present() {
+void Win32PaneBackend::present(bool force) {
     if (!renderer_ || !core_) return;
     // ?2026：同步输出期间不取快照，超过 ITREN_SYNC_TIMEOUT_MS 兜底出一帧；关闭（含 DECSTR/RIS）后立即出帧
-    if (!sync_.allow(itcore_mode_query(core_, 2026) == ITCORE_MODE_SET, nowMs())) return;
+    // 同一批内“关→内容→开”由 itcore_sync_end_count 变化放行；超时只是每 150ms 出一帧，不清同步状态
+    const bool gate = sync_.allow(itcore_mode_query(core_, 2026) == ITCORE_MODE_SET, nowMs(), itcore_sync_end_count(core_));
+    if (!gate && !force) return;
     releaseSnap();
     snap_ = itcore_acquire_snapshot(core_, vp_.firstRow(), resize_.dims().rows);  // 视口偏移：负 first_row 显示历史
     if (!snap_) return;
@@ -515,7 +517,7 @@ void Win32PaneBackend::applyBounds(const uishell::PixelRect &rc, float dpi) {
         releaseSnap();
     }
     renderer_->resize_surface();
-    present();
+    present(true);  // 改尺寸绕过 SyncGate，强制出一帧
 }
 
 void Win32PaneBackend::setBounds(const uishell::PixelRect &rc, float dpi) { applyBounds(rc, dpi); }

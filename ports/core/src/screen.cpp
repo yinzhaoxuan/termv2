@@ -895,6 +895,7 @@ void Screen::soft_reset() {
     modes_.app_keypad = false;
     modes_.wrap = true;
     modes_.cursor_style = 0;      // 上游 softReset 复位光标样式
+    if (modes_.sync_output) ++sync_ends_;
     modes_.sync_output = false;   // 关 ?2026，避免画面冻结
     modes_.focus_events = false;  // 关 ?1004
     grid().set_origin(false);
@@ -1027,7 +1028,7 @@ void Screen::set_mode(const Token &t, bool set) {
                 if (modes_.reverse_screen != set) { modes_.reverse_screen = set; touch_all(); }
                 break;
             case 1004: modes_.focus_events = set; break;
-            case 2026: modes_.sync_output = set; break;
+            case 2026: if (modes_.sync_output && !set) ++sync_ends_; modes_.sync_output = set; break;
             case 1: modes_.app_cursor = set; break;  // DECCKM
             case 9:
                 if (set) modes_.mouse_mode = (modes_.mouse_mode & ~(ITCORE_MOUSE_MODE_NORMAL|ITCORE_MOUSE_MODE_BUTTON|ITCORE_MOUSE_MODE_ANY)) | ITCORE_MOUSE_MODE_X10;
@@ -1095,6 +1096,7 @@ void Screen::maybe_compact() {
 
 void Screen::full_reset() {
     uint16_t cols = main_.cols(), rows = main_.rows();
+    if (modes_.sync_output) ++sync_ends_;
     modes_ = ScreenModes{};
     pen_ = Pen{};
     saved_main_ = SavedCursor{}; saved_alt_ = SavedCursor{};

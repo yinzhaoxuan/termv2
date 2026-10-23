@@ -1,6 +1,7 @@
 // T08 PaneBackend 平台无关逻辑单测（PANE-01）
 #include "pane_logic.h"
 #include "frame_policy.h"
+#include "itcore.h"
 #include <atomic>
 #include <climits>
 #include <chrono>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <thread>
 #include <string>
+#include <cstring>
 #include <functional>
 #include <vector>
 using namespace it2app;
@@ -299,6 +301,37 @@ static void syncfocus() {
     CHECK(!g.allow(true, 1200));          // 重新计时
     CHECK(g.allow(false, 1201));          // 关闭（含软复位）立即出帧
     CHECK(!g.holding());
+    {   // 同一批“关→内容→开”：轮询时 ?2026 仍是开，但同步结束计数变化 → 出一帧并重新计时
+        itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 20, 5, 100, 1u << 20};
+        itcore_core *c = nullptr;
+        CHECK(itcore_create(&o, &c) == 0 && c);
+        auto feed = [&](const char *t) { itcore_feed(c, reinterpret_cast<const uint8_t *>(t), std::strlen(t));
+                                         while (itcore_event *e = itcore_next_event(c)) itcore_event_release(e); };
+        it2app::SyncGate sg(ITREN_SYNC_TIMEOUT_MS);
+        auto on = [&] { return itcore_mode_query(c, 2026) == ITCORE_MODE_SET; };
+        feed("\x1b[?2026h");
+        CHECK(!sg.allow(on(), 0, itcore_sync_end_count(c)));
+        feed("\x1b[?2026lframe1\x1b[?2026h");
+        CHECK(on() && itcore_sync_end_count(c) == 1);
+        CHECK(sg.allow(on(), 10, itcore_sync_end_count(c)));    // 出一帧
+        CHECK(!sg.allow(on(), 20, itcore_sync_end_count(c)));   // 计数未变：继续暂停
+        CHECK(!sg.allow(on(), 159, itcore_sync_end_count(c)));  // 计时从 10 重新开始
+        CHECK(sg.allow(on(), 160, itcore_sync_end_count(c)));   // 超时只是出一帧
+        CHECK(on());                                            // 不清同步状态
+        feed("\x1b[!p\x1b[?2026h");                          // DECSTR 也计一次
+        CHECK(itcore_sync_end_count(c) == 2);
+        feed("\x1b" "c");                                      // RIS 关掉同步也计
+        CHECK(itcore_sync_end_count(c) == 3 && !on());
+        // SYNC-02：tmux/neovim 式每帧“关再开”，16ms 一批持续 1 秒 → 出帧数≈输入帧数（不是 1000/150≈6）
+        feed("\x1b[?2026h");
+        int frames = 0, batches = 0;
+        for (uint64_t t = 1000; t < 2000; t += 16, ++batches) {
+            feed("\x1b[?2026lxx\x1b[?2026h");
+            if (sg.allow(on(), t, itcore_sync_end_count(c))) ++frames;
+        }
+        CHECK(frames == batches && batches >= 60);
+        itcore_destroy(c);
+    }
     it2app::FocusReporter f;
     CHECK(f.update(false, true).empty());
     CHECK(f.update(true, true).empty());  // 状态未变

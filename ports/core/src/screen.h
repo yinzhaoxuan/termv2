@@ -251,6 +251,8 @@ public:
     void invalidate_all() { touch_all(); }  // 调色板 / 默认色变化：整屏重画
     Pen &pen() { return pen_; }
     uint64_t revision() const { return revision_; }
+    // ?2026 由开变关的累计次数（?2026l、DECSTR、RIS）：后端据此发现同一批里的“关→内容→开”
+    uint64_t sync_end_count() const { return sync_ends_; }
     // OSC 8：params 为 "k=v:k=v"，url 为空表示结束链接。
     void set_hyperlink(std::string_view params, std::string_view url);
     uint32_t hyperlink_id() const { return link_id_; }
@@ -336,6 +338,7 @@ private:
     Pen pen_;
     SavedCursor saved_main_, saved_alt_;
     uint64_t revision_ = 1;
+    uint64_t sync_ends_ = 0;
     uint64_t next_logic_id_ = 1;
     // 正在写入的当前逻辑行缓冲（视口内软换行累积）；硬换行时压入 scrollback。
     // 简化：滚动出顶部的行按 wrap 标记合并/压入。

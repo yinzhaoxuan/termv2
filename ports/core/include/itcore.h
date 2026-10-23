@@ -140,6 +140,9 @@ int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t hyperlink_id,
 typedef enum { ITCORE_MODE_NOT_RECOGNIZED = 0, ITCORE_MODE_SET = 1, ITCORE_MODE_RESET = 2 } itcore_mode_state;
 /* DEC 私有模式：至少覆盖 1 4 5 7 9 25 47 1000 1002 1003 1006 1047 1049 1004 2004 2026；core 为空返回 NOT_RECOGNIZED */
 itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t dec_private_mode);
+/* ?2026 同步输出由开变关的累计次数（?2026l、DECSTR、RIS 各计一次；只增不减）。
+   后端在一批 feed 之后比较：计数变化说明本批内有同步结束（即使批尾又重新打开），应出一帧。 */
+uint64_t itcore_sync_end_count(const itcore_core *c);
 /* ANSI 模式：覆盖 4（IRM）、20（LNM），其余 NOT_RECOGNIZED；core 为空返回 NOT_RECOGNIZED */
 itcore_mode_state itcore_ansi_mode_query(const itcore_core *c, uint32_t ansi_mode);
 
