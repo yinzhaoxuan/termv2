@@ -138,8 +138,14 @@ RECT paneArea() {
 }
 Rect toRect(const RECT& r) { return {0, 0, double(r.right - r.left), double(r.bottom - r.top)}; }
 
-double cellH() { return g->settings.fontSize * 96.0 / 72.0 * 1.2 * scale(); }  // 近似：后端未暴露 cell 尺寸
-double cellW() { return g->settings.fontSize * 96.0 / 72.0 * 0.6 * scale(); }
+// 优先用后端实测 cellSize()（GridMetrics，物理像素）；未知时回退估算
+uishell::CellSize backendCell() {
+  for (auto& [id, p] : g->panes)
+    if (p->backend) { auto c = p->backend->cellSize(); if (c.w > 0 && c.h > 0) return c; }
+  return {0, 0};
+}
+double cellH() { auto c = backendCell(); return c.h > 0 ? c.h : g->settings.fontSize * 96.0 / 72.0 * 1.2 * scale(); }
+double cellW() { auto c = backendCell(); return c.w > 0 ? c.w : g->settings.fontSize * 96.0 / 72.0 * 0.6 * scale(); }
 
 void updateStatusBar();
 void layoutPanes();
@@ -318,6 +324,7 @@ void focusPane(const std::string& paneId) {
 void onPaneStatus(const std::string& paneId, const uishell::SessionStatus& st) {
   PaneHost* p = paneById(paneId); if (!p) return;
   p->status = st;
+  updateScrollBar(*p);  // 改字体后网格行数可能变化
   if (st.state == SessionState::Exited || st.state == SessionState::Failed) g->snaps.onSessionEnded(paneId);
   positionOverlay(*p);
   refreshTabs(); refreshTree(); updateStatusBar();
@@ -483,16 +490,19 @@ void pasteClipboard() {
 
 uishell::PaneBackendFactory makeFactory();
 
-// 字号：6–72，写回 settings.json；后端无运行时改字号接口，新建窗格生效
+// 字号：6–72，写回 settings.json；经 setFont 运行时应用到所有窗格
 void applyFontSize(double v) {
   if (v == g->settings.fontSize) { g->statusNote = "字号已是 " + std::to_string((int)v) + " pt"; updateStatusBar(); return; }
   g->settings.fontSize = v;
   std::string err;
   if (g->settingsReadOnly) g->statusNote = "settings.json 只读，字号未保存";
   else if (!saveSettings(g->configDir / "settings.json", g->settings, false, &err)) g->statusNote = "保存 settings.json 失败：" + err;
-  else g->statusNote = "字号 " + std::to_string((int)v) + " pt（新建窗格生效）";
+  else g->statusNote = "字号 " + std::to_string((int)v) + " pt";
   g->factory = makeFactory();
-  for (auto& [id, p] : g->panes) updateScrollBar(*p);
+  for (auto& [id, p] : g->panes) {
+    if (p->backend) p->backend->setFont(g->settings.fontFamily, (float)v);
+    updateScrollBar(*p);
+  }
   updateStatusBar();
 }
 
