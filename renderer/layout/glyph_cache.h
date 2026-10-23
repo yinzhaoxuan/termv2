@@ -168,11 +168,15 @@ inline std::vector<FontRun> plan_runs(const std::vector<CellIn> &row, const HasG
   return out;
 }
 
-// 字形 advance 适配到 cell_span*cell_w：只缩不放；居中偏移
+// 字形 advance 适配到 cell_span*cell_w：只缩不放；居中偏移。
+// 溢出不足 1px（格宽按 round(advance) 取整造成，如 144 DPI 下格 13 vs advance 13.195）不缩，
+// 以免主字体整体被缩小发虚；此时偏移为负的半个溢出量，仍居中。
+inline constexpr float kGlyphFitTolerancePx = 1.0f;
 struct GlyphFit { float scale, x_offset; };
 inline GlyphFit fit_glyph(float advance, uint8_t cell_span, float cell_w) {
   float box = std::max<uint8_t>(cell_span, 1) * cell_w;
   if (advance <= 0) return {1.0f, 0.0f};
+  if (advance - box < kGlyphFitTolerancePx) return {1.0f, (box - advance) / 2.0f};
   float s = std::min(1.0f, box / advance);
   return {s, (box - advance * s) / 2.0f};
 }

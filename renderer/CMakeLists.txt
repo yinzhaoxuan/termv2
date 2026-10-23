@@ -20,6 +20,7 @@ endif()
 
 add_executable(test_renderer_d2d_caret ${PROJECT_SOURCE_DIR}/tests/renderer/test_d2d_caret.cpp)
 target_link_libraries(test_renderer_d2d_caret PRIVATE itrender_d2d itrender_layout itcore_mock)
+target_include_directories(test_renderer_d2d_caret PRIVATE ${PROJECT_SOURCE_DIR}/app/win32_term)  # BUG-02 HwndSwapChainHost
 add_test(NAME renderer_d2d_caret COMMAND test_renderer_d2d_caret)
 set_tests_properties(renderer_d2d_caret PROPERTIES SKIP_RETURN_CODE 77)
 

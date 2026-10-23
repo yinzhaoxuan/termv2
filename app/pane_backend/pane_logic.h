@@ -137,12 +137,28 @@ public:
     Act move(Cell c);
     Act up(Cell c);
     void cancel() { pressed_ = dragging_ = false; }
+    // 失去鼠标捕获（WM_CAPTURECHANGED / WM_CANCELMODE，例如模态对话框弹出）：按松开收尾但不产生动作，
+    // 已拖出的选区保留；之后的 move/up 都返回 None（BUG-03）
+    void captureLost() { cancel(); }
     bool pressed() const { return pressed_; }
     bool dragging() const { return dragging_; }
     Cell pressCell() const { return press_; }
 private:
     bool pressed_ = false, dragging_ = false;
     Cell press_;
+};
+
+// 激活点击：窗口未激活时的那一下点击只用于激活，不开始选区/不算单击（BUG-03）。
+// WM_MOUSEACTIVATE 时 armed(窗口原先未激活)；随后的按下与配对的松开都被吞掉。
+class ActivationClickGate {
+public:
+    void onMouseActivate(bool wasInactive) { armed_ = wasInactive; }
+    bool allowDown() { if (armed_) { armed_ = false; swallowing_ = true; return false; } return true; }
+    bool allowUp() { if (swallowing_) { swallowing_ = false; return false; } return true; }
+    bool allowMove() const { return !swallowing_; }
+    void reset() { armed_ = swallowing_ = false; }
+private:
+    bool armed_ = false, swallowing_ = false;
 };
 
 // 多击计数：同一格、间隔不超过系统双击时间的连续按下累加 1→2→3→1（3 = 三击选行）

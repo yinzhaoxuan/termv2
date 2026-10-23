@@ -199,8 +199,10 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
     desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     desc.SampleDesc.Count = 1;
     desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    desc.BufferCount = 2;
-    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    const SwapConfig sc = host_->swap_config();  // BUG-02：宿主决定呈现模型
+    desc.BufferCount = sc.buffer_count ? sc.buffer_count : 1;
+    desc.SwapEffect = sc.effect == SwapEffect::Discard ? DXGI_SWAP_EFFECT_DISCARD : DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    if (sc.effect == SwapEffect::FlipSequential && desc.BufferCount < 2) desc.BufferCount = 2;
     desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
     if (!factory) std::fprintf(stderr, "[itren] init：取 IDXGIFactory2 失败\n");
     impl_->swap = host_->create_swap_chain(factory, impl_->d3d, desc);

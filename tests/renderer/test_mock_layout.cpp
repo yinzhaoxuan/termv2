@@ -42,7 +42,8 @@ int main() {
     struct F { const char *name; float upem, asc, desc, gap, adv_m; } fonts[] = {
         {"Consolas", 2048, 1884, 514, 0, 1126}, {"Cascadia Mono", 2048, 1900, 480, 0, 1200},
         {"Courier New", 2048, 1705, 615, 0, 1229}, {"Lucida Console", 2048, 1616, 432, 0, 1234},
-        {"Sarasa Mono SC", 1000, 880, 120, 0, 500}};
+        {"Sarasa Mono SC", 1000, 880, 120, 0, 500},
+        {"Gap Mono (lineGap≠0)", 2048, 1638, 410, 300, 1229}};
     for (float pt : {10.f, 12.f, 14.f})
       for (auto &f : fonts) {
         const float k = pt * (96.f / 72.f) / f.upem;
@@ -55,6 +56,11 @@ int main() {
           assert(m.cell_w_px() == int(std::lround(fm.advance * sc)));
           const float bl = itren::GridMetrics::baseline_px(fm, sc);
           assert(bl > 0 && bl + fm.descent * sc <= m.cell_h_px() + 1.f);
+          assert(bl == std::round(fm.ascent * sc));  // lineGap 不挪基线
+          if (f.gap > 0) {  // 行距留白在字形下方：格高包含 gap，基线+descent 之后还剩 gap
+            assert(m.cell_h_px() >= int(std::ceil((fm.ascent + fm.descent + fm.line_gap) * sc - 1e-3f)));
+            assert(bl + fm.descent * sc <= m.cell_h_px() - fm.line_gap * sc + 1.f);
+          }
         }
       }
     // 估算值标记为未实测（后端据此打日志）

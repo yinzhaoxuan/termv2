@@ -68,5 +68,9 @@ int main() {
   f = fit_glyph(25, 2, 10); assert(std::fabs(f.scale - 0.8f) < 1e-6 && std::fabs(f.x_offset) < 1e-5);
   f = fit_glyph(20, 2, 10); assert(f.scale == 1.0f && f.x_offset == 0.0f);
   f = fit_glyph(0, 1, 10); assert(f.scale == 1.0f);
+  // 评审：溢出 < 1px 不缩（144 DPI：格 13 vs advance 13.195），居中
+  f = fit_glyph(13.195f, 1, 13); assert(f.scale == 1.0f && std::fabs(f.x_offset + 0.0975f) < 1e-4);
+  f = fit_glyph(13.99f, 1, 13); assert(f.scale == 1.0f);
+  f = fit_glyph(14.0f, 1, 13); assert(f.scale < 1.0f);   // 溢出达 1px 才缩
   std::puts("glyph_cache ok");
 }

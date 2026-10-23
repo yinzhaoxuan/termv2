@@ -6,6 +6,7 @@
 #include <optional>
 #include "frame_policy.h"
 #include "itcore.h"
+#include "iswap_chain_host.h"
 #include <atomic>
 #include <climits>
 #include <limits>
@@ -398,6 +399,47 @@ static void font() {
     CHECK(m15.cell_w_px() == 11 && m15.cell_h_px() == 20);
 }
 
+// BUG-03：拖动中失去捕获（模态对话框）后，后续鼠标移动不得改变选区；已拖出的选区保留
+static void capture_loss() {
+    using C = DragSelect::Cell;
+    using A = DragSelect::Act;
+    DragSelect d;
+    d.down(C{0, 2});
+    CHECK(d.move(C{5, 4}) == A::Start);
+    CHECK(d.move(C{6, 9}) == A::Extend);
+    d.captureLost();                       // WM_CAPTURECHANGED
+    CHECK(!d.pressed() && !d.dragging());  // 自动滚动 tick 以 pressed() 为门：停止
+    CHECK(d.move(C{20, 12}) == A::None);   // QA：之后的 WM_MOUSEMOVE 不扩展选区
+    CHECK(d.move(C{0, 0}) == A::None);
+    CHECK(d.up(C{20, 12}) == A::None);     // 迟到的松开也不当成单击（不会清掉保留的选区）
+    // WM_CANCELMODE 同样处理；之后新的按下照常工作
+    d.down(C{1, 1}); d.captureLost();
+    CHECK(d.move(C{3, 3}) == A::None);
+    d.down(C{1, 1}); CHECK(d.move(C{3, 3}) == A::Start);
+
+    // 激活点击：窗口未激活时的那一下点击不开始选区，配对的移动/松开也吞掉
+    ActivationClickGate g;
+    g.onMouseActivate(true);
+    CHECK(!g.allowDown()); CHECK(!g.allowMove()); CHECK(!g.allowUp());
+    CHECK(g.allowDown() && g.allowMove() && g.allowUp());  // 下一次点击正常
+    g.onMouseActivate(false);                               // 已激活窗口内的点击照常
+    CHECK(g.allowDown() && g.allowUp());
+}
+
+// BUG-02：子窗口 HWND 宿主必须选 blt 模型 Discard + 1 缓冲；默认仍为 Flip + 2
+static void swap_config() {
+    CHECK(itren::kChildHwndSwapConfig.effect == itren::SwapEffect::Discard);
+    CHECK(itren::kChildHwndSwapConfig.buffer_count == 1);
+    struct H : itren::ISwapChainHost {
+#ifdef _WIN32
+        IDXGISwapChain1 *create_swap_chain(IDXGIFactory2 *, ID3D11Device *, const DXGI_SWAP_CHAIN_DESC1 &) override { return nullptr; }
+#endif
+        itren::SizePx client_size_px() const override { return {1, 1}; }
+        float dpi_scale() const override { return 1.f; }
+    } h;
+    CHECK(h.swap_config().effect == itren::SwapEffect::FlipSequential && h.swap_config().buffer_count == 2);
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "churn") churn();
@@ -405,7 +447,7 @@ int main(int argc, char **argv) {
     else if (w == "keys") keys();
     else if (w == "sync") syncfocus();
     else if (w == "font") font();
-    else { limits(); grid(); queue(); closer(); drag(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

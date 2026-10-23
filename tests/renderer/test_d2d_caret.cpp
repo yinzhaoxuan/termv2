@@ -3,6 +3,9 @@
 #include "itcore_mock.h"
 #include <cstdio>
 #include <cassert>
+#ifdef _WIN32
+#  include "hwnd_swap_host.h"
+#endif
 
 struct NullHost : itren::ISwapChainHost {
 #ifdef _WIN32
@@ -20,6 +23,13 @@ struct NullHost : itren::ISwapChainHost {
 };
 
 int main() {
+#ifdef _WIN32
+  {  // BUG-02：真正的 HWND 宿主选 DISCARD / 1 缓冲
+    iterm_app::HwndSwapChainHost hh(nullptr);
+    auto sc = hh.swap_config();
+    assert(sc.effect == itren::SwapEffect::Discard && sc.buffer_count == 1);
+  }
+#endif
   NullHost host;
   itren::D2DRenderer r(&host);
   auto m = itren::GridMetrics::from_font(8, 10, 2, 0, 1.0f);

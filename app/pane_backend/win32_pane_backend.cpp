@@ -158,6 +158,7 @@ private:
     void syncViewport(bool force = false);  // 历史行数 / 偏移变化 → onViewportChanged
     void handleWheel(WPARAM wp, LPARAM lp);
     void autoScrollTick();
+    void endDragOnCaptureLoss();
     bool altScreen() const { return core_ && itcore_mode_query(core_, 1049) == ITCORE_MODE_SET; }
 
     std::string connId_;
@@ -192,6 +193,7 @@ private:
     bool vpNotified_ = false;
     ClickCounter clicks_;
     int clickUnit_ = 0;                 // 0 字符 / 1 词 / 2 行（双击 / 三击后拖动按单位扩展）
+    it2app::ActivationClickGate activateGate_;
     int dragEdge_ = 0;                  // 拖选到上(-1)/下(+1)边缘外：tick 自动滚动
     bool dragEmpty_ = false;            // 最近一次移动的 drag_end 为空选区
     uint16_t pressBoundary_ = 0;        // 按下点的列边界（selection_hit.boundary），drag_end 判方向/空选区
@@ -246,13 +248,14 @@ bool Win32PaneBackend::attach(void *parentHwnd, const uishell::PixelRect &rc, fl
     bounds_ = rc;
     renderer_ = std::make_unique<itren::D2DRenderer>(host_.get());
     metrics_ = itren::GridMetrics::from_font(itren::estimate_font_metrics(font_.sizePt), scale);
-    if (!renderer_->init(metrics_, font_.family.c_str(), font_.sizePt))
+    const bool initOk = renderer_->init(metrics_, font_.family.c_str(), font_.sizePt);
+    if (!initOk)
         std::fprintf(stderr, "[pane] D2DRenderer::init 失败（设备丢失时 present 内重试）\n");
     // 格尺寸取 DirectWrite 实测主字体度量（init 失败时为按字号估算）
     // init 之后一定实测；实测失败（无设备/字体族找不到）才退回估算并记日志
     const auto fm = renderer_->font_metrics();
     if (!fm.measured)
-        std::fprintf(stderr, "[pane] DirectWrite 字体度量失败（%ls %.1fpt），格尺寸按字号估算\n", font_.family.c_str(), double(font_.sizePt));
+        std::fprintf(stderr, "[pane] DirectWrite 字体度量失败（%ls %.1fpt，renderer init=%s），格尺寸按字号估算\n", font_.family.c_str(), double(font_.sizePt), initOk ? "ok" : "failed");
     metrics_ = itren::GridMetrics::from_font(fm, scale);
     renderer_->metrics() = metrics_;
     sized_ = true;
@@ -901,6 +904,13 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_LBUTTONUP) { downCol_ = downRow_ = -1; dragEdge_ = 0; }
 }
 
+void Win32PaneBackend::endDragOnCaptureLoss() {
+    drag_.captureLost();
+    dragSelStarted_ = false;
+    dragEdge_ = 0;
+    downCol_ = downRow_ = -1;
+}
+
 // 拖选越过上/下边缘：每个 tick 滚 1 行并把选区端点延到边缘行
 void Win32PaneBackend::autoScrollTick() {
     if (!dragEdge_ || !drag_.pressed() || !core_ || !dragSelStarted_) return;
@@ -976,11 +986,22 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     case WM_MOUSEACTIVATE:
         // 点击窗格：交给 UI 决定焦点（UI 再调 setFocused）
         if (parent_) SendMessageW(parent_, m, w, l);
+        // 顶层窗口原先未激活：这一下点击只激活，不开始选区（BUG-03）
+        activateGate_.onMouseActivate(GetForegroundWindow() != GetAncestor(h, GA_ROOT));
         return MA_ACTIVATE;
-    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: SetCapture(h); handleMouse(m, w, l); return 0;
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
+        if (!activateGate_.allowDown()) return 0;
+        SetCapture(h); handleMouse(m, w, l); return 0;
+    case WM_CAPTURECHANGED: case WM_CANCELMODE:
+        // 模态对话框等抢走捕获：结束拖动、停自动滚动，已有选区保留（BUG-03）
+        if (m == WM_CANCELMODE && GetCapture() == h) ReleaseCapture();
+        endDragOnCaptureLoss();
+        return m == WM_CANCELMODE ? 0 : DefWindowProcW(h, m, w, l);
     case WM_MOUSEWHEEL: handleWheel(w, l); return 0;
-    case WM_LBUTTONUP: ReleaseCapture(); handleMouse(m, w, l); return 0;
-    case WM_MOUSEMOVE: if (w & MK_LBUTTON) handleMouse(m, w, l); return 0;
+    case WM_LBUTTONUP: if (!activateGate_.allowUp()) return 0;
+        // 先按松开收尾再释放捕获：ReleaseCapture 会同步发 WM_CAPTURECHANGED，顺序反了会把正常结束当成取消
+        handleMouse(m, w, l); ReleaseCapture(); return 0;
+    case WM_MOUSEMOVE: if ((w & MK_LBUTTON) && activateGate_.allowMove()) handleMouse(m, w, l); return 0;
     // 键盘：接口约定按键由 UI 翻译，子窗口拿到焦点后原样转给父窗口（外壳）处理，再由它调 sendInput
     case WM_KEYDOWN: case WM_KEYUP: case WM_SYSKEYDOWN: case WM_SYSKEYUP: case WM_SYSCHAR:
         if (parent_) return SendMessageW(parent_, m, w, l);

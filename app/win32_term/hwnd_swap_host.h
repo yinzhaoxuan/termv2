@@ -29,6 +29,9 @@ public:
         return swap;
     }
 
+    // 子窗口宿主：blt 模型，避免 DWM 把交换链叠到对话框上面（BUG-02）
+    itren::SwapConfig swap_config() const override { return itren::kChildHwndSwapConfig; }
+
     itren::SizePx client_size_px() const override {
         RECT rc{};
         if (!hwnd_ || !GetClientRect(hwnd_, &rc)) return {1, 1};
