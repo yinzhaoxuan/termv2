@@ -4,6 +4,7 @@
 #include "vt_parser.h"
 #include "screen.h"
 #include "encode.h"
+#include "ucd_width.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -343,6 +344,38 @@ void itcore_destroy(itcore_core *c) { delete c; }
 itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t mode) {
     if (!c || !c->screen || mode > 0x7fffffffu) return ITCORE_MODE_NOT_RECOGNIZED;
     return static_cast<itcore_mode_state>(c->screen->dec_mode_state(int(mode)));
+}
+size_t itcore_text_clusters(const char *utf8, size_t length, uint8_t *widths, uint32_t *byte_lens, size_t cap) {
+    if (!utf8) return 0;
+    const uint8_t *p = reinterpret_cast<const uint8_t *>(utf8);
+    size_t n = 0, i = 0;
+    uint32_t last_cp = 0, base_cp = 0; int cps = 0; uint8_t w = 0; uint32_t bytes = 0;
+    auto flush = [&] {
+        if (!cps) return;
+        if (n < cap) { if (widths) widths[n] = w; if (byte_lens) byte_lens[n] = bytes; }
+        ++n; cps = 0; bytes = 0;
+    };
+    while (i < length) {
+        uint32_t cp = 0; size_t adv = 0;
+        itcore::utf8_next(p + i, length - i, &cp, &adv);
+        if (!adv) adv = 1;
+        i += adv;
+        if (itcore::ucd::is_ignorable(cp)) { bytes += uint32_t(adv); continue; }  // 不占格，字节并入当前簇
+        bool join = cps > 0 && (itcore::ucd::is_combining(cp) || (last_cp == 0x200D && itcore::ucd::is_ext_pict(cp)) ||
+                                (itcore::ucd::is_regional_indicator(cp) && itcore::ucd::is_regional_indicator(base_cp) && cps == 1));
+        if (join) {
+            if (w == 1 && ((cp == 0xFE0F && itcore::ucd::is_vs16_base(base_cp)) ||
+                           (itcore::ucd::is_modifier(cp) && itcore::ucd::is_modifier_base(base_cp)))) w = 2;
+            ++cps; last_cp = cp; bytes += uint32_t(adv);
+            continue;
+        }
+        flush();
+        int cw = itcore::cell_width(cp);
+        w = uint8_t(cp == 0xFFFD || cw <= 0 ? 1 : cw > 2 ? 2 : cw);
+        base_cp = last_cp = cp; cps = 1; bytes += uint32_t(adv);
+    }
+    flush();
+    return n;
 }
 uint64_t itcore_sync_end_count(const itcore_core *c) { return c && c->screen ? c->screen->sync_end_count() : 0; }
 itcore_mode_state itcore_ansi_mode_query(const itcore_core *c, uint32_t mode) {

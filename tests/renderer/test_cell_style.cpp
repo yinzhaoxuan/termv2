@@ -51,6 +51,29 @@ int main() {
   itmock_bump_epoch(s); assert(d.collect(s).size() == 5);  // epoch 变化整屏重画
   assert(d.collect(s).empty());
   d.invalidate(); assert(d.collect(s).size() == 5);
+  // BLINK-01：只有含闪烁格的行在相位翻转时被标脏；闪烁全部消失后 any()=false（renderer 据此停 animating_）
+  {
+    BlinkRows br; br.resize(5); assert(!br.any());
+    assert(d.collect(s).empty());
+    br.set(1, true); br.set(3, true); br.set(3, true);
+    auto rr = br.rows(); assert(rr.size() == 2 && rr[0] == 1 && rr[1] == 3 && br.any());
+    for (auto y : rr) d.mark(y);
+    auto dv = d.collect(s); assert(dv.size() == 2 && dv[0] == 1 && dv[1] == 3);
+    assert(d.collect(s).empty());
+    br.set(1, false); assert(br.any()); br.set(3, false); assert(!br.any() && br.rows().empty());
+    br.set(2, true); br.resize(6); assert(!br.any());  // 尺寸变化清空
+    br.set(9, true); assert(!br.any());               // 越界忽略
+  }
+  // BLINK-02：下划线随闪烁隐藏；位置/粗细按度量与 DPI（贴底留 1 逻辑像素）
+  {
+    itcore_cell u{}; u.flags = ITCORE_CELL_UNDERLINE | ITREN_CELL_BLINK;
+    assert(underline_visible(u, 0) && !underline_visible(u, 1000) && underline_visible(u, 2000));
+    u.flags = ITCORE_CELL_UNDERLINE; assert(underline_visible(u, 1000));
+    u.flags = ITREN_CELL_BLINK; assert(!underline_visible(u, 0));
+    GridMetrics g1; g1.cell_w_dip = 8; g1.cell_h_dip = 16;
+    auto ur = underline_rect(g1, 1, 0, 2); assert(ur.x == 12 && ur.w == 16 && ur.h == 2 && ur.y == 4 + 16 - 2 - 1);
+    g1.dpi_scale = 2.f; ur = underline_rect(g1, 0, 0); assert(ur.h == 4 && ur.y == 8 + 32 - 4 - 2);
+  }
   itcore_snapshot_release(s);
   std::puts("cell_style ok");
 }

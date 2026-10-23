@@ -60,6 +60,36 @@ static void test_width_table() {
     CHECK(is_ext_pict(0x1F469) && is_modifier_base(0x1F44D) && is_modifier(0x1F3FB));
 }
 
+// IME-02：itcore_text_clusters 的簇切分与列宽 = itcore_feed 写进网格的结果（歧义宽度、emoji、组合、ZWJ、旗帜）
+static void test_text_clusters() {
+    const char *samples[] = {"a\u03b1\u2460b", "\U0001F44D\U0001F3FD", "\u2764\uFE0F", "e\u0301x", "\u6d4b\u8bd5",
+                             "\U0001F468\u200D\U0001F469\u200D\U0001F467", "\U0001F1E8\U0001F1F3\U0001F1FA", "\u00ad\u200bq", "\xff!"};
+    for (const char *t : samples) {
+        size_t len = strlen(t);
+        size_t n = itcore_text_clusters(t, len, nullptr, nullptr, 0);
+        std::vector<uint8_t> w(n); std::vector<uint32_t> bl(n);
+        CHECK(itcore_text_clusters(t, len, w.data(), bl.data(), n) == n);
+        size_t sum = 0; for (auto b : bl) sum += b;
+        CHECK(sum == len);
+        itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 40, 2, 0, 0};
+        itcore_core *c = nullptr;
+        CHECK(itcore_create(&o, &c) == 0);
+        itcore_feed(c, reinterpret_cast<const uint8_t *>(t), len);
+        itcore_snapshot *sn = itcore_acquire_snapshot(c, 0, 2);
+        itcore_wrap wr; uint64_t rr;
+        const itcore_cell *row = itcore_snapshot_row(sn, 0, &wr, &rr);
+        std::vector<uint8_t> grid;
+        for (int x = 0; x < 40; ++x)
+            if (row[x].grapheme_id && !(row[x].flags & ITCORE_CELL_CONTINUATION)) grid.push_back(row[x].width);
+        if (grid != w) std::printf("text_clusters 不一致：%s n=%zu grid=%zu\n", t, n, grid.size());
+        CHECK(grid == w);
+        itcore_snapshot_release(sn);
+        itcore_destroy(c);
+    }
+    CHECK(itcore_text_clusters(nullptr, 3, nullptr, nullptr, 0) == 0);
+    uint8_t one[1]; CHECK(itcore_text_clusters("abc", 3, one, nullptr, 1) == 3 && one[0] == 1);  // 只写前 cap 个
+}
+
 static void test_width_screen() {
     auto *c = make();
     // ZWJ 家庭序列 → 单簇 2 格
@@ -368,7 +398,7 @@ static void test_compact() {
 
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
-    if (w == "all" || w == "width") { test_width_table(); test_width_screen(); }
+    if (w == "all" || w == "width") { test_width_table(); test_width_screen(); test_text_clusters(); }
     if (w == "all" || w == "osc8") test_osc8();
     if (w == "all" || w == "pool") test_snapshot_pool();
     if (w == "all" || w == "rev") test_revision_epoch();

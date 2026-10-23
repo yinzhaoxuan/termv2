@@ -2,6 +2,7 @@
 #pragma once
 #include "itcore.h"
 #include "grid_metrics.h"
+#include <algorithm>
 #include <cmath>
 #include <array>
 #include <cstdint>
@@ -78,6 +79,40 @@ inline GridMetrics::Rect strike_rect(const GridMetrics &m, uint16_t col, uint16_
   return {a.x, a.y + a.h / 2 - t / 2, a.w * std::max<uint16_t>(ncells, 1), t};
 }
 
+// SGR 4：下划线贴格底，粗细与删除线同为 max(1, round(2*dpi))；只在 text_visible 时画（闪烁隐藏相位不画）
+inline GridMetrics::Rect underline_rect(const GridMetrics &m, uint16_t col, uint16_t row, uint16_t ncells = 1) {
+  auto a = m.cell_rect(col, row);
+  int t = std::min(std::max(1, int(std::lround(2.0f * m.dpi_scale))), a.h);
+  int gap = std::min(std::max(0, int(std::lround(m.dpi_scale))), a.h - t);  // 离底边约 1 逻辑像素
+  return {a.x, a.y + a.h - t - gap, a.w * std::max<uint16_t>(ncells, 1), t};
+}
+
+// 下划线是否画：随文本一起受闪烁隐藏（BLINK-02）
+inline bool underline_visible(const itcore_cell &c, uint64_t blink_phase_ms) {
+  return (c.flags & ITCORE_CELL_UNDERLINE) && text_visible(c, blink_phase_ms);
+}
+
+// SGR 5 闪烁的行级跟踪：重画某行时记录它是否含闪烁格；相位翻转只需重画这些行；全部消失后停止动画
+class BlinkRows {
+ public:
+  void resize(uint16_t rows) { if (rows != has_.size()) { has_.assign(rows, 0); count_ = 0; } }
+  void clear() { has_.assign(has_.size(), 0); count_ = 0; }
+  void set(uint16_t row, bool blink) {
+    if (row >= has_.size() || bool(has_[row]) == blink) return;
+    has_[row] = blink; count_ += blink ? 1 : -1;
+  }
+  bool any() const { return count_ > 0; }
+  // 相位翻转时要重画的行
+  std::vector<uint16_t> rows() const {
+    std::vector<uint16_t> out;
+    for (uint16_t y = 0; y < has_.size(); ++y) if (has_[y]) out.push_back(y);
+    return out;
+  }
+ private:
+  std::vector<uint8_t> has_;
+  int count_ = 0;
+};
+
 // 脏行追踪：返回需要重画的行；尺寸或 generation 变化时全部重画
 class DirtyRows {
  public:
@@ -95,7 +130,8 @@ class DirtyRows {
     }
     return out;
   }
-  void invalidate() { rev_.clear(); }  // 设备丢失 / DPI / 字体变化
+  void invalidate() { rev_.clear(); }
+  void mark(uint16_t row) { if (row < rev_.size()) rev_[row] = UINT64_MAX; }  // 单行强制重画（闪烁相位）  // 设备丢失 / DPI / 字体变化
  private:
   std::vector<uint64_t> rev_;
   uint64_t gen_ = UINT64_MAX, epoch_ = UINT64_MAX;

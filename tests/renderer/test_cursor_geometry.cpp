@@ -53,6 +53,16 @@ int main() {
   // 宽字符尾格未单独带 id 也算在段内
   itmock_set_hyperlink(s, 0, 0, 8, 0, nullptr); itmock_set_hyperlink(s, 0, 4, 5, 5, "https://z");
   sp = hover_link_span(s, 0, 5); assert(sp.c0 == 4 && sp.c1 == 6);
+  {  // CUR-01：光标在宽字符尾格 → 吸附首格、画两格宽
+    const char *wt = "a中b"; auto *ws = itmock_snapshot_from_utf8(wt, strlen(wt), 8, 2);
+    auto k = cursor_cell(ws, 0, 2); assert(k.col == 1 && k.wide);
+    k = cursor_cell(ws, 0, 1); assert(k.col == 1 && k.wide);
+    k = cursor_cell(ws, 0, 3); assert(k.col == 3 && !k.wide);
+    k = cursor_cell(ws, 0, 9); assert(k.col == 9 && !k.wide);  // 越界原样
+    auto q = cursor_rects(m, 0, k.col = cursor_cell(ws, 0, 2).col, CursorStyle{}, true, true, 1.0f);
+    assert(q.size() == 1 && q[0].x == 4 + 8 && q[0].w == 16);
+    itcore_snapshot_release(ws);
+  }
   itcore_snapshot_release(s);
   std::puts("cursor_geometry ok");
 }

@@ -108,3 +108,20 @@ extern "C" int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t id, 
   if (id_len) *id_len = 0;
   return 1;
 }
+
+// 模拟版字素簇：ZWJ/VS/组合符号（U+0300–036F）并入前簇，宽度用简化表；正式规则见核心 itcore_text_clusters
+extern "C" size_t itcore_text_clusters(const char *utf8, size_t length, uint8_t *widths, uint32_t *byte_lens, size_t cap) {
+  if (!utf8) return 0;
+  auto *p = reinterpret_cast<const unsigned char *>(utf8), *e = p + length;
+  size_t n = 0; uint32_t last = 0;
+  while (p < e) {
+    auto *st = p;
+    uint32_t cp = decode(p, e);
+    bool join = n > 0 && (cp == 0x200D || last == 0x200D || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0x300 && cp <= 0x36F));
+    last = cp;
+    if (join) { if (n - 1 < cap && byte_lens) byte_lens[n - 1] += uint32_t(p - st); continue; }
+    if (n < cap) { if (widths) widths[n] = width_of(cp); if (byte_lens) byte_lens[n] = uint32_t(p - st); }
+    ++n;
+  }
+  return n;
+}

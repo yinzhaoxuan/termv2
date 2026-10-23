@@ -12,6 +12,7 @@
 #include "frame_policy.h"
 #include "grid_metrics.h"
 #include "selection_hit.h"
+#include "frame_pump.h"
 #include "itcore.h"
 #include <algorithm>
 #include <climits>
@@ -186,7 +187,7 @@ private:
     ClickCounter clicks_;
     int clickUnit_ = 0;                 // 0 字符 / 1 词 / 2 行（双击 / 三击后拖动按单位扩展）
     int dragEdge_ = 0;                  // 拖选到上(-1)/下(+1)边缘外：tick 自动滚动
-    int dragCol_ = 0;
+    int dragCol_ = 0;                   // 自动滚动时端点列（按 boundary 与方向换算，右半算进选区）
     int wheelAccum_ = 0;
     mutable std::mutex statusMu_;
     uishell::SessionStatus status_;
@@ -456,21 +457,10 @@ void Win32PaneBackend::flushTitle() {
 
 void Win32PaneBackend::pump() {
     if (!core_ || !transport_) return;
-    bool any = false;
-    while (auto chunk = transport_->pop()) {
-        any = true;
-        const auto &b = chunk->bytes;
-        size_t off = 0;
-        while (off < b.size()) {
-            auto fr = itcore_feed(core_, reinterpret_cast<const uint8_t *>(b.data() + off), b.size() - off);
-            off += fr.accepted ? fr.accepted : b.size() - off;
-            drainCoreEvents();
-            if (fr.status == ITCORE_FATAL) { transport_->close(CloseReason::Fault); return; }
-        }
-    }
-    drainCoreEvents();
-    if (any) syncSelection();  // 输出可能清掉选区（切备用屏 / RIS / ED 3）
-    if (any) {
+    auto r = it2app::pump_core(core_, [&] { return transport_->pop(); }, [&] { drainCoreEvents(); });
+    if (r == it2app::PumpResult::Fatal) { transport_->close(CloseReason::Fault); return; }
+    if (r == it2app::PumpResult::Fed) {
+        syncSelection();       // 输出可能清掉选区（切备用屏 / RIS / ED 3）
         syncViewport();        // 已上翻时偏移随历史增长，视图停在原处
         present();
     }
@@ -480,8 +470,7 @@ void Win32PaneBackend::present(bool force) {
     if (!renderer_ || !core_) return;
     // ?2026：同步输出期间不取快照，超过 ITREN_SYNC_TIMEOUT_MS 兜底出一帧；关闭（含 DECSTR/RIS）后立即出帧
     // 同一批内“关→内容→开”由 itcore_sync_end_count 变化放行；超时只是每 150ms 出一帧，不清同步状态
-    const bool gate = sync_.allow(itcore_mode_query(core_, 2026) == ITCORE_MODE_SET, nowMs(), itcore_sync_end_count(core_));
-    if (!gate && !force) return;
+    if (!it2app::frame_due(sync_, core_, nowMs(), force)) return;
     releaseSnap();
     snap_ = itcore_acquire_snapshot(core_, vp_.firstRow(), resize_.dims().rows);  // 视口偏移：负 first_row 显示历史
     if (!snap_) return;
@@ -816,10 +805,14 @@ void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (msg == WM_MOUSEMOVE && drag_.pressed()) {
         // selection_hit：宽字符尾格吸附到首格；越出网格上/下边缘时按距离给出自动滚动速度
-        auto sh = itren::selection_hit(metrics_, x, y, cols, rows, snap_);
+        // 端点按 boundary 换算（右半算进选区）；自动滚动时列仍按同一 x 的网格内命中（SEL-01）
+        auto sh = itren::selection_hit_autoscroll(metrics_, x, y, cols, rows, snap_);
         dragEdge_ = sh.autoscroll_dir * std::max(1, sh.autoscroll_lines);
-        dragCol_ = sh.col;
-        if (!sh.autoscroll_dir) { c = sh.col; r = sh.row; cell = DragSelect::Cell{c, r}; }
+        auto p = drag_.pressCell();
+        bool forward = sh.autoscroll_dir ? sh.autoscroll_dir > 0 : (sh.row != p.row ? sh.row > p.row : sh.boundary > p.col);
+        uint16_t ec = itren::drag_endpoint_col(sh, forward, cols);
+        dragCol_ = ec;
+        if (!sh.autoscroll_dir) { c = ec; r = sh.row; cell = DragSelect::Cell{c, r}; }
     }
     auto startSel = [&] {
         auto p = drag_.pressCell();

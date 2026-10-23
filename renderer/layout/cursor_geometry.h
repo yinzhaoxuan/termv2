@@ -42,6 +42,21 @@ inline std::vector<PxRect> cursor_rects(const GridMetrics &m, uint16_t row, uint
           {c.x, c.y + t, t, c.h - 2 * t}, {c.x + c.w - t, c.y + t, t, c.h - 2 * t}};
 }
 
+// 光标所在格：落在宽字符尾格（CONTINUATION）时先吸附到首格，再判断是否宽（覆盖 2 格）
+struct CursorCell { uint16_t col; bool wide; };
+inline CursorCell cursor_cell(const itcore_snapshot *s, uint16_t row, uint16_t col) {
+  CursorCell out{col, false};
+  if (!s) return out;
+  uint16_t cols = itcore_snapshot_columns(s);
+  if (col >= cols) return out;
+  itcore_wrap w; uint64_t rr;
+  const itcore_cell *r = itcore_snapshot_row(s, row, &w, &rr);
+  if (!r) return out;
+  while (out.col > 0 && (r[out.col].flags & ITCORE_CELL_CONTINUATION)) --out.col;
+  out.wide = r[out.col].width == 2 && out.col + 1 < cols;
+  return out;
+}
+
 // 仅聚焦的实心块光标下字形需反色绘制
 inline bool cursor_inverts_glyph(CursorStyle st, bool focused) { return focused && st.shape == CursorShape::Block; }
 

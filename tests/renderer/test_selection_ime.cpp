@@ -78,5 +78,27 @@ int main() {
     // 空预编辑 → 光标格
     L1 = ime_layout(m, 2, 5, {}, {}, 0, 10, 5); assert(eq(L1.composition_anchor, c(5, 2)));
   }
+  {  // SEL-01：拖到上下边缘自动滚动时列仍按同一 x，右半算进选区
+    const char *t2 = "a中b"; auto *s2 = itmock_snapshot_from_utf8(t2, strlen(t2), 10, 5);
+    // 向下越界，x 在第 3 列右半 → 前向端点含第 3 列；左半 → 不含
+    auto h = selection_hit_autoscroll(m, 4 + 3 * 8 + 6, 1000, 10, 5, s2);
+    assert(h.autoscroll_dir == 1 && h.row == 4 && h.col == 3 && h.after && h.boundary == 4);
+    assert(drag_endpoint_col(h, true, 10) == 3);
+    h = selection_hit_autoscroll(m, 4 + 3 * 8 + 2, 1000, 10, 5, s2);
+    assert(!h.after && h.boundary == 3 && drag_endpoint_col(h, true, 10) == 2);
+    // 向上越界，x 在宽字符“中”（第 1–2 列）右半 → 后向端点从 b 开始（不含“中”）；左半 → 含“中”
+    h = selection_hit_autoscroll(m, 4 + 8 + 12, -10, 10, 5, s2);
+    assert(h.autoscroll_dir == -1 && h.row == 0 && h.col == 1 && h.after && h.boundary == 3);
+    assert(drag_endpoint_col(h, false, 10) == 3);
+    h = selection_hit_autoscroll(m, 4 + 8 + 2, -10, 10, 5, s2);
+    assert(!h.after && drag_endpoint_col(h, false, 10) == 1);
+    // 行尾外：前向含末列
+    h = selection_hit_autoscroll(m, 4 + 10 * 8 + 50, 1000, 10, 5, s2);
+    assert(h.boundary == 10 && drag_endpoint_col(h, true, 10) == 9);
+    // 网格内：宽字符右半前向取首格
+    h = selection_hit_autoscroll(m, 4 + 8 + 12, 4 + 2, 10, 5, s2);
+    assert(!h.autoscroll_dir && h.after && drag_endpoint_col(h, true, 10) == 1);
+    itcore_snapshot_release(s2);
+  }
   std::puts("selection_ime ok");
 }

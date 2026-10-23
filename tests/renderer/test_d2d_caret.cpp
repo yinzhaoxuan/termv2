@@ -40,9 +40,13 @@ int main() {
   itren::Preedit pe; pe.utf8 = "测"; pe.anchor_col = 3; pe.anchor_row = 1;
   r.set_preedit(pe);
   rc = r.caret_rect_px();
-  // ime_layout：候选窗锚点在预编辑光标处（"测" 宽 2 → 第 5 列）
-  assert(rc.x == m.cell_rect(5, 1, 1).x);
-  assert(rc.y == m.cell_rect(5, 1, 1).y);
+  // IME-01：候选窗锚点 = composition_anchor（组字起点第 3 列），不随“测”右移到第 5 列
+  assert(rc.x == m.cell_rect(3, 1, 1).x);
+  assert(rc.y == m.cell_rect(3, 1, 1).y);
+  pe.utf8 = "测试"; r.set_preedit(pe);
+  rc = r.caret_rect_px(); assert(rc.x == m.cell_rect(3, 1, 1).x);
+  // 预编辑宽度按 itcore_text_clusters（此处链接 mock）
+  auto pw = itren::preedit_widths(pe); assert(pw.size() == 2 && pw[0] == 2 && pw[1] == 2);
   itcore_snapshot_release(s);
   r.shutdown();
   std::puts("ok");

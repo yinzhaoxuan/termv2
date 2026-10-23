@@ -54,6 +54,30 @@ inline SelHit selection_hit(const GridMetrics &m, int px, int py, uint16_t cols,
   return h;
 }
 
+// 越过上/下边缘自动滚动时，列方向的命中仍按网格内同一 x 计算（y 夹到首/末行），保留 after/boundary
+inline SelHit selection_hit_autoscroll(const GridMetrics &m, int px, int py, uint16_t cols, uint16_t rows,
+                                       const itcore_snapshot *s = nullptr, int max_speed = 10) {
+  SelHit edge = selection_hit(m, px, py, cols, rows, s, max_speed);
+  if (!edge.autoscroll_dir) return edge;
+  int ch = std::max(1, m.cell_h_px()), top = m.pad_y_px();
+  int y = edge.autoscroll_dir < 0 ? top : top + (rows - 1) * ch;
+  SelHit h = selection_hit(m, px, y, cols, rows, s, max_speed);
+  h.row = edge.autoscroll_dir < 0 ? 0 : uint16_t(rows - 1);
+  h.autoscroll_dir = edge.autoscroll_dir; h.autoscroll_lines = edge.autoscroll_lines;
+  return h;
+}
+
+// boundary → itcore_selection_extend 的含端点列。forward：端点在按下点之后（选区向右/下延伸），
+// 右半命中（after）包含该格；backward：左半命中包含该格（boundary 即首个被选格）。
+inline uint16_t drag_endpoint_col(const SelHit &h, bool forward, uint16_t cols) {
+  if (!cols) return 0;
+  if (forward) {
+    if (h.after) return std::min<uint16_t>(h.col, uint16_t(cols - 1));          // 宽字符取首格
+    return uint16_t(h.boundary > 0 ? std::min<int>(h.boundary - 1, cols - 1) : 0);
+  }
+  return uint16_t(std::min<int>(h.boundary, cols - 1));
+}
+
 struct SelSpan { uint16_t row, c0, c1; };  // [c0,c1)
 
 // 先把每行重叠/相邻的段合并，再把上下相邻且列范围相同的行合并为一个矩形

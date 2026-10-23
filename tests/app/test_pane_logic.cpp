@@ -1,5 +1,8 @@
 // T08 PaneBackend 平台无关逻辑单测（PANE-01）
 #include "pane_logic.h"
+#include "frame_pump.h"
+#include <deque>
+#include <optional>
 #include "frame_policy.h"
 #include "itcore.h"
 #include <atomic>
@@ -330,6 +333,36 @@ static void syncfocus() {
             if (sg.allow(on(), t, itcore_sync_end_count(c))) ++frames;
         }
         CHECK(frames == batches && batches >= 60);
+        itcore_destroy(c);
+    }
+    {
+        // SYNC-02 端到端：与 Win32PaneBackend::pump()/present() 同一段 pump_core + frame_due，计数 present
+        itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 80, 24, 100, 1u << 20};
+        itcore_core *c = nullptr;
+        CHECK(itcore_create(&o, &c) == 0 && c);
+        struct Chunk { std::string bytes; };
+        std::deque<Chunk> q;
+        auto pop = [&]() -> std::optional<Chunk> { if (q.empty()) return std::nullopt; Chunk k = std::move(q.front()); q.pop_front(); return k; };
+        it2app::SyncGate gate(150);
+        int presents = 0, events = 0;
+        auto pumpOnce = [&](uint64_t now) {
+            auto r = it2app::pump_core(c, pop, [&] { ++events; });
+            if (r == it2app::PumpResult::Fed && it2app::frame_due(gate, c, now, false)) ++presents;
+        };
+        q.push_back({"\x1b[?2026h"}); pumpOnce(0);
+        int batches = 0; presents = 0;
+        for (uint64_t t = 16; t <= 1000; t += 16, ++batches) {
+            q.push_back({"\x1b[?2026lframe\r\n\x1b[?2026h"});
+            pumpOnce(t);
+        }
+        CHECK(presents == batches && batches >= 60 && events > 0);
+        // 对照：一直开着同步、无结束 → 只有 150ms 兜底帧
+        presents = 0;
+        for (uint64_t t = 2000; t < 3000; t += 16) { q.push_back({"x"}); pumpOnce(t); }
+        CHECK(presents >= 5 && presents <= 7);
+        // 无输出不出帧；改尺寸 force 总放行
+        CHECK(it2app::pump_core(c, pop, [] {}) == it2app::PumpResult::Idle);
+        CHECK(it2app::frame_due(gate, c, 3001, true));
         itcore_destroy(c);
     }
     it2app::FocusReporter f;

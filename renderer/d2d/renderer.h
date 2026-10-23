@@ -16,11 +16,14 @@ namespace itren {
 struct Preedit {
     std::string utf8;       // 本地预编辑，不进快照
     uint16_t anchor_col = 0, anchor_row = 0;
-    std::vector<uint8_t> widths;   // 每个 cluster 的列宽（1/2）；空则按码点粗估
+    std::vector<uint8_t> widths;   // 每个 cluster 的列宽（1/2）；空则按核心 itcore_text_clusters
     std::vector<uint8_t> attrs;    // ClauseAttr；可短于 widths
     size_t cursor = SIZE_MAX;      // 预编辑内光标（cluster 下标）；SIZE_MAX = 末尾
 };
 
+// 预编辑各簇列宽（Preedit::widths 为空时按核心 itcore_text_clusters）与簇的 UTF-8 切分
+std::vector<uint8_t> preedit_widths(const Preedit &p);
+std::vector<std::string> preedit_clusters(const std::string &utf8);
 // 预编辑几何（下划线 / 内部光标 / 候选窗锚点），平台无关
 ImeLayout preedit_layout(const GridMetrics &m, const Preedit &p, uint16_t cols, uint16_t rows);
 
@@ -54,7 +57,7 @@ public:
     // 脏行重绘 + Present；无变化返回 false（跳过 Present）
     bool present_frame();
 
-    // IME 候选窗 / TSF NotifyLayoutChanged
+    // IME 候选窗 / TSF NotifyLayoutChanged：有预编辑时为 composition_anchor（组字起点 / Target 子句），不随组字右移
     GridMetrics::Rect caret_rect_px() const;
 
     GridMetrics &metrics() { return metrics_; }
