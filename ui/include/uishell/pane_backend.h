@@ -25,7 +25,7 @@ struct PaneEvents {                       // called on the UI thread only
   std::function<void(const SessionStatus&)> onStatus;
   std::function<void()> onBell;           // visual, <=1/s
   std::function<void(std::string url)> onLinkActivated;  // UI runs uicfg::checkLink
-  std::function<void()> onRedrawRequested;
+  std::function<void(int offsetFromBottom, int historyLines)> onViewportChanged; // scrollbar
   std::function<void(size_t bytes, size_t limit)> onPasteRejected;
   std::function<void(bool hasSelection)> onSelectionChanged;
 };
@@ -42,6 +42,11 @@ public:
   virtual CaretRect caretRect() const = 0;                         // for IME candidate window
   virtual SessionStatus status() const = 0;
   // Selection is hit-tested and drawn by the backend (it owns the grid); UI owns the copy command.
+  // Mouse (wheel, click, double=word, triple=line, drag edge auto-scroll, mouse modes) is handled
+  // entirely by the backend in the pane child window; UI never forwards mouse messages.
+  // Keyboard/menu scroll commands from UI (Shift+PgUp etc.):
+  virtual void scrollViewport(int lines) = 0;   // negative = into history; clamps
+  virtual void scrollToBottom() = 0;            // also on user input
   virtual std::string selectedText() const = 0;     // empty if none
   virtual void clearSelection() = 0;
   // After UI confirmation. MUST NOT block the UI thread: start the T03A close order and return;
