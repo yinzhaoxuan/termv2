@@ -22,7 +22,11 @@ typedef struct { uint32_t abi_version, struct_size; uint16_t columns, rows;
 enum { ITCORE_CELL_CONTINUATION = 1u << 0, ITCORE_CELL_BOLD = 1u << 1, ITCORE_CELL_ITALIC = 1u << 2,
        ITCORE_CELL_UNDERLINE = 1u << 3, ITCORE_CELL_INVERSE = 1u << 4,
        /* 快照里选区内的格：同时已翻转 INVERSE，渲染器无需额外处理 */
-       ITCORE_CELL_SELECTED = 1u << 5 };
+       ITCORE_CELL_SELECTED = 1u << 5,
+       /* SGR 2/5(6)/8/9；22 同时清 BOLD 与 DIM，25/28/29 各自清除。渲染负责混色、闪烁相位、隐藏与删除线 */
+       ITCORE_CELL_DIM = 1u << 6, ITCORE_CELL_BLINK = 1u << 7,
+       ITCORE_CELL_HIDDEN = 1u << 8, ITCORE_CELL_STRIKE = 1u << 9 };
+#define ITCORE_HAS_SGR_EXT_FLAGS 1
 typedef struct { uint32_t grapheme_id; uint8_t width; uint8_t reserved; uint16_t flags;
                  uint32_t fg, bg, underline_color; uint32_t hyperlink_id; } itcore_cell;
 typedef enum { ITCORE_WRAP_HARD = 0, ITCORE_WRAP_SOFT = 1, ITCORE_WRAP_WIDE = 2 } itcore_wrap;
@@ -118,6 +122,10 @@ void itcore_snapshot_cursor(const itcore_snapshot *s, uint16_t *col, uint16_t *r
 uint64_t itcore_snapshot_generation(const itcore_snapshot *s);
 /* 当前鼠标模式位掩码（ITCORE_MOUSE_MODE_*）；0 表示本地选择 */
 uint32_t itcore_snapshot_mouse_mode(const itcore_snapshot *s);
+/* DECSCUSR Ps（0..6）：0/1 闪烁块，2 块，3 闪烁下划线，4 下划线，5 闪烁竖线，6 竖线；RIS 后为 0 */
+void itcore_snapshot_cursor_style(const itcore_snapshot *s, int *decscusr);
+/* DECSCNM（?5）：1 表示默认前景/背景对调（切换时核心推进所有行 revision，整屏重画） */
+int  itcore_snapshot_reverse_screen(const itcore_snapshot *s);
 void itcore_snapshot_release(itcore_snapshot *s);
 /* OSC 8：itcore_cell.hyperlink_id → URL 与 id 参数（字节串，非 NUL 结尾，生命周期同快照）。
    hyperlink_id 为 0 或无效返回 0，成功返回 1。快照增量引用字素池：任何线程可读，
@@ -128,7 +136,7 @@ int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t hyperlink_id,
    是两个独立编号空间，分别用两个函数查询；同一编号互不影响（如 DEC ?4 DECSCLM 与 ANSI 4 IRM）。
    为保持 C ABI 稳定，itcore_mode_query 的签名与语义（仅 DEC）不变，ANSI 另立新函数。 */
 typedef enum { ITCORE_MODE_NOT_RECOGNIZED = 0, ITCORE_MODE_SET = 1, ITCORE_MODE_RESET = 2 } itcore_mode_state;
-/* DEC 私有模式：至少覆盖 1 4 7 9 25 47 1000 1002 1003 1006 1047 1049 2004；core 为空返回 NOT_RECOGNIZED */
+/* DEC 私有模式：至少覆盖 1 4 5 7 9 25 47 1000 1002 1003 1006 1047 1049 1004 2004 2026；core 为空返回 NOT_RECOGNIZED */
 itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t dec_private_mode);
 /* ANSI 模式：覆盖 4（IRM）、20（LNM），其余 NOT_RECOGNIZED；core 为空返回 NOT_RECOGNIZED */
 itcore_mode_state itcore_ansi_mode_query(const itcore_core *c, uint32_t ansi_mode);

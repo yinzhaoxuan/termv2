@@ -288,6 +288,8 @@ void itcore_snapshot_cursor(const itcore_snapshot *s, uint16_t *col, uint16_t *r
 uint64_t itcore_snapshot_generation(const itcore_snapshot *s) { return s ? s->data.generation : 0; }
 uint32_t itcore_snapshot_mouse_mode(const itcore_snapshot *s) { return s ? s->data.mouse_mode : 0; }
 void itcore_snapshot_release(itcore_snapshot *s) { delete s; }
+void itcore_snapshot_cursor_style(const itcore_snapshot *s, int *ps) { if (ps) *ps = s ? s->data.cursor_style : 0; }
+int itcore_snapshot_reverse_screen(const itcore_snapshot *s) { return s && s->data.reverse_screen ? 1 : 0; }
 int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t hyperlink_id,
                               const char **url, size_t *url_len, const char **id, size_t *id_len) {
     if (!s || !hyperlink_id) return 0;

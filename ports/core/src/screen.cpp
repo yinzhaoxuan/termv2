@@ -533,6 +533,7 @@ std::string apply_csi_defaults(Token &t) {
 
     if (!no_inter) {
         if (inter == " " && f == 'q') { set_param_if_default(t, 0, 0); return "DECSCUSR"; }
+        if (inter == "!" && f == 'p') return "DECSTR";
         return "";
     }
 
@@ -568,6 +569,7 @@ std::string apply_csi_defaults(Token &t) {
         for (size_t i = 0; i < t.params.size(); ++i) set_param_if_default(t, i, 0);
         return "SGR";
     case 'g': set_param_if_default(t, 0, 0); return "TBC";
+    case 'Z': set_param_if_default(t, 0, 1); return "CBT";
     case 'h': return "SM";
     case 'l': return "RM";
     case 's': return "SCOSC";
@@ -586,6 +588,12 @@ Screen::Screen(uint16_t cols, uint16_t rows, uint32_t sb_lines, uint64_t mem_lim
     set_pool_budget(std::max<uint64_t>(1u << 20, (mem_limit ? mem_limit : (64ull << 20)) / 8));
     main_.reset(cols, rows);
     alt_.reset(cols, rows);
+    reset_tabs();
+}
+
+void Screen::reset_tabs() {
+    tabs_.assign(main_.cols(), false);
+    for (size_t x = 8; x < tabs_.size(); x += 8) tabs_[x] = true;
 }
 
 void Screen::evict_thunk(Row &&r, void *ctx) {
@@ -658,6 +666,9 @@ void Screen::resize(uint16_t cols, uint16_t rows) {
     // 主屏：把当前网格软/硬行卸到 scrollback 再重排回填（简化：仅改网格尺寸，scrollback 重排用于快照）
     main_.resize(cols, rows);
     alt_.resize(cols, rows);
+    size_t old = tabs_.size();
+    tabs_.resize(cols, false);
+    for (size_t x = old; x < tabs_.size(); ++x) tabs_[x] = x % 8 == 0 && x;
     bump();
 }
 
@@ -667,6 +678,19 @@ void Screen::write_utf8_text(const std::string &text) {
     while (i < n) {
         uint32_t cp; size_t adv;
         utf8_next(p + i, n - i, &cp, &adv);
+        // DEC 特殊图形（上游 VT100CharacterSet / charsetToUnicode）：0x5F..0x7E → 画线字符
+        if (charset_[gl_] == '0' && cp >= 0x5F && cp <= 0x7E) {
+            static const uint16_t kDec[] = {0x00A0, 0x25C6, 0x2592, 0x2409, 0x240C, 0x240D, 0x240A, 0x00B0, 0x00B1,
+                0x2424, 0x240B, 0x2518, 0x2510, 0x250C, 0x2514, 0x253C, 0x23BA, 0x23BB, 0x2500, 0x23BC, 0x23BD,
+                0x251C, 0x2524, 0x2534, 0x252C, 0x2502, 0x2264, 0x2265, 0x03C0, 0x2260, 0x00A3, 0x00B7};
+            uint32_t u = kDec[cp - 0x5F];
+            uint8_t b[3]; size_t bn;
+            if (u < 0x800) { b[0] = uint8_t(0xC0 | (u >> 6)); b[1] = uint8_t(0x80 | (u & 63)); bn = 2; }
+            else { b[0] = uint8_t(0xE0 | (u >> 12)); b[1] = uint8_t(0x80 | ((u >> 6) & 63)); b[2] = uint8_t(0x80 | (u & 63)); bn = 3; }
+            write_char(u, b, bn);
+            i += adv ? adv : 1;
+            continue;
+        }
         write_char(cp, p + i, adv);
         i += adv ? adv : 1;
     }
@@ -838,10 +862,59 @@ void Screen::backspace() {
 }
 void Screen::tab() {
     auto &g = grid();
-    int x = g.cursor().x;
-    int next = ((x / 8) + 1) * 8;
-    if (next >= g.cols()) next = g.cols() - 1;
-    g.cursor().x = next;
+    int x = std::min(g.cursor().x, g.cols() - 1) + 1;
+    while (x < g.cols() - 1 && !(size_t(x) < tabs_.size() && tabs_[x])) ++x;
+    g.cursor().x = std::min(x, g.cols() - 1);
+    g.set_wrap_pending(false);
+}
+void Screen::back_tab() {
+    auto &g = grid();
+    int x = std::min(g.cursor().x, g.cols() - 1) - 1;
+    while (x > 0 && !(size_t(x) < tabs_.size() && tabs_[x])) --x;
+    g.cursor().x = std::max(x, 0);
+    g.set_wrap_pending(false);
+}
+void Screen::save_cursor() {
+    auto &s = modes_.alt ? saved_alt_ : saved_main_;
+    s.cur = grid().cursor(); s.fg = pen_.fg; s.bg = pen_.bg; s.flags = pen_.flags;
+    s.g[0] = charset_[0]; s.g[1] = charset_[1]; s.gl = gl_; s.valid = true;
+}
+void Screen::restore_cursor() {
+    auto &s = modes_.alt ? saved_alt_ : saved_main_;
+    if (!s.valid) { grid().cursor() = {0, 0}; pen_ = Pen{}; charset_[0] = charset_[1] = 'B'; gl_ = 0; return; }
+    grid().cursor() = s.cur; pen_.fg = s.fg; pen_.bg = s.bg; pen_.flags = s.flags;
+    charset_[0] = s.g[0]; charset_[1] = s.g[1]; gl_ = s.gl;
+    grid().set_wrap_pending(false);
+    grid().clamp_cursor(false);
+}
+// 上游 VT100Terminal softReset 子集（xterm DECSTR）：不清屏、不动光标位置
+void Screen::soft_reset() {
+    modes_.cursor_visible = true;
+    modes_.insert = false;
+    modes_.app_cursor = false;
+    modes_.app_keypad = false;
+    modes_.wrap = true;
+    grid().set_origin(false);
+    grid().set_scroll(0, grid().rows() - 1);
+    pen_ = Pen{};
+    charset_[0] = charset_[1] = 'B'; gl_ = 0;
+    auto &s = modes_.alt ? saved_alt_ : saved_main_;
+    s = SavedCursor{};
+    grid().set_wrap_pending(false);
+}
+// DECALN：整屏填 E，复位滚动区，光标回原点（上游 screenFillWithE / vttest）
+void Screen::decaln() {
+    auto &g = grid();
+    g.set_origin(false);
+    g.set_scroll(0, g.rows() - 1);
+    Cell e = Cell::blank(); e.grapheme_id = pool_.intern("E");
+    for (int y = 0; y < g.rows(); ++y) {
+        for (auto &c : g.row(y).cells) c = e;
+        g.row(y).wrap = ITCORE_WRAP_HARD;
+        g.row(y).revision = g.next_rev();
+    }
+    g.cursor() = {0, 0};
+    g.set_wrap_pending(false);
 }
 void Screen::index() {
     auto &g = grid();
@@ -873,7 +946,14 @@ void Screen::do_sgr(const Token &t) {
         case 3: pen_.flags |= ITCORE_CELL_ITALIC; break;
         case 4: pen_.flags |= ITCORE_CELL_UNDERLINE; break;
         case 7: pen_.flags |= ITCORE_CELL_INVERSE; break;
-        case 22: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_BOLD); break;
+        case 2: pen_.flags |= ITCORE_CELL_DIM; break;
+        case 5: case 6: pen_.flags |= ITCORE_CELL_BLINK; break;   // 6 快闪按 5 处理（上游同）
+        case 8: pen_.flags |= ITCORE_CELL_HIDDEN; break;
+        case 9: pen_.flags |= ITCORE_CELL_STRIKE; break;
+        case 25: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_BLINK); break;
+        case 28: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_HIDDEN); break;
+        case 29: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_STRIKE); break;
+        case 22: pen_.flags = static_cast<uint16_t>(pen_.flags & ~(ITCORE_CELL_BOLD | ITCORE_CELL_DIM)); break;
         case 23: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_ITALIC); break;
         case 24: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_UNDERLINE); break;
         case 27: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_INVERSE); break;
@@ -937,20 +1017,14 @@ void Screen::set_mode(const Token &t, bool set) {
             case 47: if (set) enter_alt(false); else leave_alt(false); break;
             case 1047: if (set) enter_alt(true); else leave_alt(true); break;
             case 1049: if (set) enter_alt(true); else leave_alt(true); break;
-            case 1048: // 仅保存/恢复光标
-                if (set) {
-                    auto &s = modes_.alt ? saved_alt_ : saved_main_;
-                    s.cur = grid().cursor(); s.fg = pen_.fg; s.bg = pen_.bg; s.flags = pen_.flags; s.valid = true;
-                } else {
-                    auto &s = modes_.alt ? saved_alt_ : saved_main_;
-                    if (s.valid) {
-                        grid().cursor() = s.cur; pen_.fg = s.fg; pen_.bg = s.bg; pen_.flags = s.flags;
-                        grid().clamp_cursor(false);
-                    }
-                }
-                break;
+            case 1048: if (set) save_cursor(); else restore_cursor(); break;  // 与 DECSC/DECRC 同语义（含字符集）
             case 4: modes_.smooth_scroll = set; break;  // DECSCLM，与 ANSI 4（IRM）互不相干
             case 2004: modes_.bracketed_paste = set; break;
+            case 5:  // DECSCNM：默认前景/背景对调，需整屏重画
+                if (modes_.reverse_screen != set) { modes_.reverse_screen = set; touch_all(); }
+                break;
+            case 1004: modes_.focus_events = set; break;
+            case 2026: modes_.sync_output = set; break;
             case 1: modes_.app_cursor = set; break;  // DECCKM
             case 9:
                 if (set) modes_.mouse_mode = (modes_.mouse_mode & ~(ITCORE_MOUSE_MODE_NORMAL|ITCORE_MOUSE_MODE_BUTTON|ITCORE_MOUSE_MODE_ANY)) | ITCORE_MOUSE_MODE_X10;
@@ -1027,6 +1101,8 @@ void Screen::full_reset() {
     main_.reset(cols, rows);
     alt_.reset(cols, rows);
     link_id_ = 0;
+    charset_[0] = charset_[1] = 'B'; gl_ = 0;
+    reset_tabs();
     has_last_ = false;
     last_printed_ = Cell::blank();
     last_x_ = last_y_ = -1;
@@ -1075,24 +1151,25 @@ void Screen::apply_one(const Token &t, std::string *reply) {
         case 0x09: tab(); break;
         case 0x0A: case 0x0B: case 0x0C: linefeed(true); if (modes_.lnm) grid().cursor().x = 0; break;
         case 0x0D: carriage_return(); break;
+        case 0x0E: gl_ = 1; break;  // SO → G1
+        case 0x0F: gl_ = 0; break;  // SI → G0
         default: break;
         }
         break;
     case TokenType::Esc:
         if (t.inter.empty()) {
-            if (t.final == '7') {  // DECSC
-                auto &s = modes_.alt ? saved_alt_ : saved_main_;
-                s.cur = grid().cursor(); s.fg = pen_.fg; s.bg = pen_.bg; s.flags = pen_.flags; s.valid = true;
-            } else if (t.final == '8') {  // DECRC
-                auto &s = modes_.alt ? saved_alt_ : saved_main_;
-                if (s.valid) {
-                    grid().cursor() = s.cur; pen_.fg = s.fg; pen_.bg = s.bg; pen_.flags = s.flags;
-                    grid().clamp_cursor(false);
-                }
-            } else if (t.final == 'D') index();
+            if (t.final == '7') save_cursor();          // DECSC
+            else if (t.final == '8') restore_cursor();  // DECRC
+            else if (t.final == 'H') { int x = std::min(grid().cursor().x, grid().cols() - 1); if (size_t(x) < tabs_.size()) tabs_[x] = true; }  // HTS
+            else if (t.final == 'D') index();
             else if (t.final == 'M') reverse_index();
             else if (t.final == 'E') { carriage_return(); linefeed(true); }
             else if (t.final == 'c') full_reset();  // RIS
+        } else if (t.inter == "#" && t.final == '8') {
+            decaln();
+        } else if ((t.inter == "(" || t.inter == ")") && t.final) {
+            // SCS：只区分 DEC 特殊图形 '0'，其余（B/A/U/K…）按 ASCII
+            charset_[t.inter == "(" ? 0 : 1] = t.final == '0' ? '0' : 'B';
         }
         break;
     case TokenType::Csi: {
@@ -1100,7 +1177,25 @@ void Screen::apply_one(const Token &t, std::string *reply) {
         std::string cmd = apply_csi_defaults(t2);
         auto &g = grid();
         Cell blank = Cell::blank();
-        if (cmd == "CUU") { g.cursor().y -= param_or(t2, 0, 1); g.set_wrap_pending(false); g.clamp_cursor(false); }
+        if (cmd == "CHT") { for (int i = param_or(t2, 0, 1); i > 0 && g.cursor().x < g.cols() - 1; --i) tab(); }
+        else if (cmd == "CBT") { for (int i = param_or(t2, 0, 1); i > 0 && g.cursor().x > 0; --i) back_tab(); }
+        else if (cmd == "TBC") {
+            int m = param_or(t2, 0, 0);
+            if (m == 0) { int x = std::min(g.cursor().x, g.cols() - 1); if (size_t(x) < tabs_.size()) tabs_[x] = false; }
+            else if (m == 3) std::fill(tabs_.begin(), tabs_.end(), false);
+        }
+        else if (cmd == "DECSTR") soft_reset();
+        else if (cmd == "DECSCUSR") { int p = param_or(t2, 0, 0); if (p >= 0 && p <= 6) modes_.cursor_style = p; }
+        else if (cmd == "DECDSR" && reply) {
+            // 上游 executeDecDeviceStatusReport 子集
+            int p = param_or(t2, 0, 0);
+            if (p == 6) *reply += "\x1b[?" + std::to_string(g.cursor().y + 1) + ";" + std::to_string(std::min(g.cursor().x + 1, (int)g.cols())) + "R";
+            else if (p == 15) *reply += "\x1b[?13n";        // 无打印机
+            else if (p == 25) *reply += "\x1b[?20n";        // UDK 未锁
+            else if (p == 26) *reply += "\x1b[?27;1;0;0n";  // 北美键盘
+            else if (p == 53 || p == 55) *reply += "\x1b[?53n";  // 无定位器
+        }
+        else if (cmd == "CUU") { g.cursor().y -= param_or(t2, 0, 1); g.set_wrap_pending(false); g.clamp_cursor(false); }
         else if (cmd == "CUD" || cmd == "VPR") { g.cursor().y += param_or(t2, 0, 1); g.set_wrap_pending(false); g.clamp_cursor(false); }
         else if (cmd == "CUF" || cmd == "HPR") { g.cursor().x += param_or(t2, 0, 1); g.set_wrap_pending(false); g.clamp_cursor(false); }
         else if (cmd == "CUB") { g.cursor().x -= param_or(t2, 0, 1); g.set_wrap_pending(false); g.clamp_cursor(false); }
@@ -1194,6 +1289,8 @@ Screen::SnapshotData Screen::take_snapshot(int32_t first_row, uint16_t row_count
     sn.cursor_row = cin ? int(crow) : 0;
     sn.cursor_visible = modes_.cursor_visible && cin;
     sn.mouse_mode = modes_.mouse_mode;
+    sn.reverse_screen = modes_.reverse_screen;
+    sn.cursor_style = modes_.cursor_style;
     sn.pool = pool_.ref();  // 增量引用：O(1)，不拷贝
     sn.epoch = sn.pool.epoch;
 
@@ -1265,6 +1362,9 @@ int Screen::dec_mode_state(int mode) const {
     case 1003: return st(mm & ITCORE_MOUSE_MODE_ANY);
     case 1006: return st(mm & ITCORE_MOUSE_MODE_SGR);
     case 2004: return st(modes_.bracketed_paste);
+    case 5: return st(modes_.reverse_screen);
+    case 1004: return st(modes_.focus_events);
+    case 2026: return st(modes_.sync_output);
     default: return 0;
     }
 }

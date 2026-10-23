@@ -97,6 +97,14 @@
 - 后端：`PaneBackendConfig::resolveHyperV`，失败文本为 `<类别>: <说明>` 写进 errorText；连接后标题为 “Hyper-V <地址>” 或 “手动地址 <地址>”。
 - 测试 HV-01.resolve_policy。实机（VM-01）未跑。
 
+### P0 序列（第 1 批：屏幕本地 + 快照 ABI）
+- SCS `ESC ( / ESC )` + SO/SI，DEC 特殊图形映射；DECSC/DECRC/?1048 一并保存字符集（CORE-14）。
+- 制表位：HTS、TBC 0/3、CHT `CSI I`、CBT `CSI Z`，resize 扩展默认每 8 列，RIS 复位（CORE-15）。
+- SGR 2/5/6/8/9 与 22/25/28/29：`ITCORE_CELL_DIM/BLINK/HIDDEN/STRIKE` 占 bit 6–9，与既有 bit 0–5（含 SELECTED=5）无冲突，沿用渲染临时位；`#define ITCORE_HAS_SGR_EXT_FLAGS`（CORE-16）。
+- ?5 DECSCNM：`itcore_mode_query(5)` 可查，切换推进全部行 revision，`itcore_snapshot_reverse_screen`；DECSCUSR Ps 0–6 → `itcore_snapshot_cursor_style`；?1004 / ?2026 可置位可查（CORE-17）。
+- DECALN `ESC # 8`、DECSTR `CSI ! p`、DEC 私有 DSR `CSI ? 6/15/25/26/53/55 n`（原先解析后不执行）（CORE-18）。
+- 待办：DA2、CSI t（18/14/16/22/23）、OSC 1、OSC 10/11/12/4/104 配置色；后端焦点事件、?2026 暂停快照、D2D 接 cursor_geometry / cell_style。
+
 ### 接口问题（未改头文件，待 UI 定夺）
 8. T09：UI 无“启动并连接”按钮、多地址选择器、“正在解析/等待 VM 地址”状态；目前分别以 Failed 文本（VmNotRunning / AddressAmbiguous 含候选列表）和 Starting 状态表达。
 1. “UI 翻译按键”与子窗焦点冲突：子窗把 WM_KEY*/WM_CHAR SendMessage 给父窗，IME 留在子窗处理。

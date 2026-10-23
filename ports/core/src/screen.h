@@ -117,6 +117,8 @@ struct SavedCursor {
     Cursor cur;
     uint32_t fg = 0, bg = 0;
     uint16_t flags = 0;
+    char g[2] = {'B', 'B'};  // G0/G1 字符集（DECSC 一并保存，同上游）
+    int gl = 0;
     bool valid = false;
 };
 
@@ -223,6 +225,10 @@ struct ScreenModes {
     bool app_cursor = false;   // DECCKM (?1)
     bool app_keypad = false;   // DECKPAM / DECKPNM
     uint32_t mouse_mode = 0;   // ITCORE_MOUSE_MODE_* 位掩码
+    bool reverse_screen = false;  // DECSCNM (?5)
+    bool focus_events = false;    // ?1004
+    bool sync_output = false;     // ?2026（后端据此暂停取快照）
+    int cursor_style = 0;         // DECSCUSR Ps（0..6）
 };
 
 // CSI 默认参数（上游 SetCSITypeAndDefaultParameters 子集）；就地填充 omitted→default。
@@ -264,6 +270,8 @@ public:
         uint16_t cols = 0, rows = 0;
         int cursor_col = 0, cursor_row = 0;
         bool cursor_visible = true;
+        bool reverse_screen = false;
+        int cursor_style = 0;
         std::vector<Row> rows_data;  // 长度 = requested row_count（裁剪后）
         uint64_t epoch = 0;          // 字素池 epoch（clear/压缩时递增）
         PoolRef pool;                // 增量引用字素池（不拷贝），见 GraphemePool
@@ -291,6 +299,13 @@ private:
     void carriage_return();
     void backspace();
     void tab();
+    void back_tab();
+    void reset_tabs();
+    void soft_reset();   // DECSTR
+    void decaln();       // DECALN
+    void save_cursor();
+    void restore_cursor();
+    void touch_all() { main_.touch_all_rows(); alt_.touch_all_rows(); }
     void index();     // IND
     void reverse_index();  // RI
     void set_mode(const Token &t, bool set);
@@ -327,6 +342,9 @@ private:
     int last_cluster_cps_ = 0;
     int last_x_ = -1, last_y_ = -1;
     uint32_t link_id_ = 0;
+    std::vector<bool> tabs_;     // 制表位（HTS/TBC），列数变化时补默认每 8 列
+    char charset_[2] = {'B', 'B'};  // G0/G1：'0' DEC 特殊图形，其余按 ASCII
+    int gl_ = 0;                    // SO=1 / SI=0
     bool join_cluster(uint32_t cp, const uint8_t *utf8, size_t utf8_len);
     // 选区
     struct Selection { bool active = false, alt = false; int unit = 0; SelPos anchor, head; };
