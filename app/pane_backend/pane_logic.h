@@ -132,7 +132,11 @@ public:
     enum class Next { None, Timer, Post };
     // pump 结束：还有积压（more）→ 继续持有，调用方设续跑定时器；否则释放，期间有新数据则 Post（调用方自己投递）
     Next end(bool more) { return more ? Next::Timer : release(); }
-    Next timerFailed() { return release(); }   // SetTimer 失败：退回投递
+    // SetTimer 失败：明知还有积压，释放后固定补投一次（不等 tick）
+    Next timerFailed() {
+        owned_.store(false); missed_.store(false);
+        return pending_.exchange(true) ? Next::None : Next::Post;   // 已有投递在路上则合并
+    }
     Next release() {
         owned_.store(false);
         if (missed_.exchange(false) && !pending_.exchange(true)) return Next::Post;

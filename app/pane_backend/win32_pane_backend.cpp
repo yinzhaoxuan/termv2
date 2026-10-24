@@ -548,7 +548,13 @@ void Win32PaneBackend::pump(bool drainAll) {
     it2app::PumpBudget budget = drainAll ? it2app::PumpBudget::unlimited() : it2app::PumpBudget{};
     if (!drainAll) budget.nowMs = budgetNowMs;
     auto r = it2app::pump_core(core_, [&] { return transport_->pop(); }, [&] { drainCoreEvents(); }, budget, &carry_);
-    if (r == it2app::PumpResult::Fatal) { sched.release(); transport_->close(CloseReason::Fault); return; }
+    if (r == it2app::PumpResult::Fatal) {
+        // 核心已 fatal：之后（含 finishSession）不得再 feed，否则误报第二次 Fault
+        inputFinished_ = true; carry_.clear(); sched.reset();
+        if (HWND h = hwnd_) KillTimer(h, kPumpContTimer);
+        transport_->close(CloseReason::Fault);
+        return;
+    }
     using Next = it2app::PumpScheduler::Next;
     Next next = sched.end(it2app::nextAfterPump(r) == it2app::PumpNext::Timer);
     if (next == Next::Timer) {
@@ -556,6 +562,7 @@ void Win32PaneBackend::pump(bool drainAll) {
         if (HWND h = hwnd_; !h || !SetTimer(h, kPumpContTimer, 1, nullptr)) next = sched.timerFailed();
     }
     if (next == Next::Post) postPump();
+    if (next != Next::Timer) if (HWND h = hwnd_) KillTimer(h, kPumpContTimer);  // tick 那次已取空：撤掉挂着的续跑，免一次空 pump
     if (r == it2app::PumpResult::Fed || r == it2app::PumpResult::FedMore) {
         syncSelection();       // 输出可能清掉选区（切备用屏 / RIS / ED 3）
         syncViewport();        // 已上翻时偏移随历史增长，视图停在原处

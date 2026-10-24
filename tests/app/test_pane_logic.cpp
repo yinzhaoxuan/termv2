@@ -549,8 +549,13 @@ static void pump_budget() {
         sc.begin();
         CHECK(sc.end(true) == Next::Timer);
         CHECK(!sc.postedShouldRun());
-        CHECK(sc.timerFailed() == Next::Post || !sc.owned());  // SetTimer 失败：释放并退回投递
+        CHECK(sc.timerFailed() == Next::Post);     // SetTimer 失败：释放并固定补投（missed 为假也投）
         CHECK(!sc.owned());
+        CHECK(sc.postedShouldRun());
+        CHECK(sc.readerShouldPost());              // 一条投递在路上（pending），UI 线程因 tick 进入 pump
+        sc.begin(); CHECK(sc.end(true) == Next::Timer);
+        CHECK(sc.timerFailed() == Next::None);     // SetTimer 失败：已有投递在路上，合并不重复投
+        CHECK(sc.postedShouldRun());               // 那条投递随后执行
         sc.reset();
         CHECK(sc.readerShouldPost());
     }

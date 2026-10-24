@@ -6,7 +6,9 @@
 #include <cstddef>
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <string>
+#include <type_traits>
 
 namespace it2app {
 
@@ -54,7 +56,8 @@ PumpResult pump_core(itcore_core *core, PopFn &&pop, AfterFeed &&afterFeed, cons
             cur.clear();
             auto chunk = pop();
             if (!chunk) { afterFeed(); return any ? PumpResult::Fed : PumpResult::Idle; }
-            cur.bytes.assign(chunk->bytes.begin(), chunk->bytes.end());
+            if constexpr (std::is_same_v<std::decay_t<decltype(chunk->bytes)>, std::string>) cur.bytes = std::move(chunk->bytes);
+            else cur.bytes.assign(chunk->bytes.begin(), chunk->bytes.end());
             if (cur.bytes.empty()) continue;
         }
         any = true;
@@ -67,6 +70,11 @@ PumpResult pump_core(itcore_core *core, PopFn &&pop, AfterFeed &&afterFeed, cons
             fr = itcore_feed(core, p, n);
             afterFeed();
             if (fr.status == ITCORE_FATAL) return PumpResult::Fatal;
+            // 排空后仍收不下：不丢这一片，留在 carry 里交给下一次 pump（无 carry 时只能跳过，记诊断）
+            if (fr.accepted == 0) {
+                if (carry) return PumpResult::FedMore;
+                std::fprintf(stderr, "[pump] core refused %zu bytes after drain, skipped\n", n);
+            }
         }
         const size_t adv = fr.accepted ? fr.accepted : n;
         cur.off += adv;
