@@ -1,6 +1,7 @@
 // T08 PaneBackend 平台无关逻辑单测（PANE-01）
 #include "pane_logic.h"
 #include "frame_pump.h"
+#include "pane_search.h"
 #include "grid_metrics.h"
 #include <deque>
 #include <optional>
@@ -627,6 +628,95 @@ static void local_command() {
     CHECK(!planLocalShellCommand(L"cmd.exe", std::wstring(L"a\0b", 3)));
 }
 
+
+// PANE-10：搜索驱动（findInScrollback / clearSearch 的平台无关部分）
+static itcore_core *search_core(uint16_t cols, uint16_t rows, uint32_t sb) {
+    itcore_options o{ITCORE_ABI_VERSION, sizeof(o), cols, rows, sb, 64ull << 20};
+    itcore_core *c = nullptr;
+    CHECK(itcore_create(&o, &c) == 0 && c);
+    return c;
+}
+static void search_feed(itcore_core *c, const std::string &s) {
+    itcore_feed(c, reinterpret_cast<const uint8_t *>(s.data()), s.size());
+    while (itcore_event *e = itcore_next_event(c)) itcore_event_release(e);
+}
+static void search_driver() {
+    {   // 基本：分批计数（total=-1 → 终值）、next / prev、视口坐标、ranges
+        itcore_core *c = search_core(40, 10, 100000);
+        std::string s;
+        for (int i = 0; i < 20000; ++i) s += "line " + std::to_string(i) + (i % 100 == 0 ? " needle\r\n" : "\r\n");
+        search_feed(c, s);
+        PaneSearch ps;
+        PaneSearch::Options o;
+        auto r = ps.find(c, "needle", o, true);  // 向上（prev）：最近的一条
+        CHECK(ps.active());
+        CHECK(r.found || r.pending);
+        int guard = 0;
+        while (ps.busy() && guard++ < 100000) if (auto u = ps.tick(64 * 1024, 0)) r = *u;
+        CHECK(!ps.busy());
+        CHECK(r.found && r.total == 200 && r.index == 199);
+        CHECK(r.hasView && r.viewRow < 0 && r.viewCol == 11);  // "line 19900 needle"
+        auto v = ps.ranges(r.viewRow, 1);
+        CHECK(v.size() == 1 && v[0].start_col == 11 && v[0].end_col == 17 && v[0].is_current == 1);
+        r = ps.find(c, "needle", o, true);
+        CHECK(r.found && r.index == 198 && r.viewRow < 0);
+        r = ps.find(c, "needle", o, false);
+        CHECK(r.found && r.index == 199);
+        CHECK(!ps.tick(1024, 0));  // 无变化不通知
+        // 大小写：SENSITIVE 搜 Needle → 0；换选项即新一轮
+        o.caseMode = ITCORE_SEARCH_CASE_SENSITIVE;
+        r = ps.find(c, "Needle", o, true);
+        while (ps.busy()) if (auto u = ps.tick(1u << 20, 0)) r = *u;
+        CHECK(!r.found && r.total == 0);
+        // regex：v0.1 不支持 → found=false、不退回子串；空 needle 同样
+        o.regex = true;
+        r = ps.find(c, "needle", o, true);
+        CHECK(!r.found && !ps.active());
+        o.regex = false;
+        CHECK(!ps.find(c, "", o, true).found && !ps.active());
+        ps.end();
+        itcore_destroy(c);
+    }
+    {   // 失效：resize → restarted（只报一次），句柄已释放；UI 用同一 needle 重搜
+        itcore_core *c = search_core(20, 5, 100);
+        search_feed(c, "foo\r\nbar foo\r\n");
+        PaneSearch ps;
+        auto r = ps.find(c, "foo", {}, false);
+        CHECK(r.found && r.total == 2 && r.index == 0);
+        itcore_resize(c, 30, 6, 2);
+        auto u = ps.tick(1024, 0);
+        CHECK(u && u->restarted && !ps.active());
+        CHECK(!ps.tick(1024, 0));
+        r = ps.find(c, "foo", {}, false);
+        CHECK(r.found && r.total == 2 && !r.restarted);
+        // 新输出：PF_NEW_CONTENT → hasNewOutput，total 不变
+        search_feed(c, "foo again\r\n");
+        u = ps.tick(1024, 0);
+        CHECK(u && u->hasNewOutput && u->total == 2);
+        // 当前结果被改写：found 变 false
+        search_feed(c, "\x1b[1;1Hxxx");
+        u = ps.tick(1024, 0);
+        CHECK(u && !u->found && u->total == 1);
+        ps.end();
+        CHECK(!ps.active() && !ps.busy());
+        itcore_destroy(c);
+    }
+    {   // PENDING：预算极小、方向反着走，tick 落定后 moved=true
+        itcore_core *c = search_core(40, 10, 100000);
+        std::string s;
+        for (int i = 0; i < 5000; ++i) s += i == 10 ? "target\r\n" : "filler filler filler\r\n";
+        search_feed(c, s);
+        PaneSearch ps;
+        auto r = ps.find(c, "target", {}, true);   // 从底部向上，target 在很早的历史里
+        bool moved = r.found;
+        int guard = 0;
+        while (ps.busy() && guard++ < 100000) if (auto u = ps.tick(256, 0)) { r = *u; moved = moved || u->moved; }
+        CHECK(r.found && r.total == 1 && moved && r.hasView);
+        ps.end();
+        itcore_destroy(c);
+    }
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "churn") churn();
@@ -637,7 +727,8 @@ int main(int argc, char **argv) {
     else if (w == "wordchars") wordchars();
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); } }
+    else if (w == "search") search_driver();
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

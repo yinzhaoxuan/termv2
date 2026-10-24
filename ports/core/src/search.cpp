@@ -210,7 +210,7 @@ int Searcher::create(Screen &s, const char *needle, size_t len, const itcore_sea
     h->max_id_ = mx;
     {
         const Grid &g = s.grid();
-        for (int y = s.grid().cursor().y + 1; y < g.rows(); ++y) {
+        for (int y = s.grid().cursor().y; y < g.rows(); ++y) {
             bool blank = true;
             for (const Cell &c : g.row(y).cells) if (c.grapheme_id) { blank = false; break; }
             if (blank) h->excluded_.insert(g.row(y).id);

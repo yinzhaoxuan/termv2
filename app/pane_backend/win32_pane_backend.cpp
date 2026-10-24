@@ -13,6 +13,7 @@
 #include "grid_metrics.h"
 #include "selection_hit.h"
 #include "frame_pump.h"
+#include "pane_search.h"
 #include "itcore.h"
 #include <algorithm>
 #include <climits>
@@ -33,6 +34,9 @@ namespace {
 constexpr UINT WM_PANE_WAKE = WM_APP + 0x41;
 constexpr UINT_PTR kTickTimer = 1;
 constexpr UINT_PTR kPumpContTimer = 2;  // 一次性：pump 预算用尽后续跑
+constexpr UINT_PTR kSearchTimer = 3;    // 搜索分批计数 / PENDING 落定：busy 期间每 kSearchMs 续跑一次
+constexpr UINT kSearchMs = 10;
+constexpr uint32_t kSearchBudgetCells = 256 * 1024, kSearchBudgetUs = 4000;  // 每次 step：UI 线程最多约 4ms
 constexpr UINT kTickMs = 50;
 constexpr wchar_t kPaneClass[] = L"it2w_pane_backend";
 
@@ -138,6 +142,8 @@ public:
     void scrollToBottom() override;
     void setFont(std::string_view family, float sizePt) override;
     uishell::CellSize cellSize() const override;
+    uishell::SearchResult findInScrollback(std::string_view needleUtf8, const uishell::SearchOptions &opt, bool backward) override;
+    void clearSearch() override;
 
 private:
     void applyFont(FontSpec f);         // UI 线程：重建字体 → GridMetrics → 像素尺寸 → 网格 → generation
@@ -170,6 +176,10 @@ private:
     void handleWheel(WPARAM wp, LPARAM lp);
     void autoScrollTick();
     void endDragOnCaptureLoss();
+    void searchTick();                  // UI 线程：按预算 step，状态变化 → onSearchUpdated
+    void armSearchTimer();
+    void revealSearchRow(int32_t viewRow);  // 当前结果不在视口内时滚动，使其位于视口中部
+    void endSearch(bool notifyRestarted);   // itcore_destroy 之前调用（句柄归核心所有）
     bool altScreen() const { return core_ && itcore_mode_query(core_, 1049) == ITCORE_MODE_SET; }
 
     std::string connId_;
@@ -204,6 +214,7 @@ private:
     RateLimiter bell_{1000};
     TitleThrottle title_{100};
     Viewport vp_;
+    PaneSearch search_;                 // 滚动历史搜索（草案 itcore_search v0.2）；高亮层待渲染接入 ranges()
     bool vpNotified_ = false;
     ClickCounter clicks_;
     int clickUnit_ = 0;                 // 0 字符 / 1 词 / 2 行（双击 / 三击后拖动按单位扩展）
@@ -524,6 +535,9 @@ void Win32PaneBackend::drainCoreEvents() {
                 if (b) itcore_buffer_release(b);
             }
             break;
+        case ITCORE_EV_SEARCH_INVALIDATED:  // resize / 主备屏切换 / ED3 / RIS：下一次 step 得到 RESTARTED
+            armSearchTimer();
+            break;
         default: break;
         }
         itcore_event_release(e);
@@ -753,6 +767,7 @@ void Win32PaneBackend::reconnect() {
     transport_.reset();
     if (!closer_.started()) shared_->transport.reset();
     releaseSnap();
+    endSearch(true);  // 新 attempt 是新核心：旧搜索失效，UI 用同一 needle 重搜
     if (core_) { itcore_destroy(core_); core_ = nullptr; }
 
     shared_ = std::make_shared<SessionShared>();
@@ -761,6 +776,7 @@ void Win32PaneBackend::reconnect() {
     closeOutcome_.reset(); sshExit_.reset(); hvResult_.reset(); localExit_.reset();
     closing_ = finished_ = false;
     KillTimer(h, kPumpContTimer);   // 旧 attempt 的续跑定时器；新的 shared_ 自带全新的 PumpScheduler
+    KillTimer(h, kSearchTimer);
     carry_.clear();
     inputFinished_ = false;
     selActive_ = dragSelStarted_ = false;
@@ -841,6 +857,81 @@ void Win32PaneBackend::scrollViewport(int lines) {
 
 void Win32PaneBackend::scrollToBottom() {
     if (!core_ || !vp_.toBottom()) return;
+    present();
+    syncViewport(true);
+}
+
+namespace {
+uishell::SearchResult toUiSearch(const PaneSearch::State &s) {
+    uishell::SearchResult r;
+    r.found = s.found;
+    r.index = s.index;
+    r.total = s.total;
+    r.hasNewOutput = s.hasNewOutput;
+    r.restarted = s.restarted;
+    r.pending = s.pending;
+    return r;
+}
+}  // namespace
+
+uishell::SearchResult Win32PaneBackend::findInScrollback(std::string_view needleUtf8, const uishell::SearchOptions &opt, bool backward) {
+    if (!core_) return {};
+    PaneSearch::Options o;
+    o.caseMode = opt.caseMode == uishell::SearchCase::Sensitive ? uint8_t(ITCORE_SEARCH_CASE_SENSITIVE)
+               : opt.caseMode == uishell::SearchCase::Insensitive ? uint8_t(ITCORE_SEARCH_CASE_INSENSITIVE)
+                                                                  : uint8_t(ITCORE_SEARCH_CASE_SMART);
+    o.regex = opt.regex;  // v0.1：true → found=false（PaneSearch 不退回子串搜索）
+    o.wrap = opt.wrapAround;
+    const PaneSearch::State s = search_.find(core_, needleUtf8, o, backward);
+    if (s.found && s.hasView) revealSearchRow(s.viewRow);
+    armSearchTimer();
+    return toUiSearch(s);
+}
+
+void Win32PaneBackend::clearSearch() {
+    search_.end();
+    if (HWND h = hwnd_) KillTimer(h, kSearchTimer);
+    present();  // 高亮层接入后在此清层；视口不动
+}
+
+void Win32PaneBackend::endSearch(bool notifyRestarted) {
+    if (HWND h = hwnd_) KillTimer(h, kSearchTimer);
+    if (!search_.active()) return;
+    search_.end();
+    if (notifyRestarted && ev_.onSearchUpdated) {
+        uishell::SearchResult r;
+        r.restarted = true;
+        ev_.onSearchUpdated(r);
+    }
+}
+
+void Win32PaneBackend::armSearchTimer() {
+    if (!search_.busy() && !search_.active()) return;
+    if (HWND h = hwnd_) SetTimer(h, kSearchTimer, kSearchMs, nullptr);
+}
+
+void Win32PaneBackend::searchTick() {
+    if (!core_ || !search_.active()) {
+        if (HWND h = hwnd_) KillTimer(h, kSearchTimer);
+        return;
+    }
+    if (auto u = search_.tick(kSearchBudgetCells, kSearchBudgetUs)) {
+        if (u->moved && u->hasView) revealSearchRow(u->viewRow);
+        if (ev_.onSearchUpdated) ev_.onSearchUpdated(toUiSearch(*u));
+    }
+    // 计数完成、无挂起移动后停掉快速定时器；之后新输出 / 改写由 50ms tick 发现，失效由事件重新挂上
+    if (!search_.busy()) if (HWND h = hwnd_) KillTimer(h, kSearchTimer);
+}
+
+void Win32PaneBackend::revealSearchRow(int32_t viewRow) {
+    if (!core_) return;
+    vp_.updateHistory(int(std::min<uint32_t>(itcore_history_rows(core_), INT_MAX)));
+    const int rows = resize_.dims().rows;
+    const int32_t first = vp_.firstRow();
+    if (viewRow >= first && viewRow < first + rows) return;
+    const int64_t target = int64_t(viewRow) - rows / 2;
+    const int64_t delta = std::clamp<int64_t>(target - first, INT_MIN, INT_MAX);
+    if (!vp_.scroll(int(delta))) return;
     present();
     syncViewport(true);
 }
@@ -1066,7 +1157,8 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
             pump();
             return 0;
         }
-        if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present(); }
+        if (w == kSearchTimer) { searchTick(); return 0; }
+        if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); if (search_.active()) searchTick(); if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present(); }
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -1199,6 +1291,7 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     case WM_DESTROY:
         KillTimer(h, kTickTimer);
         KillTimer(h, kPumpContTimer);
+        KillTimer(h, kSearchTimer);
         hwnd_ = nullptr;  // 之后的 post 不再 PostMessage
         return 0;
     default: break;
@@ -1220,6 +1313,7 @@ void Win32PaneBackend::teardown() {
         DestroyWindow(h);
     }
     host_.reset();
+    endSearch(false);
     if (core_) { itcore_destroy(core_); core_ = nullptr; }
 }
 

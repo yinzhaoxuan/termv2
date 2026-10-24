@@ -86,7 +86,7 @@ private:
     uint64_t serial_ = 0;
     bool superseded_ = false, restarted_reported_ = false, notice_sent_ = false;
     uint64_t max_id_ = 0;
-    std::unordered_set<uint64_t> excluded_;  // begin 时光标以下的全空网格行：之后写进去的算新输出
+    std::unordered_set<uint64_t> excluded_;  // begin 时光标行及以下的全空网格行：之后写进去的算新输出
     std::vector<uint64_t> order_, weight_;
     size_t next_ = 0;
     uint64_t total_cells_ = 0, done_cells_ = 0;
