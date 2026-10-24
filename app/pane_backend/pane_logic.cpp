@@ -3,6 +3,7 @@
 #include <thread>
 #include <condition_variable>
 #include <algorithm>
+#include <cstdio>
 
 namespace it2app {
 
@@ -10,6 +11,43 @@ int applyOsc52(itcore_core *core, const Osc52Config &cfg) {
     if (!core) return -1;
     itcore_clipboard_policy p{sizeof(p), cfg.allowWrite ? 1 : 0, cfg.allowRead ? 1 : 0, cfg.maxBytes};
     return itcore_set_clipboard_policy(core, &p);
+}
+
+Osc52ReadDeliver deliverOsc52ReadReply(
+    itcore_core *core, const itcore_event *req,
+    const char *utf8, size_t len,
+    int (*reply)(void *ctx, const char *data, size_t n), void *replyCtx,
+    void (*log)(void *ctx, const char *msg), void *logCtx,
+    bool logSuccess) {
+    auto say = [&](const char *m) { if (log) log(logCtx, m); };
+    if (!core || !reply) {
+        say("[pane] osc52 read deliver skipped (no core/reply)");
+        return Osc52ReadDeliver::EncodeFailed;
+    }
+    itcore_buffer *b = nullptr;
+    const int erc = itcore_encode_clipboard_reply(core, req, utf8, len, &b);
+    if (erc != 0 || !b) {
+        char msg[96];
+        std::snprintf(msg, sizeof(msg), "[pane] osc52 read encode failed rc=%d", erc);
+        say(msg);
+        if (b) itcore_buffer_release(b);
+        return Osc52ReadDeliver::EncodeFailed;
+    }
+    const size_t n = b->length;
+    const int rrc = reply(replyCtx, reinterpret_cast<const char *>(b->data), n);
+    itcore_buffer_release(b);
+    if (rrc != 0) {
+        char msg[96];
+        std::snprintf(msg, sizeof(msg), "[pane] osc52 read reply failed rc=%d len=%zu", rrc, n);
+        say(msg);
+        return Osc52ReadDeliver::ReplyFailed;
+    }
+    if (logSuccess) {
+        char msg[80];
+        std::snprintf(msg, sizeof(msg), "[pane] osc52 read reply ok len=%zu", n);
+        say(msg);
+    }
+    return Osc52ReadDeliver::Ok;
 }
 
 int applyWordChars(itcore_core *core, const std::optional<std::string> &wc) {

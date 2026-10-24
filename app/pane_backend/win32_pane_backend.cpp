@@ -551,12 +551,15 @@ void Win32PaneBackend::drainCoreEvents() {
             setClipboardUtf8(std::string_view(reinterpret_cast<const char *>(p), p ? n : 0));
             break;
         case ITCORE_EV_CLIPBOARD_READ:
+            // OSC52-04：encode / enqueueReply 失败记日志（OutputDebugString），不阻断 pump。
             if (transport_) {
-                itcore_buffer *b = nullptr;
                 std::string cur = getClipboardUtf8();
-                if (itcore_encode_clipboard_reply(core_, e, cur.data(), cur.size(), &b) == 0 && b)
-                    transport_->reply(std::string_view(reinterpret_cast<const char *>(b->data), b->length));
-                if (b) itcore_buffer_release(b);
+                struct Ctx { Transport *t; } ctx{transport_.get()};
+                auto replyFn = [](void *p, const char *data, size_t n) -> int {
+                    auto *c = static_cast<Ctx *>(p);
+                    return int(c->t->reply(std::string_view(data, n)));
+                };
+                deliverOsc52ReadReply(core_, e, cur.data(), cur.size(), replyFn, &ctx, pumpLog, nullptr);
             }
             break;
         case ITCORE_EV_SEARCH_INVALIDATED:  // resize / 主备屏切换 / ED3 / RIS：下一次 step 得到 RESTARTED

@@ -16,6 +16,7 @@
 #include <vector>
 
 typedef struct itcore_core itcore_core;
+typedef struct itcore_event itcore_event;
 
 namespace it2app {
 
@@ -25,6 +26,17 @@ int applyWordChars(itcore_core *core, const std::optional<std::string> &wordChar
 // B4：OSC 52 配置下发（默认全关；读与写分别授权；maxBytes 0 用核心默认）。UI 线程调用。
 struct Osc52Config { bool allowWrite = false; bool allowRead = false; uint32_t maxBytes = 0; };
 int applyOsc52(itcore_core *core, const Osc52Config &cfg);
+
+// OSC52-04：CLIPBOARD_READ → encode → reply。失败只记日志，不阻断 pump；不改 OSC 语义。
+// reply 返回 0=成功，非 0=失败码（与 it2w::EnqueueResult 整型一致：1=QueueFull, 2=TooLarge, 3=InvalidState…）。
+// log 可空；失败必记，成功默认不记（避免刷屏）。传 logSuccess=true 时记一句长度。
+enum class Osc52ReadDeliver { Ok, EncodeFailed, ReplyFailed };
+Osc52ReadDeliver deliverOsc52ReadReply(
+    itcore_core *core, const itcore_event *req,
+    const char *utf8, size_t len,
+    int (*reply)(void *ctx, const char *data, size_t n), void *replyCtx,
+    void (*log)(void *ctx, const char *msg), void *logCtx,
+    bool logSuccess = false);
 
 // --command：按本地 shell 的解析规则把一条命令拼进启动参数（只用于第一个本地窗格）。
 //  cmd.exe          → args {/s, /k}，rawTail = "\"" + 命令 + "\""（/s 只剥最外层一对引号，命令内的引号、&、| 原样交给 cmd）

@@ -434,6 +434,48 @@ static void wordchars() {
     CHECK(osc("\x1b]52;c;?\x07") == ITCORE_EV_CLIPBOARD_READ);
     CHECK(osc("\x1b]52;c;aGk=\x07") == ITCORE_EV_CLIPBOARD_REQUEST);   // 2 字节 > 上限 1
     CHECK(applyOsc52(nullptr, Osc52Config{}) == -1);
+
+    // OSC52-04：deliverOsc52ReadReply — encode 失败记日志；reply 回调被调用；reply 失败也记日志
+    {
+        CHECK(applyOsc52(c, Osc52Config{false, true, 0}) == 0);
+        struct Sink {
+            std::vector<std::string> logs;
+            std::vector<std::string> replies;
+            int replyRc = 0;
+        } sink;
+        auto logFn = [](void *p, const char *m) {
+            static_cast<Sink *>(p)->logs.emplace_back(m ? m : "");
+        };
+        auto replyFn = [](void *p, const char *data, size_t n) -> int {
+            auto *s = static_cast<Sink *>(p);
+            s->replies.emplace_back(data, n);
+            return s->replyRc;
+        };
+        // 成功路径：reply 收到 ESC]52;… 且无失败日志
+        auto d = deliverOsc52ReadReply(c, nullptr, "hi", 2, replyFn, &sink, logFn, &sink);
+        CHECK(d == Osc52ReadDeliver::Ok && sink.replies.size() == 1 && sink.logs.empty());
+        CHECK(sink.replies[0].size() >= 8 && sink.replies[0].find("\x1b]52;") == 0);
+        // encode 失败：超 max_bytes（上限 1）→ EncodeFailed + 日志含 rc=
+        CHECK(applyOsc52(c, Osc52Config{false, true, 1}) == 0);
+        sink = {};
+        d = deliverOsc52ReadReply(c, nullptr, "hi", 2, replyFn, &sink, logFn, &sink);
+        CHECK(d == Osc52ReadDeliver::EncodeFailed && sink.replies.empty() && sink.logs.size() == 1);
+        CHECK(sink.logs[0].find("encode failed") != std::string::npos);
+        CHECK(sink.logs[0].find("rc=") != std::string::npos);
+        // reply 失败：回调返回非 0 → ReplyFailed + 日志含 reply failed
+        CHECK(applyOsc52(c, Osc52Config{false, true, 0}) == 0);
+        sink = {}; sink.replyRc = 1;  // QueueFull
+        d = deliverOsc52ReadReply(c, nullptr, "hi", 2, replyFn, &sink, logFn, &sink);
+        CHECK(d == Osc52ReadDeliver::ReplyFailed && sink.replies.size() == 1 && sink.logs.size() == 1);
+        CHECK(sink.logs[0].find("reply failed") != std::string::npos);
+        CHECK(sink.logs[0].find("rc=1") != std::string::npos);
+        // logSuccess：成功也记一句长度
+        sink = {};
+        d = deliverOsc52ReadReply(c, nullptr, "hi", 2, replyFn, &sink, logFn, &sink, true);
+        CHECK(d == Osc52ReadDeliver::Ok && sink.logs.size() == 1);
+        CHECK(sink.logs[0].find("reply ok len=") != std::string::npos);
+    }
+
     itcore_destroy(c);
 }
 
