@@ -29,6 +29,9 @@ double dragRatio(const LayoutNode& split, Rect splitArea, double mouseX, double 
 // ---- 标签拖放 ----
 // spans：每个标签的 [left, right)；返回放下位置（夹在 0..n-1），n==0 返回 nullopt
 std::optional<size_t> tabDropIndex(const std::vector<std::pair<double, double>>& spans, double x);
+// 拖动中的插入线：与 tabDropIndex 选中的放下位置一致。往左放画在目标标签左边界，往右放画在
+// 目标标签右边界；放回原位（或 from 越界 / 无标签）返回 nullopt，不画线
+std::optional<double> tabDropLineX(const std::vector<std::pair<double, double>>& spans, size_t from, double x);
 // 拖动阈值：移动超过 threshold 像素才算拖动
 bool isDragStart(double dx, double dy, double threshold);
 

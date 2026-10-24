@@ -31,6 +31,13 @@ int main() {
   std::vector<std::pair<double, double>> sp{{0, 100}, {100, 180}, {180, 300}};
   CHECK(tabDropIndex(sp, -5) == size_t(0) && tabDropIndex(sp, 150) == size_t(1) && tabDropIndex(sp, 999) == size_t(2));
   CHECK(!tabDropIndex({}, 1));
+  // 插入线：与放下位置一致
+  CHECK(tabDropLineX(sp, 2, 50) == 0.0);     // 第 3 个拖到第 1 个上：画在第 1 个左边
+  CHECK(tabDropLineX(sp, 2, 150) == 100.0);  // 拖到中间：画在中间标签左边
+  CHECK(tabDropLineX(sp, 0, 150) == 180.0);  // 往右：画在目标右边
+  CHECK(tabDropLineX(sp, 0, 999) == 300.0);  // 超出最右：末尾
+  CHECK(tabDropLineX(sp, 0, -5) == std::nullopt && tabDropLineX(sp, 1, 120) == std::nullopt);  // 放回原位不画
+  CHECK(!tabDropLineX(sp, 7, 50) && !tabDropLineX({}, 0, 1));
   CHECK(!isDragStart(3, -3, 4) && isDragStart(5, 0, 4));
   // 滚动条
   auto sb = scrollBarFor(0, 100, 24);

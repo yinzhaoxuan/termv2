@@ -61,6 +61,12 @@ std::optional<size_t> tabDropIndex(const std::vector<std::pair<double, double>>&
   return spans.size() - 1;
 }
 
+std::optional<double> tabDropLineX(const std::vector<std::pair<double, double>>& spans, size_t from, double x) {
+  auto to = tabDropIndex(spans, x);
+  if (!to || from >= spans.size() || *to == from) return std::nullopt;
+  return *to < from ? spans[*to].first : spans[*to].second;
+}
+
 bool isDragStart(double dx, double dy, double threshold) {
   return std::abs(dx) > threshold || std::abs(dy) > threshold;
 }

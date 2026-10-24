@@ -98,7 +98,7 @@ struct App {
   struct TreeNode { bool isGroup; std::string id; };   // TreeView lParam → 下标；连接 id "" = 本地 shell
   std::vector<TreeNode> treeNodes;
   std::set<std::string> collapsedGroups;
-  struct { bool active = false, dragging = false; int from = -1, x = 0, y = 0; } tabDrag;
+  struct { bool active = false, dragging = false; int from = -1, x = 0, y = 0, lineX = -1; } tabDrag;  // lineX：插入线，-1 = 无
   struct { bool active = false; std::vector<int> path; Rect splitArea; } divDrag;
   bool imeComposing = false;
   uishell::PaneBackendFactory factory;
@@ -578,6 +578,10 @@ bool handleKey(UINT msg, WPARAM w, LPARAM l) {
   PaneHost* p = activePane();
   if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
     g->skipChar = false;
+    if (w == VK_ESCAPE && g->tabDrag.dragging) {  // 标签控件不拿焦点，Esc 到这里：取消拖动
+      ReleaseCapture();                             // → 标签栏 WM_CAPTURECHANGED 清插入线与拖动状态
+      g->skipChar = true; return true;
+    }
     bool processKey = w == VK_PROCESSKEY;
     if (processKey || g->imeComposing) return false;  // 输入法组字：交给 IME
     if (isModifierVk(w)) return false;
@@ -713,7 +717,36 @@ bool tabCloseHit(HWND h, int i, int x, int y) {
   return x >= r.right - px(18) && x < r.right && y >= r.top && y < r.bottom;
 }
 
-// 标签栏：拖动重排、点 × 或中键关闭
+// ---- 拖动插入线（2px 竖线，画在 tabDropIndex 将选中的位置）----
+std::vector<std::pair<double, double>> tabSpans(HWND h) {
+  std::vector<std::pair<double, double>> spans;
+  for (int i = 0; i < TabCtrl_GetItemCount(h); ++i) { RECT r; TabCtrl_GetItemRect(h, i, &r); spans.push_back({double(r.left), double(r.right)}); }
+  return spans;
+}
+RECT dropLineRect(HWND h, int x) {
+  RECT r{}; if (TabCtrl_GetItemCount(h) > 0) TabCtrl_GetItemRect(h, 0, &r);
+  int w = std::max(2, px(2));
+  return {x - w / 2, r.top, x - w / 2 + w, r.bottom};
+}
+void invalidateDropLine(HWND h, int x) {
+  if (x < 0) return;
+  RECT r = dropLineRect(h, x); InflateRect(&r, px(2), 0);  // 多擦一点，防止抗锯齿残留
+  InvalidateRect(h, &r, TRUE);
+}
+void setDropLine(HWND h, int x) {
+  auto& d = g->tabDrag;
+  if (d.lineX == x) return;
+  invalidateDropLine(h, d.lineX);
+  d.lineX = x;
+  invalidateDropLine(h, x);
+}
+void paintDropLine(HWND h) {
+  if (g->tabDrag.lineX < 0) return;
+  RECT r = dropLineRect(h, g->tabDrag.lineX);
+  if (HDC dc = GetDC(h)) { FillRect(dc, &r, GetSysColorBrush(COLOR_HIGHLIGHT)); ReleaseDC(h, dc); }
+}
+
+// 标签栏：拖动重排（带插入线）、点 × 或中键关闭
 LRESULT CALLBACK TabSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
   auto hit = [&](LPARAM lp) { TCHITTESTINFO ht{}; ht.pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}; return TabCtrl_HitTest(h, &ht); };
   auto& d = g->tabDrag;
@@ -729,14 +762,17 @@ LRESULT CALLBACK TabSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD
           isDragStart(GET_X_LPARAM(l) - d.x, GET_Y_LPARAM(l) - d.y, GetSystemMetricsForDpi(SM_CXDRAG, g->dpi))) {
         d.dragging = true; SetCapture(h);
       }
-      if (d.dragging) { SetCursor(LoadCursorW(nullptr, IDC_SIZEWE)); return 0; }
+      if (d.dragging) {
+        SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+        auto lx = tabDropLineX(tabSpans(h), (size_t)d.from, GET_X_LPARAM(l));
+        setDropLine(h, lx ? (int)std::lround(*lx) : -1);
+        return 0;
+      }
       break;
     case WM_LBUTTONUP:
       if (d.dragging) {
-        int from = d.from; d = {}; ReleaseCapture();
-        std::vector<std::pair<double, double>> spans;
-        for (int i = 0; i < TabCtrl_GetItemCount(h); ++i) { RECT r; TabCtrl_GetItemRect(h, i, &r); spans.push_back({double(r.left), double(r.right)}); }
-        auto to = tabDropIndex(spans, GET_X_LPARAM(l));
+        int from = d.from; setDropLine(h, -1); d = {}; ReleaseCapture();
+        auto to = tabDropIndex(tabSpans(h), GET_X_LPARAM(l));
         if (to && (int)*to != from && g->tabBar.move((size_t)from, *to)) {
           refreshTabs(); layoutPanes();
           if (Tab* t = g->tabBar.activeTab()) focusPane(t->activePaneId);
@@ -745,7 +781,12 @@ LRESULT CALLBACK TabSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD
       }
       d.active = false;
       break;
-    case WM_CAPTURECHANGED: if ((HWND)l != h) d = {}; break;
+    case WM_CAPTURECHANGED: if ((HWND)l != h) { setDropLine(h, -1); d = {}; } break;  // 拖动被打断（Alt+Tab、弹窗等）
+    case WM_PAINT: {
+      LRESULT r = DefSubclassProc(h, m, w, l);  // 先让标签控件画完，再叠插入线
+      paintDropLine(h);
+      return r;
+    }
     case WM_MBUTTONUP: { int i = hit(l); if (i >= 0) closeTabAt((size_t)i, true); return 0; }
     case WM_NCDESTROY: RemoveWindowSubclass(h, TabSubclass, 1); break;
   }
