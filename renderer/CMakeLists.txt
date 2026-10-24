@@ -53,3 +53,8 @@ add_test(NAME renderer_selection_ime COMMAND test_renderer_selection_ime)
 add_executable(test_renderer_font_family ${PROJECT_SOURCE_DIR}/tests/renderer/test_font_family.cpp)
 target_link_libraries(test_renderer_font_family PRIVATE itrender_layout)
 add_test(NAME renderer_font_family COMMAND test_renderer_font_family)
+
+# 搜索高亮层（草案 itcore_search v0.2 §2.6）：建表、查询、清除、resolve_cell 叠加、脏行
+add_executable(test_renderer_search_highlight ${PROJECT_SOURCE_DIR}/tests/renderer/test_search_highlight.cpp)
+target_link_libraries(test_renderer_search_highlight PRIVATE itcore_mock itrender_layout)
+add_test(NAME renderer_search_highlight COMMAND test_renderer_search_highlight)

@@ -2,6 +2,7 @@
 #pragma once
 #include "itcore.h"
 #include "grid_metrics.h"
+#include "search_highlight.h"
 #include <algorithm>
 #include <cmath>
 #include <array>
@@ -14,6 +15,7 @@ struct Theme {
   uint32_t fg = 0xD4D4D4, bg = 0x1E1E1E;   // 0xRRGGBB
   std::array<uint32_t, 16> ansi = {0x000000, 0xCD3131, 0x0DBC79, 0xE5E510, 0x2472C8, 0xBC3FBC, 0x11A8CD, 0xE5E5E5,
                                    0x666666, 0xF14C4C, 0x23D18B, 0xF5F543, 0x3B8EEA, 0xD670D6, 0x29B8DB, 0xFFFFFF};
+  SearchColors search{};  // 搜索高亮配色（默认上游风格黄底黑字 / 当前命中橙底黑字）
 };
 
 // 256 色：0-15 主题，16-231 为 6x6x6 立方，232-255 为灰阶（xterm 标准）
@@ -54,11 +56,22 @@ inline uint32_t blend50(uint32_t a, uint32_t b) {
 struct ResolvedColors { uint32_t fg, bg, underline; };
 // 顺序：DECSCNM ?5 只交换默认色（TT=0）→ INVERSE/SELECTED 交换一次 → DIM 文字色向 bg 混 50% → HIDDEN 文字色=bg。
 // 选中的 HIDDEN 仍隐藏，只显示反色背景。BLINK 不影响颜色，见 text_visible。
-inline ResolvedColors resolve_cell(const Theme &t, const itcore_cell &c, bool reverse_screen = false) {
+// 搜索高亮（hit，草案 v0.2 §2.6）优先级：选区 > 当前命中 > 其他命中 > 反显。
+//   - SELECTED 时忽略 hit，照旧反色（当前命中经 itcore_search_select 设成选区时按选区显示）。
+//   - 否则命中格的文字/背景直接换成高亮色，替代“反显交换”这一步：INVERSE 和 DECSCNM 对命中格不再起作用。
+//   - DIM 照常作用（文字色向高亮背景混 50%），与选区路径一致。
+//   - HIDDEN 仍隐藏（文字色=高亮背景）：搜索高亮不能把隐藏文字（如密码）显示出来。
+//   - 下划线有自定义色（SGR 58）时保留，否则跟随高亮文字色。
+// hit == None 时与原来完全一致。
+inline ResolvedColors resolve_cell(const Theme &t, const itcore_cell &c, bool reverse_screen = false,
+                                   SearchHit hit = SearchHit::None) {
   bool fdef = (c.fg >> 24) == 0, bdef = (c.bg >> 24) == 0;
   uint32_t fg = fdef ? (reverse_screen ? t.bg : t.fg) : resolve(t, c.fg, true);
   uint32_t bg = bdef ? (reverse_screen ? t.fg : t.bg) : resolve(t, c.bg, false);
-  if (c.flags & (ITCORE_CELL_INVERSE | ITCORE_CELL_SELECTED)) { uint32_t x = fg; fg = bg; bg = x; }  // 选中+INVERSE 只反一次，避免“负负得正”看不出选中
+  if (c.flags & ITCORE_CELL_SELECTED) hit = SearchHit::None;
+  if (hit == SearchHit::Current) { fg = t.search.current_fg; bg = t.search.current_bg; }
+  else if (hit == SearchHit::Other) { fg = t.search.other_fg; bg = t.search.other_bg; }
+  else if (c.flags & (ITCORE_CELL_INVERSE | ITCORE_CELL_SELECTED)) { uint32_t x = fg; fg = bg; bg = x; }  // 选中+INVERSE 只反一次，避免“负负得正”看不出选中
   if (c.flags & ITREN_CELL_DIM) fg = blend50(fg, bg);
   if (c.flags & ITREN_CELL_HIDDEN) fg = bg;
   uint32_t ul = (c.underline_color >> 24) ? resolve(t, c.underline_color, true) : fg;
