@@ -169,6 +169,7 @@ static void test_osc52() {
     CHECK(only(c, "\x1b]52;q;aGk=\x07").k == ITCORE_EV_CLIPBOARD_WRITE);
     CHECK(only(c, "\x1b]52;01234567;aGk=\x07").k == ITCORE_EV_CLIPBOARD_WRITE);
     CHECK(only(c, "\x1b]52;cc;aGk=\x07").k == ITCORE_EV_CLIPBOARD_WRITE);
+    CHECK(isReq(only(c, "\x1b]52;cc;?\x07"), "cc"));   // OSC52-03：重复字符原样保留在规范化 Pc 里
     CHECK(isReq(only(c, "\x1b]52;8;aGk=\x07"), ""));
     CHECK(isReq(only(c, "\x1b]52;cq;?\x07"), "cq"));  // 读未开：拒绝时回规范化的 Pc
     // 超出 U+10FFFF 的 F4 90 与非法首字节 F5：逐字节 U+FFFD
@@ -187,6 +188,8 @@ static void test_osc52() {
     CHECK(itcore_set_clipboard_policy(c, &p) == 0);
     Ev r = only(c, "\x1b]52;c;?\x07");
     CHECK(r.k == ITCORE_EV_CLIPBOARD_READ && r.d == "c");
+    r = only(c, "\x1b]52;cc;?\x07");                  // OSC52-03：READ 负载为规范化 Pc（重复字符不去重）
+    CHECK(r.k == ITCORE_EV_CLIPBOARD_READ && r.d == "cc");
     CHECK(itcore_encode_clipboard_reply(c, nullptr, "hi", 2, &b) == 0 && b);
     CHECK(std::string(reinterpret_cast<char *>(b->data), b->length) == "\x1b]52;c;aGk=\x1b\\");
     itcore_buffer_release(b); b = nullptr;

@@ -45,7 +45,9 @@ typedef enum { ITCORE_EV_REPLY_BYTES = 1, ITCORE_EV_TITLE = 2, ITCORE_EV_BELL = 
                   Pd 为空，或清洗后为空（如只含 NUL），不产生任何事件（不清空剪贴板）。
                   与上游 iTerm2 的区别：上游解码后遇 NUL 截断，这里去掉 NUL 等控制字符、保留其后的文本。
                   三档上限：默认 ITCORE_CLIPBOARD_DEFAULT_MAX（100 KiB，解码后）；可配到封顶 768 KiB（OSC 负载上限的 3/4）；
-                  OSC 负载本身 1 MiB（解析器上限，超出即截断并拒绝）。 */
+                  OSC 负载本身 1 MiB（解析器上限，超出即截断并拒绝）。
+                  max_bytes 比较的是字节数，检查两次：base64 解码后、清洗前（解码结果超限即拒绝）；清洗后再查一次
+                  （非法序列替换成 3 字节的 U+FFFD 可能撑大，超限同样拒绝）。去掉 NUL/控制字符只会变小，不会使超限的负载通过。 */
                ITCORE_EV_CLIPBOARD_WRITE = 7, ITCORE_EV_CLIPBOARD_READ = 8,
                /* 搜索句柄失效（resize / 主备屏切换 / ED 3 / RIS）。只在有活动搜索句柄时发，每个句柄只发一次；
                   负载为空。渲染据此清掉搜索高亮层，UI 用同一 needle 重新 itcore_search_begin */
@@ -197,7 +199,8 @@ void itcore_set_cell_pixel_size(itcore_core *c, uint16_t width_px, uint16_t heig
    线程：与 itcore_feed / 选区调用同一线程（UI 线程）调用，核心不加锁。 */
 int  itcore_set_word_chars(itcore_core *c, const char *chars, size_t len);
 /* B4 OSC 52 剪贴板策略。默认全关：任何 OSC 52 都只产生 CLIPBOARD_REQUEST（已拒绝）事件。
-   allow_write：OSC 52;sel;<base64> 解码后不超过 max_bytes 时产生 CLIPBOARD_WRITE；超限/非法 base64 仍为 REQUEST（拒绝）。
+   allow_write：OSC 52;sel;<base64> 解码后（清洗前）与清洗后都不超过 max_bytes 字节时产生 CLIPBOARD_WRITE；
+   超限/非法 base64 仍为 REQUEST（拒绝）。
    allow_read：OSC 52;sel;? 产生 CLIPBOARD_READ；不打开则拒绝。读与写分开授权（读会把剪贴板泄露给远端程序）。
    max_bytes 为 0 用默认 ITCORE_CLIPBOARD_DEFAULT_MAX，大于 768 KiB 钳到 768 KiB（OSC 负载上限 1 MiB 的 3/4）；
    base64 中的空白（空格/\t/\r/\n）忽略。cfg 为 NULL 恢复默认（全关）。线程同 itcore_feed（UI 线程）。成功 0 */
