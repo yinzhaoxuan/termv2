@@ -20,6 +20,7 @@
 #include <windowsx.h>
 #include <imm.h>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -36,6 +37,11 @@ constexpr UINT kTickMs = 50;
 constexpr wchar_t kPaneClass[] = L"it2w_pane_backend";
 
 uint64_t nowMs() { return GetTickCount64(); }
+// pump 预算计时：steady_clock（Windows 上即 QueryPerformanceCounter），GetTickCount64 只有 10–16ms 精度，卡不住 8ms
+uint64_t budgetNowMs(void *) {
+    using namespace std::chrono;
+    return uint64_t(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+}
 
 std::string toUtf8(std::wstring_view w) {
     if (w.empty()) return {};
@@ -140,7 +146,8 @@ private:
     bool startSession();
     void fail(std::string text);
     void pushCellPixelSize();          // GridMetrics → itcore_set_cell_pixel_size
-    void pump();                       // UI 线程：取输出 → 喂核心 → 事件 → present
+    void pump(bool drainAll = false);  // UI 线程：取输出 → 喂核心 → 事件 → present；drainAll 不设预算（收尾）
+    void postPump();                   // UI 线程自己补投一次 pump（PumpScheduler 返回 Post 时）
     void drainCoreEvents();
     void setClipboardUtf8(std::string_view u8);
     std::string getClipboardUtf8();
@@ -168,6 +175,8 @@ private:
     std::string connId_;
     uishell::PaneEvents ev_;
     std::shared_ptr<const PaneBackendConfig> cfg_;
+    it2app::PumpCarry carry_;           // 一块输出里还没喂完的部分（预算在块中间用尽时）
+    bool inputFinished_ = false;        // 已 itcore_finish_input：之后不得再 feed（否则 FATAL → 误报 Fault）
     std::optional<std::wstring> localCommand_;  // --command，仅第一个本地窗格；重连（新 attempt）同样带上
     // 与关闭线程 / 传输回调共享的唯一状态（不含 this、不含 PaneEvents）
     std::shared_ptr<SessionShared> shared_ = std::make_shared<SessionShared>();
@@ -302,8 +311,8 @@ bool Win32PaneBackend::startSession() {
     };
     auto onOut = [ws](SessionId, AttemptId) {
         auto sh = ws.lock();
-        if (sh && it2app::readerShouldPost(sh->pumpPending, sh->contTimerPending))
-            postTo<P>(*sh->queue, [](P &p) { p.shared_->pumpPending = false; p.pump(); });
+        if (sh && sh->sched.readerShouldPost())
+            postTo<P>(*sh->queue, [](P &p) { if (p.shared_->sched.postedShouldRun()) p.pump(); });
     };
     auto onDiag = [](SessionId, AttemptId, const DiagRecord &d) {
         std::fprintf(stderr, "[pane] diag %s %llums %s\n", d.stage.c_str(), (unsigned long long)d.elapsedMs, d.detail.c_str());
@@ -421,8 +430,10 @@ void Win32PaneBackend::onTransportState(TransportState s, std::optional<Transpor
 void Win32PaneBackend::finishSession() {
     if (finished_) return;
     finished_ = true;
-    pump();
-    if (core_) itcore_finish_input(core_);
+    pump(true);   // 收尾不设预算：积压一次喂完，否则 finish_input 之后剩余输出全丢
+    if (HWND h = hwnd_) KillTimer(h, kPumpContTimer);
+    shared_->sched.reset();
+    if (core_ && !inputFinished_) { itcore_finish_input(core_); inputFinished_ = true; }
     drainCoreEvents();
     present();
     {
@@ -526,17 +537,25 @@ void Win32PaneBackend::flushTitle() {
     }
 }
 
-void Win32PaneBackend::pump() {
-    if (!core_ || !transport_) return;
-    it2app::PumpBudget budget;
-    budget.nowMs = [](void *) -> uint64_t { return nowMs(); };
-    auto r = it2app::pump_core(core_, [&] { return transport_->pop(); }, [&] { drainCoreEvents(); }, budget);
-    if (r == it2app::PumpResult::Fatal) { transport_->close(CloseReason::Fault); return; }
-    if (it2app::nextAfterPump(r) == it2app::PumpNext::Timer) {
-        // 先置标志再设定时器：期间读线程不再投递，续跑只走 WM_TIMER（低于 WM_PAINT/输入）
-        shared_->contTimerPending = true;
-        if (HWND h = hwnd_; !h || !SetTimer(h, kPumpContTimer, 1, nullptr)) shared_->contTimerPending = false;
+void Win32PaneBackend::postPump() {
+    postTo<Win32PaneBackend>(*queue_, [](Win32PaneBackend &p) { if (p.shared_->sched.postedShouldRun()) p.pump(); });
+}
+
+void Win32PaneBackend::pump(bool drainAll) {
+    if (!core_ || !transport_ || inputFinished_) return;
+    auto &sched = shared_->sched;
+    sched.begin();   // pump 期间持有：读线程不投递
+    it2app::PumpBudget budget = drainAll ? it2app::PumpBudget::unlimited() : it2app::PumpBudget{};
+    if (!drainAll) budget.nowMs = budgetNowMs;
+    auto r = it2app::pump_core(core_, [&] { return transport_->pop(); }, [&] { drainCoreEvents(); }, budget, &carry_);
+    if (r == it2app::PumpResult::Fatal) { sched.release(); transport_->close(CloseReason::Fault); return; }
+    using Next = it2app::PumpScheduler::Next;
+    Next next = sched.end(it2app::nextAfterPump(r) == it2app::PumpNext::Timer);
+    if (next == Next::Timer) {
+        // 继续持有直到 WM_TIMER：续跑只走定时器（低于 WM_PAINT/输入）；SetTimer 失败退回投递
+        if (HWND h = hwnd_; !h || !SetTimer(h, kPumpContTimer, 1, nullptr)) next = sched.timerFailed();
     }
+    if (next == Next::Post) postPump();
     if (r == it2app::PumpResult::Fed || r == it2app::PumpResult::FedMore) {
         syncSelection();       // 输出可能清掉选区（切备用屏 / RIS / ED 3）
         syncViewport();        // 已上翻时偏移随历史增长，视图停在原处
@@ -734,6 +753,9 @@ void Win32PaneBackend::reconnect() {
     closer_ = SessionCloser{};
     closeOutcome_.reset(); sshExit_.reset(); hvResult_.reset(); localExit_.reset();
     closing_ = finished_ = false;
+    KillTimer(h, kPumpContTimer);   // 旧 attempt 的续跑定时器；新的 shared_ 自带全新的 PumpScheduler
+    carry_.clear();
+    inputFinished_ = false;
     selActive_ = dragSelStarted_ = false;
     drag_.cancel();
     dragEdge_ = 0;
@@ -1033,12 +1055,11 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     case WM_PANE_WAKE: drainUi(); return 0;
     case WM_TIMER:
         if (w == kPumpContTimer) {
-            KillTimer(h, kPumpContTimer);    // 一次性
-            shared_->contTimerPending = false;  // 先清：pump 期间到来的数据可走投递（合并，无害）
+            KillTimer(h, kPumpContTimer);  // 一次性；持有状态延续到 pump() 内部，期间读线程不投递
             pump();
             return 0;
         }
-                if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present(); }
+        if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present(); }
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;

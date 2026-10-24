@@ -350,7 +350,7 @@ static void syncfocus() {
         int presents = 0, events = 0;
         auto pumpOnce = [&](uint64_t now) {
             auto r = it2app::pump_core(c, pop, [&] { ++events; });
-            if (r == it2app::PumpResult::Fed && it2app::frame_due(gate, c, now, false)) ++presents;
+            if ((r == it2app::PumpResult::Fed || r == it2app::PumpResult::FedMore) && it2app::frame_due(gate, c, now, false)) ++presents;
         };
         q.push_back({"\x1b[?2026h"}); pumpOnce(0);
         int batches = 0; presents = 0;
@@ -436,7 +436,7 @@ static void wordchars() {
     itcore_destroy(c);
 }
 
-// PUMP-01：pump_core 预算（字节 / 注入时钟），用尽后经定时器续跑（不投递），读线程合并投递
+// PUMP-01/02：pump_core 预算（字节 / 注入时钟 / 16 KiB 切片 + carry），用尽后经定时器续跑；PumpScheduler 持有期间读线程不投递；收尾不限预算
 static void pump_budget() {
     itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 80, 24, 100, 1u << 20};
     itcore_core *c = nullptr;
@@ -472,19 +472,88 @@ static void pump_budget() {
     // 默认预算下小输出照旧一次取空
     q.clear(); q.push_back({"a"}); q.push_back({"b"});
     CHECK(it2app::pump_core(c, pop, [] {}) == PumpResult::Fed && q.empty());
-    // 读线程投递：合并为 1 条；续跑定时器在等时不投递
-    std::atomic<bool> pending{false}, timer{false};
-    int posts = 0;
-    for (int i = 0; i < 100; ++i) posts += it2app::readerShouldPost(pending, timer);
-    CHECK(posts == 1);
-    pending = false;                       // 投递的 pump 已执行
-    timer = true;                          // 预算用尽 → 设定时器
-    posts = 0;
-    for (int i = 0; i < 100; ++i) posts += it2app::readerShouldPost(pending, timer);
-    CHECK(posts == 0 && !pending);
-    timer = false;                         // WM_TIMER 续跑
-    for (int i = 0; i < 100; ++i) posts += it2app::readerShouldPost(pending, timer);
-    CHECK(posts == 1);
+    // 带 carry：一块可在中间停下，剩余下次接着喂（单次不超过预算 + 一片）
+    {
+        it2app::PumpCarry carry;
+        q.clear(); q.push_back({std::string(100 * 1024, 'y')}); q.push_back({"z"});
+        pops = 0;
+        CHECK(it2app::pump_core(c, pop, [] {}, bytes, &carry) == PumpResult::FedMore && pops == 1);
+        CHECK(carry.bytes.size() - carry.off == 36 * 1024 && q.size() == 1);
+        CHECK(it2app::pump_core(c, pop, [] {}, bytes, &carry) == PumpResult::Fed && carry.empty() && q.empty());
+        // 按时间也在片之间检查：每次 feed 后时钟前进 5ms → 两片（32 KiB）一停
+        struct Clock2 { uint64_t t = 0; } k2;
+        it2app::PumpBudget tb; tb.maxBytes = size_t(1) << 30; tb.maxMs = 8;
+        tb.clockCtx = &k2; tb.nowMs = [](void *p) { return static_cast<Clock2 *>(p)->t; };
+        q.push_back({std::string(64 * 1024, 'w')});
+        CHECK(it2app::pump_core(c, pop, [&] { k2.t += 5; }, tb, &carry) == PumpResult::FedMore);
+        CHECK(carry.bytes.size() - carry.off == 32 * 1024);
+        carry.clear(); q.clear();
+    }
+    // 事件队列已满（NEED_DRAIN 且 accepted==0）：排空后重试，这一片不丢
+    {
+        std::string bells(2000, '\a');
+        auto fr = itcore_feed(c, reinterpret_cast<const uint8_t *>(bells.data()), bells.size());
+        CHECK(fr.status == ITCORE_NEED_DRAIN && fr.accepted > 0 && fr.accepted < bells.size());
+        auto drainAll = [&] { while (itcore_event *e = itcore_next_event(c)) itcore_event_release(e); };
+        q.push_back({"\x1b[2J\x1b[HNEEDDRAIN_OK"});
+        CHECK(it2app::pump_core(c, pop, drainAll) == PumpResult::Fed);
+        itcore_buffer *b = nullptr;
+        CHECK(itcore_export_text(c, 1u << 20, &b) == 0 && b);
+        if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("NEEDDRAIN_OK") != std::string::npos); itcore_buffer_release(b); }
+    }
+    // PUMP-EXIT：积压远超一份预算时收尾（不限预算）一次喂完，结束标记可见，finish 之后不再 feed
+    {
+        itcore_core *f = nullptr;
+        CHECK(itcore_create(&o, &f) == 0 && f);
+        std::deque<Chunk> big;
+        for (int i = 0; i < 80; ++i) big.push_back({std::string(64 * 1024 - 2, 'a' + i % 26) + "\r\n"});  // ~5 MiB
+        big.push_back({"__END_MARK__"});
+        auto bpop = [&]() -> std::optional<Chunk> { if (big.empty()) return std::nullopt; Chunk k = std::move(big.front()); big.pop_front(); return k; };
+        auto drainF = [&] { while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
+        it2app::PumpCarry carry;
+        CHECK(it2app::pump_core(f, bpop, drainF, it2app::PumpBudget{}, &carry) == PumpResult::FedMore);  // 正常一份预算：没喂完
+        CHECK(!big.empty());
+        CHECK(it2app::pump_core(f, bpop, drainF, it2app::PumpBudget::unlimited(), &carry) == PumpResult::Fed);
+        CHECK(big.empty() && carry.empty());
+        itcore_finish_input(f);
+        itcore_buffer *b = nullptr;
+        CHECK(itcore_export_text(f, 1u << 20, &b) == 0 && b);
+        if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("__END_MARK__") != std::string::npos); itcore_buffer_release(b); }
+        itcore_destroy(f);
+    }
+    // 调度：读线程合并投递；UI 线程 pump 期间与续跑定时器待发期间不投递；释放时补投漏掉的唤醒
+    {
+        using Next = it2app::PumpScheduler::Next;
+        it2app::PumpScheduler sc;
+        int posts = 0;
+        for (int i = 0; i < 100; ++i) posts += sc.readerShouldPost();
+        CHECK(posts == 1);
+        CHECK(sc.postedShouldRun());               // 投递的 pump 开始执行
+        sc.begin();                                // pump 期间
+        posts = 0;
+        for (int i = 0; i < 100; ++i) posts += sc.readerShouldPost();
+        CHECK(posts == 0);                         // pump 期间读线程不投递
+        CHECK(sc.end(true) == Next::Timer && sc.owned());   // 预算用尽 → 继续持有到 WM_TIMER
+        for (int i = 0; i < 100; ++i) posts += sc.readerShouldPost();
+        CHECK(posts == 0);                         // 定时器待发：不投递
+        sc.begin();                                // WM_TIMER → pump，持有不间断
+        for (int i = 0; i < 100; ++i) posts += sc.readerShouldPost();
+        CHECK(posts == 0);
+        CHECK(sc.end(false) == Next::Post && !sc.owned());  // 取空但期间来过数据 → UI 线程自己补投一次
+        CHECK(!sc.readerShouldPost());             // 补投已 pending：读线程合并
+        CHECK(sc.postedShouldRun());
+        sc.begin();
+        CHECK(sc.end(false) == Next::None);        // 期间没新数据：不投递
+        CHECK(sc.readerShouldPost());              // 之后的新数据照常投递
+        // 已投递、随后 UI 线程因 tick 进入持有（续跑待发）：投递的任务跳过，交给定时器
+        sc.begin();
+        CHECK(sc.end(true) == Next::Timer);
+        CHECK(!sc.postedShouldRun());
+        CHECK(sc.timerFailed() == Next::Post || !sc.owned());  // SetTimer 失败：释放并退回投递
+        CHECK(!sc.owned());
+        sc.reset();
+        CHECK(sc.readerShouldPost());
+    }
     itcore_destroy(c);
 }
 

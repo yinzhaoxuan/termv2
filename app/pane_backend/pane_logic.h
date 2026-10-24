@@ -115,11 +115,39 @@ struct CloseOutcome {
     bool timedOut = false;  // 超出预算被强杀
     std::string detail;
 };
+// PUMP-01：谁负责下一次 pump。UI 线程在 pump 期间以及续跑定时器待发期间“持有”pump，此时读线程不投递，
+// 免得投递的 pump 插到 WM_PAINT / 输入前面。读线程先记 missed 再看 owned：pump 结束释放时若 missed 被置位，
+// 由 UI 线程自己补投一次，不丢唤醒（seq_cst：读线程看到 owned 为真 ⇒ missed 的写先于释放）。
+class PumpScheduler {
+public:
+    // 读线程：有新输出时是否投递 pump（同一时刻至多一条投递）
+    bool readerShouldPost() {
+        missed_.store(true);
+        if (owned_.load()) return false;
+        return !pending_.exchange(true);
+    }
+    // 投递的 pump 任务开始执行：清掉 pending；UI 线程正持有（续跑定时器待发）时返回 false，交给定时器
+    bool postedShouldRun() { pending_.store(false); return !owned_.load(); }
+    void begin() { owned_.store(true); missed_.store(false); }
+    enum class Next { None, Timer, Post };
+    // pump 结束：还有积压（more）→ 继续持有，调用方设续跑定时器；否则释放，期间有新数据则 Post（调用方自己投递）
+    Next end(bool more) { return more ? Next::Timer : release(); }
+    Next timerFailed() { return release(); }   // SetTimer 失败：退回投递
+    Next release() {
+        owned_.store(false);
+        if (missed_.exchange(false) && !pending_.exchange(true)) return Next::Post;
+        return Next::None;
+    }
+    void reset() { owned_.store(false); missed_.store(false); pending_.store(false); }
+    bool owned() const { return owned_.load(); }
+private:
+    std::atomic<bool> owned_{false}, missed_{false}, pending_{false};
+};
+
 // 会话共享状态：窗格与关闭线程 / 传输回调之间唯一共享的东西。不含窗格指针、不含 PaneEvents。
 struct SessionShared {
     std::shared_ptr<UiDispatchQueue> queue = std::make_shared<UiDispatchQueue>();
-    std::atomic<bool> pumpPending{false};
-    std::atomic<bool> contTimerPending{false};  // 预算用尽后的续跑定时器已设置（UI 线程写，读线程读）
+    PumpScheduler sched;
     std::shared_ptr<void> transport;  // 传输层对象；最后一个持有者（通常是关闭线程）负责析构
     void setCloseResult(CloseOutcome r);
     std::optional<CloseOutcome> takeCloseResult();
