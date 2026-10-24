@@ -22,6 +22,24 @@ struct SessionStatus {
   std::string errorText;     // classified error for Failed (T07 categories)
 };
 
+// ---- 滚动历史搜索（草案 /workspace/qa/itcore_search-草案-v0.2.md §1.6 映射；架构师拍板 v0.1：纯文本、无正则）----
+// 大小写：对应 ITCORE_SEARCH_CASE_*；Smart = needle 含大写则区分，否则不区分
+enum class SearchCase { Sensitive, Insensitive, Smart };
+struct SearchOptions {
+  SearchCase caseMode = SearchCase::Smart;
+  bool regex = false;        // v0.1 不支持：后端遇到 true 应返回 found=false（不要退回子串搜索）
+  bool wrapAround = true;    // ITCORE_SEARCH_F_WRAP
+};
+struct SearchResult {
+  bool found = false;        // next/prev 返回 DONE/RUNNING
+  int index = 0;             // 当前结果在文档顺序（上→下）中的 0 基序号（草案 *index；UI 显示 +1）；found=false 时无意义
+  int total = -1;            // prog.total；-1 = 还在分批计数（RUNNING），DONE 后为精确值
+  bool hasNewOutput = false; // PF_NEW_CONTENT：begin 之后有新输出，不在本轮范围（v0.1 不做 tail find）
+  bool restarted = false;    // ITCORE_SEARCH_RESTARTED（v0.2 失效事件，只报一次）：resize / 主备屏切换 / ED3 / RIS，
+                             // 渲染清高亮层，UI 用同一 needle 重新搜
+  bool pending = false;      // 草案 PENDING：已扫区域里还没有、扫描未完（found=false）；结果稍后经 onSearchUpdated 给出
+};
+
 struct PaneEvents {                       // called on the UI thread only
   std::function<void(const SessionStatus&)> onStatus;
   std::function<void()> onBell;           // visual, <=1/s
@@ -29,6 +47,8 @@ struct PaneEvents {                       // called on the UI thread only
   std::function<void(int offsetFromBottom, int historyLines)> onViewportChanged; // scrollbar
   std::function<void(size_t bytes, size_t limit)> onPasteRejected;
   std::function<void(bool hasSelection)> onSelectionChanged;
+  // 可选：搜索状态异步变化（分批计数推进 total、PENDING 落定为 found、新输出、RESTART）。空 = 不通知
+  std::function<void(const SearchResult&)> onSearchUpdated;
 };
 
 class PaneBackend {
@@ -68,6 +88,13 @@ public:
   // arrives via onStatus. sizePt clamped 6..72 by UI. Empty family = keep current.
   virtual void setFont(std::string_view family, float sizePt) { (void)family; (void)sizePt; }
   virtual CellSize cellSize() const { return {0, 0}; }  // {0,0} = not yet known
+  // 滚动历史搜索（UI 线程）。needle 或选项与上次不同 → 新一轮搜索（草案 end+begin），否则在当前结果上移动：
+  // backward=true 向上（更早，草案 prev），false 向下（next）。找到后后端滚动视口使当前结果可见；高亮由渲染
+  // 的独立层画（草案 §2.6，ranges_in_view，不经 UI）。主屏搜历史+网格，备屏只搜备屏网格。空 needle → found=false。
+  virtual SearchResult findInScrollback(std::string_view needleUtf8, const SearchOptions& opt, bool backward) {
+    (void)needleUtf8; (void)opt; (void)backward; return {};
+  }
+  virtual void clearSearch() {}   // 结束本轮搜索（itcore_search_end），清高亮层；视口不动
   virtual void requestClose() = 0;
 };
 
