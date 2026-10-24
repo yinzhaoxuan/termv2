@@ -258,11 +258,13 @@ struct itcore_core final : itcore::TokenSink {
         out->assign(pc);
         return true;
     }
-    void osc52(const std::string &arg, bool bel) {
+    void osc52(const std::string &arg, bool bel, bool trunc) {
         auto sc = arg.find(';');
         std::string sel;
         if (!clip_selection(std::string_view(arg).substr(0, sc), &sel)) { push(ITCORE_EV_CLIPBOARD_REQUEST); return; }  // 非法 Pc：拒绝，负载为空
         if (sc == std::string::npos) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }
+        // OSC 负载超过 1 MiB 被解析器截断：剩下的 base64 只是前半截，一律拒绝，不写剪贴板
+        if (trunc) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }
         std::string_view data = std::string_view(arg).substr(sc + 1);
         if (data.empty()) return;  // 空 Pd：不动剪贴板（同上游 iTerm2）
         if (data == "?") {
@@ -277,6 +279,7 @@ struct itcore_core final : itcore::TokenSink {
             return;
         }
         dec = clip_sanitize(dec);
+        if (dec.empty()) return;  // 清洗后为空（如只有 NUL/控制字符）：同空 Pd，不产生事件
         if (dec.size() > clip_max) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }  // 替换字符撑大后超限
         push(ITCORE_EV_CLIPBOARD_WRITE, std::move(dec));
     }
@@ -343,7 +346,7 @@ struct itcore_core final : itcore::TokenSink {
                 if (sc != std::string::npos)
                     screen->set_hyperlink(std::string_view(arg).substr(0, sc), std::string_view(arg).substr(sc + 1));
             }
-            else if (num == "52") osc52(arg, t.bel_term);
+            else if (num == "52") osc52(arg, t.bel_term, t.trunc);
             if (!reply.empty()) push(ITCORE_EV_REPLY_BYTES, std::move(reply));
             break;
         }

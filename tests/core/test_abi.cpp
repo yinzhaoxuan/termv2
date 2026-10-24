@@ -165,6 +165,21 @@ static void test_osc52() {
     CHECK(isReq(only(c, "\x1b]52;c;a$k=\x07"), "c"));   // 非法字符
     CHECK(isReq(only(c, "\x1b]52;c;aG=k\x07"), "c"));   // 填充后有数据
     CHECK(isReq(only(c, "\x1b]52;c\x07"), "c"));        // 缺数据段
+    // OSC52-02：Pc 里的 q、0-7、重复字符都合法（原样规范化），8 不合法
+    CHECK(only(c, "\x1b]52;q;aGk=\x07").k == ITCORE_EV_CLIPBOARD_WRITE);
+    CHECK(only(c, "\x1b]52;01234567;aGk=\x07").k == ITCORE_EV_CLIPBOARD_WRITE);
+    CHECK(only(c, "\x1b]52;cc;aGk=\x07").k == ITCORE_EV_CLIPBOARD_WRITE);
+    CHECK(isReq(only(c, "\x1b]52;8;aGk=\x07"), ""));
+    CHECK(isReq(only(c, "\x1b]52;cq;?\x07"), "cq"));  // 读未开：拒绝时回规范化的 Pc
+    // 超出 U+10FFFF 的 F4 90 与非法首字节 F5：逐字节 U+FFFD
+    CHECK(only(c, "\x1b]52;c;9JA=\x07").d == "\xEF\xBF\xBD\xEF\xBF\xBD");
+    CHECK(only(c, "\x1b]52;c;9Q==\x07").d == "\xEF\xBF\xBD");
+    // 截断的多字节序列（E4 B8 少一字节；末尾单个 E4）
+    CHECK(only(c, "\x1b]52;c;5Lg=\x07").d == "\xEF\xBF\xBD\xEF\xBF\xBD");
+    CHECK(only(c, "\x1b]52;c;YeQ=\x07").d == "a\xEF\xBF\xBD");
+    // 清洗后为空的 Pd：只有 NUL / 只有控制字符，不产生事件（同空 Pd）
+    CHECK(none("\x1b]52;c;AA==\x07"));
+    CHECK(none("\x1b]52;c;ARs=\x07"));
     CHECK(isReq(only(c, "\x1b]52;c;?\x07"), "c"));      // 写开 ≠ 读开
     CHECK(itcore_encode_clipboard_reply(c, nullptr, "x", 1, &b) == 1);
     // 再开读
@@ -203,6 +218,7 @@ static void test_osc52() {
     CHECK(replyFor("\x1b]52;p;?\x07") == "\x1b]52;p;aGk=\x07");           // Pc 回显
     CHECK(replyFor("\x1b]52;;?\x07") == "\x1b]52;s0;aGk=\x07");           // 空 Pc → s0
     CHECK(only(c, "\x1b]52;q;?\x07").d == "q");
+    CHECK(isReq(only(c, "\x1b]52;c\x07"), "c"));  // 读写都开：没有第二个分号仍按拒绝
     // 只开读不开写
     p = {sizeof(p), 0, 1, 0};
     CHECK(itcore_set_clipboard_policy(c, &p) == 0);
@@ -220,6 +236,11 @@ static void test_osc52() {
     CHECK(itcore_encode_clipboard_reply(c, nullptr, huge.data(), huge.size(), &b) == -2 && !b);
     CHECK(itcore_encode_clipboard_reply(c, nullptr, huge.data(), huge.size() - 1, &b) == 0 && b);
     itcore_buffer_release(b); b = nullptr;
+    // OSC52-02：负载超过 1 MiB 被解析器截断时，不能把前半截写进剪贴板
+    itcore_clipboard_policy bigw{sizeof(bigw), 1, 0, 768u * 1024u};
+    CHECK(itcore_set_clipboard_policy(c, &bigw) == 0);
+    CHECK(isReq(only(c, "\x1b]52;c;" + std::string((1u << 20) + 4, 'Q') + "\x07"), "c"));
+    CHECK(only(c, "\x1b]52;c;aGk=\x07").d == "hi");  // 截断不影响后续
     CHECK(itcore_set_clipboard_policy(c, nullptr) == 0);
     CHECK(isReq(only(c, "\x1b]52;c;aGk=\x07"), "c"));
     itcore_destroy(c);

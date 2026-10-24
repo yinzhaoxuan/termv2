@@ -35,10 +35,17 @@ typedef enum { ITCORE_EV_REPLY_BYTES = 1, ITCORE_EV_TITLE = 2, ITCORE_EV_BELL = 
                ITCORE_EV_RENDER_INVALIDATED = 4, ITCORE_EV_CLIPBOARD_REQUEST = 5,
                /* OSC 1（OSC 0 同时发 TITLE 与 ICON_TITLE）；CSI 23 t 出栈时也会重发 */
                ITCORE_EV_ICON_TITLE = 6,
-               /* B4 OSC 52（须先经 itcore_set_clipboard_policy 打开）：WRITE 负载为解码并清洗后的 UTF-8（非法序列→U+FFFD，
-                  去掉 NUL/C0（保留 \t\n\r）/DEL/C1；目标一律视作系统剪贴板）；READ 负载为规范化的选择参数 Pc
-                  （只含 cpqs0-7，空请求为 "s0"），宿主读取剪贴板后用 itcore_encode_clipboard_reply 生成应答。
-                  非法 Pc 一律 REQUEST（负载为空）；Pd 为空时不产生任何事件（不清空剪贴板） */
+               /* B4 OSC 52（须先经 itcore_set_clipboard_policy 打开）。负载格式：
+                  - WRITE：base64 解码并清洗后的 UTF-8 文本（非法序列→U+FFFD，去掉 NUL/C0（保留 \t\n\r）/DEL/C1；
+                    目标一律视作系统剪贴板）。
+                  - READ：规范化的选择参数 Pc（只含 c p q s 0-7、至多 8 个字符，空请求为 "s0"），宿主读取剪贴板后
+                    用 itcore_encode_clipboard_reply 生成应答（回显该 Pc）。
+                  - REQUEST（已拒绝）：Pc 合法时为规范化的 Pc；Pc 非法时负载为空。未授权、base64 非法、超上限、
+                    缺 Pd 段（"52;c"）、OSC 负载被截断（超过 1 MiB）都按拒绝处理。
+                  Pd 为空，或清洗后为空（如只含 NUL），不产生任何事件（不清空剪贴板）。
+                  与上游 iTerm2 的区别：上游解码后遇 NUL 截断，这里去掉 NUL 等控制字符、保留其后的文本。
+                  三档上限：默认 ITCORE_CLIPBOARD_DEFAULT_MAX（100 KiB，解码后）；可配到封顶 768 KiB（OSC 负载上限的 3/4）；
+                  OSC 负载本身 1 MiB（解析器上限，超出即截断并拒绝）。 */
                ITCORE_EV_CLIPBOARD_WRITE = 7, ITCORE_EV_CLIPBOARD_READ = 8 } itcore_event_kind;
 
 int  itcore_create(const itcore_options *opt, itcore_core **out);
