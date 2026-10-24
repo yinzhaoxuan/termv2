@@ -401,7 +401,9 @@ bool D2DRenderer::recover_device() {
     GridMetrics m = impl_->saved_metrics;
     std::wstring fam = impl_->family; float pt = impl_->size_pt;
     shutdown_device();
-    return init(m, fam.c_str(), pt);
+    if (!init(m, fam.c_str(), pt)) return false;
+    pace_.reset();  // 新交换链：重新开始节流计时
+    return true;
 }
 
 void D2DRenderer::shutdown_device() {
@@ -416,9 +418,11 @@ bool is_lost(HRESULT hr) {
 }
 }  // namespace
 
-bool D2DRenderer::present_frame() {
+bool D2DRenderer::present_frame(PresentMode mode) {
     if (device_lost_ && !recover_device()) return false;
     if (!impl_ || !impl_->d2d || !impl_->swap || !impl_->target || !snap_) return false;
+    const auto pace_action = pace_.decide(now_ms_, mode);
+    if (pace_action == PresentPace::Action::Skip) return false;  // 距上次 Present <16ms：保留脏区
     auto &I = *impl_;
 
     auto L = I.layout.update(itcore_snapshot_columns(snap_), itcore_snapshot_rows(snap_),
@@ -621,8 +625,17 @@ bool D2DRenderer::present_frame() {
     }
     hr = I.d2d->EndDraw();
     if (is_lost(hr)) { device_lost_ = true; return false; }
-    hr = I.swap->Present(1, 0);
+    {
+        const UINT sync = (pace_action == PresentPace::Action::PresentWait) ? 1u : 0u;
+        const UINT flags = (pace_action == PresentPace::Action::PresentNoWait) ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
+        hr = I.swap->Present(sync, flags);
+    }
+    if (hr == DXGI_ERROR_WAS_STILL_DRAWING) {
+        I.dirty.invalidate();  // 未翻到前缓冲：整屏标脏，下次再出
+        return false;
+    }
     if (is_lost(hr)) { device_lost_ = true; return false; }
+    pace_.note_presented(now_ms_);
     I.last_cc = cc; I.last_cr = cr; I.last_vis = vis; I.last_preedit = preedit_.utf8;
     I.last_cursor_on = cursor_on; I.last_cursor_style = cstyle_ps; I.last_focused = focused_;
     last_drawn_revision_ = itcore_snapshot_revision(snap_);
@@ -662,7 +675,7 @@ GridMetrics::Rect D2DRenderer::caret_rect_px() const {
     }
     return metrics_.cell_rect(col, row, 1);
 }
-bool D2DRenderer::present_frame() { return false; }
+bool D2DRenderer::present_frame(PresentMode) { return false; }
 bool D2DRenderer::recover_device() { device_lost_ = false; return true; }
 void D2DRenderer::shutdown_device() {}
 

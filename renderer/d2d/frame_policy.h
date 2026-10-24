@@ -45,4 +45,35 @@ inline TextStyle text_style(uint16_t flags, uint16_t bold_bit, uint16_t italic_b
     return {(flags & bold_bit) != 0, (flags & italic_bit) != 0, (flags & underline_bit) != 0};
 }
 
+
+// Present 节流（PERF-01）：洪峰期避免每次 Present(1,0) 卡 vsync (~16ms) 饿死 UI。
+// 平台无关；D2DRenderer::present_frame 与单测共用。
+enum class PresentMode {
+    VSync,      // 空闲/稳态：允许 Present(sync_interval=1)
+    Immediate,  // 续跑中（FedMore / 即将再 pump）：Present(0, DO_NOT_WAIT)，不堵 UI
+    Force,      // 改尺寸等：始终 Present(1,0)，绕过间隔
+};
+
+struct PresentPace {
+    static constexpr uint64_t kMinIntervalMs = 16;  // ≈60fps 上限
+
+    enum class Action { Skip, PresentWait, PresentNoWait };
+
+    // now_ms：单调毫秒（与 set_clock / steady_clock 一致）
+    Action decide(uint64_t now_ms, PresentMode mode) const {
+        if (mode == PresentMode::Force) return Action::PresentWait;
+        if (have_ && now_ms >= last_ok_ms_ && (now_ms - last_ok_ms_) < kMinIntervalMs)
+            return Action::Skip;  // 距上次成功 Present 过近：保持脏区，下一机会再出
+        return mode == PresentMode::VSync ? Action::PresentWait : Action::PresentNoWait;
+    }
+    void note_presented(uint64_t now_ms) { last_ok_ms_ = now_ms; have_ = true; }
+    void reset() { have_ = false; last_ok_ms_ = 0; }
+    bool have() const { return have_; }
+    uint64_t last_ok_ms() const { return last_ok_ms_; }
+
+private:
+    bool have_ = false;
+    uint64_t last_ok_ms_ = 0;
+};
+
 }  // namespace itren

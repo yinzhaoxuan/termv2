@@ -163,7 +163,7 @@ private:
     void drainCoreEvents();
     void setClipboardUtf8(std::string_view u8);
     std::string getClipboardUtf8();
-    void present(bool force = false);  // force：绕过 SyncGate（改尺寸）
+    void present(bool force = false, itren::PresentMode mode = itren::PresentMode::VSync);  // force：绕过 SyncGate；mode：续跑用 Immediate
     void syncSearchHighlight();        // 把 PaneSearch::ranges() 建进 D2DRenderer 高亮层（无活动搜索则 clear）
     void releaseSnap();
     void onTransportState(TransportState, std::optional<TransportFault>);
@@ -589,7 +589,9 @@ void Win32PaneBackend::pump(bool drainAll) {
     if (r == it2app::PumpResult::Fed || r == it2app::PumpResult::FedMore) {
         syncSelection();       // 输出可能清掉选区（切备用屏 / RIS / ED 3）
         syncViewport();        // 已上翻时偏移随历史增长，视图停在原处
-        present();
+        // PERF-01：续跑中（Timer/Post）不卡 vsync；取空且无续跑则 VSync 稳态
+        const bool cont = (next == Next::Timer || next == Next::Post);
+        present(false, cont ? itren::PresentMode::Immediate : itren::PresentMode::VSync);
     }
 }
 
@@ -610,7 +612,7 @@ void Win32PaneBackend::syncSearchHighlight() {
     renderer_->set_search_highlight(std::move(hl));
 }
 
-void Win32PaneBackend::present(bool force) {
+void Win32PaneBackend::present(bool force, itren::PresentMode mode) {
     if (!renderer_ || !core_) return;
     // ?2026：同步输出期间不取快照，超过 ITREN_SYNC_TIMEOUT_MS 兜底出一帧；关闭（含 DECSTR/RIS）后立即出帧
     // 同一批内“关→内容→开”由 itcore_sync_end_count 变化放行；超时只是每 150ms 出一帧，不清同步状态
@@ -623,7 +625,8 @@ void Win32PaneBackend::present(bool force) {
     renderer_->set_focused(focused_);
     renderer_->set_clock(nowMs());
     syncSearchHighlight();  // 每帧按当前视口重建高亮；无活动搜索 → clear（hit=None，画面与接入前一致）
-    renderer_->present_frame();  // 设备丢失在 present_frame 内 recover_device
+    // force（改尺寸）→ Force 绕过节流；否则按 mode（续跑 Immediate / 空闲 VSync）
+    renderer_->present_frame(force ? itren::PresentMode::Force : mode);
 }
 
 void Win32PaneBackend::pushCellPixelSize() {

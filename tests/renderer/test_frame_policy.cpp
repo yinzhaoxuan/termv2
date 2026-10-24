@@ -30,6 +30,24 @@ int main() {
     CHECK(s.bold && !s.italic && s.underline && s.format_index() == 1);
     s = text_style(ITCORE_CELL_BOLD | ITCORE_CELL_ITALIC, ITCORE_CELL_BOLD, ITCORE_CELL_ITALIC, ITCORE_CELL_UNDERLINE);
     CHECK(s.format_index() == 3 && !s.underline);
+
+    // PERF-01 PresentPace：间隔 / 模式
+    {
+        PresentPace pace;
+        using A = PresentPace::Action;
+        CHECK(pace.decide(0, PresentMode::VSync) == A::PresentWait);
+        CHECK(pace.decide(0, PresentMode::Immediate) == A::PresentNoWait);
+        CHECK(pace.decide(0, PresentMode::Force) == A::PresentWait);
+        pace.note_presented(100);
+        CHECK(pace.decide(100, PresentMode::VSync) == A::Skip);
+        CHECK(pace.decide(115, PresentMode::Immediate) == A::Skip);  // <16ms
+        CHECK(pace.decide(116, PresentMode::VSync) == A::PresentWait);
+        CHECK(pace.decide(116, PresentMode::Immediate) == A::PresentNoWait);
+        CHECK(pace.decide(101, PresentMode::Force) == A::PresentWait);  // Force 绕过间隔
+        pace.reset();
+        CHECK(!pace.have());
+        CHECK(pace.decide(101, PresentMode::VSync) == A::PresentWait);
+    }
     if (!failures) std::printf("frame_policy OK\n");
     return failures ? 1 : 0;
 }

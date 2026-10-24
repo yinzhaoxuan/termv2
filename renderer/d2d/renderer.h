@@ -6,6 +6,7 @@
 #include "itcore.h"
 #include "ime_layout.h"
 #include "search_highlight.h"
+#include "frame_policy.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -66,8 +67,9 @@ public:
     // 动画（光标闪烁 / SGR 5）需要的下一次重绘时间点；0 = 不需要
     bool wants_animation() const { return animating_; }
 
-    // 脏行重绘 + Present；无变化返回 false（跳过 Present）
-    bool present_frame();
+    // 脏行重绘 + Present；无变化或节流 Skip 返回 false（脏区保留）
+    // mode：VSync=空闲稳态等垂直同步；Immediate=续跑中不堵 UI；Force=改尺寸等强制 Present(1,0)
+    bool present_frame(PresentMode mode = PresentMode::VSync);
 
     // IME 候选窗 / TSF NotifyLayoutChanged：有预编辑时为 composition_anchor（组字起点 / Target 子句），不随组字右移
     GridMetrics::Rect caret_rect_px() const;
@@ -99,6 +101,7 @@ private:
     bool device_lost_ = false;
     float stub_size_pt_ = 12.f;  // 非 WIN32 桩：font_metrics 估算用
     DeviceKind device_kind_ = DeviceKind::None;
+    PresentPace pace_;
     std::unique_ptr<Impl> impl_;
 };
 
