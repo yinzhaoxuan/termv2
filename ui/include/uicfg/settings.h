@@ -30,6 +30,9 @@ struct SettingsFile {
   std::optional<std::string> wordChars;
   // 文件里有 osc52 字段才有值（且只在有值时写回，保持隐藏）。字段缺失、任一子字段缺失或类型不对 → 默认全关
   std::optional<Osc52Settings> osc52;
+  // osc52 不合法时：原样的 JSON 值（序列化文本），osc52 按全关；保存时原样写回，不覆盖用户手写内容
+  std::optional<std::string> osc52Raw;
+  bool osc52Invalid() const { return osc52Raw.has_value(); }
   Osc52Settings osc52OrDefault() const { return osc52.value_or(Osc52Settings{}); }
 };
 

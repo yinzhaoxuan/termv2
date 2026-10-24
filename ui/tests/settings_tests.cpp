@@ -2,6 +2,7 @@
 #include <fstream>
 #include "uicfg/settings.h"
 #include "uicfg/shell_logic.h"
+#include <nlohmann/json.hpp>
 using namespace uicfg;
 namespace fs = std::filesystem;
 static int fails = 0;
@@ -89,7 +90,8 @@ int main() {
     // maxBytes 原样（超过 768 KiB 也不在 UI 钳）
     write(R"({"schemaVersion":1,"osc52":{"allowWrite":true,"allowRead":true,"maxBytes":4000000000}})");
     { auto o3 = loadSettings(f); CHECK(o3.data.osc52 && o3.data.osc52->allowRead && o3.data.osc52->maxBytes == 4000000000u); }
-    // 任一字段缺失 / 类型不对 → 默认全关（字段仍算存在，写回为全关）
+    CHECK(!o.data.osc52Invalid());
+    // 任一字段缺失 / 类型不对 → 默认全关；保存时原样写回（不覆盖手写内容）
     const char* bad[] = {
         R"({"schemaVersion":1,"osc52":{"allowWrite":true,"allowRead":true}})",
         R"({"schemaVersion":1,"osc52":{"allowWrite":"yes","allowRead":true,"maxBytes":0}})",
@@ -103,6 +105,14 @@ int main() {
       write(b);
       auto rb = loadSettings(f);
       CHECK(rb.status == LoadStatus::Ok && rb.data.osc52 && *rb.data.osc52 == Osc52Settings{});
+      CHECK(rb.data.osc52Invalid() && rb.data.osc52OrDefault() == Osc52Settings{});
+      const std::string raw = nlohmann::json::parse(b)["osc52"].dump();
+      CHECK(rb.data.osc52Raw && *rb.data.osc52Raw == raw);
+      CHECK(saveSettings(f, rb.data, false, &err));                     // 往返
+      std::ifstream in(f); auto saved = nlohmann::json::parse(in);
+      CHECK(saved.contains("osc52") && saved["osc52"] == nlohmann::json::parse(raw));  // 原样
+      auto rb2 = loadSettings(f);
+      CHECK(rb2.data.osc52Raw && *rb2.data.osc52Raw == raw && rb2.data.osc52OrDefault() == Osc52Settings{});
     }
   }
 

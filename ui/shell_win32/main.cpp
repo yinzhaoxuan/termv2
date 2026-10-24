@@ -1222,6 +1222,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
       app.settings.fontFamily = defaultSettings().fontFamily;
     }
   }
+  if (app.settings.osc52Invalid()) {  // 隐藏字段 osc52 不合法：按全关，提示一次（文件里的原值保存时原样写回）
+    app.statusNote += (app.statusNote.empty() ? "" : "；") + std::string("osc52 配置无效，已按全关处理");
+    OutputDebugStringW(L"it2w_shell: settings.json osc52 配置无效，已按全关处理\n");
+  }
   auto lw = loadWorkspace(app.configDir / "workspace.json");
   app.ws = std::move(lw.data); app.wsReadOnly = lw.readOnly;
 

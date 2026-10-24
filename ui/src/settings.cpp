@@ -8,14 +8,13 @@ using nlohmann::json;
 
 namespace {
 
-// osc52：三个子字段必须齐全且类型正确，否则整体退回默认（全关）
-Osc52Settings parseOsc52(const json& o) {
-  Osc52Settings d;
-  if (!o.is_object()) return d;
+// osc52：三个子字段必须齐全且类型正确，否则 nullopt（调用方按全关处理并保留原值）
+std::optional<Osc52Settings> parseOsc52(const json& o) {
+  if (!o.is_object()) return std::nullopt;
   auto b = [&](const char* k) { return o.contains(k) && o[k].is_boolean(); };
-  if (!b("allowWrite") || !b("allowRead") || !o.contains("maxBytes") || !o["maxBytes"].is_number_integer()) return d;
+  if (!b("allowWrite") || !b("allowRead") || !o.contains("maxBytes") || !o["maxBytes"].is_number_integer()) return std::nullopt;
   const json& m = o["maxBytes"];
-  if (m.is_number_unsigned() ? m.get<std::uint64_t>() > UINT32_MAX : m.get<std::int64_t>() < 0) return d;
+  if (m.is_number_unsigned() ? m.get<std::uint64_t>() > UINT32_MAX : m.get<std::int64_t>() < 0) return std::nullopt;
   Osc52Settings s;
   s.allowWrite = o["allowWrite"].get<bool>();
   s.allowRead = o["allowRead"].get<bool>();
@@ -64,7 +63,10 @@ Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
     f.fontSize = j.value("fontSize", 12.0);
     f.fontFamily = j.value("fontFamily", "Cascadia Mono");
     if (j.contains("wordChars") && j["wordChars"].is_string()) f.wordChars = j["wordChars"].get<std::string>();
-    if (j.contains("osc52")) f.osc52 = parseOsc52(j["osc52"]);  // 有字段才记（写回时保持原样存在）
+    if (j.contains("osc52")) {  // 有字段才记（写回时保持存在）
+      if (auto o = parseOsc52(j["osc52"])) f.osc52 = *o;
+      else { f.osc52 = Osc52Settings{}; f.osc52Raw = j["osc52"].dump(); }  // 不合法：按全关，原值留着写回
+    }
     if (j.contains("keybindings") && j.at("keybindings").is_object()) {
       for (auto it = j.at("keybindings").begin(); it != j.at("keybindings").end(); ++it)
         f.keybindings[it.key()] = it.value().get<std::string>();
@@ -164,7 +166,8 @@ bool saveSettings(const fs::path& file, SettingsFile& data, bool readOnly, std::
          {"fontSize", data.fontSize}, {"fontFamily", data.fontFamily},
          {"keybindings", kb}};
   if (data.wordChars) j["wordChars"] = *data.wordChars;
-  if (data.osc52)
+  if (data.osc52Raw) j["osc52"] = json::parse(*data.osc52Raw, nullptr, false);  // 不合法的原值原样写回
+  else if (data.osc52)
     j["osc52"] = {{"allowWrite", data.osc52->allowWrite}, {"allowRead", data.osc52->allowRead}, {"maxBytes", data.osc52->maxBytes}};
   fs::path tmp = file; tmp += ".tmp";
   if (!writeDurable(tmp, j.dump(2), error)) { std::error_code ec; fs::remove(tmp, ec); return false; }
