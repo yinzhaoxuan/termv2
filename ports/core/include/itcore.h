@@ -35,8 +35,10 @@ typedef enum { ITCORE_EV_REPLY_BYTES = 1, ITCORE_EV_TITLE = 2, ITCORE_EV_BELL = 
                ITCORE_EV_RENDER_INVALIDATED = 4, ITCORE_EV_CLIPBOARD_REQUEST = 5,
                /* OSC 1（OSC 0 同时发 TITLE 与 ICON_TITLE）；CSI 23 t 出栈时也会重发 */
                ITCORE_EV_ICON_TITLE = 6,
-               /* B4 OSC 52（须先经 itcore_set_clipboard_policy 打开）：WRITE 负载为解码后的字节（目标一律视作系统剪贴板），
-                  READ 负载为选择参数（如 "c"），宿主读取剪贴板后用 itcore_encode_clipboard_reply 生成应答 */
+               /* B4 OSC 52（须先经 itcore_set_clipboard_policy 打开）：WRITE 负载为解码并清洗后的 UTF-8（非法序列→U+FFFD，
+                  去掉 NUL/C0（保留 \t\n\r）/DEL/C1；目标一律视作系统剪贴板）；READ 负载为规范化的选择参数 Pc
+                  （只含 cpqs0-7，空请求为 "s0"），宿主读取剪贴板后用 itcore_encode_clipboard_reply 生成应答。
+                  非法 Pc 一律 REQUEST（负载为空）；Pd 为空时不产生任何事件（不清空剪贴板） */
                ITCORE_EV_CLIPBOARD_WRITE = 7, ITCORE_EV_CLIPBOARD_READ = 8 } itcore_event_kind;
 
 int  itcore_create(const itcore_options *opt, itcore_core **out);
@@ -187,11 +189,12 @@ int  itcore_set_word_chars(itcore_core *c, const char *chars, size_t len);
 /* B4 OSC 52 剪贴板策略。默认全关：任何 OSC 52 都只产生 CLIPBOARD_REQUEST（已拒绝）事件。
    allow_write：OSC 52;sel;<base64> 解码后不超过 max_bytes 时产生 CLIPBOARD_WRITE；超限/非法 base64 仍为 REQUEST（拒绝）。
    allow_read：OSC 52;sel;? 产生 CLIPBOARD_READ；不打开则拒绝。读与写分开授权（读会把剪贴板泄露给远端程序）。
-   max_bytes 为 0 用默认 ITCORE_CLIPBOARD_DEFAULT_MAX。cfg 为 NULL 恢复默认（全关）。线程同 itcore_feed（UI 线程）。成功 0 */
+   max_bytes 为 0 用默认 ITCORE_CLIPBOARD_DEFAULT_MAX，大于 768 KiB 钳到 768 KiB（OSC 负载上限 1 MiB 的 3/4）；
+   base64 中的空白（空格/\t/\r/\n）忽略。cfg 为 NULL 恢复默认（全关）。线程同 itcore_feed（UI 线程）。成功 0 */
 #define ITCORE_CLIPBOARD_DEFAULT_MAX (100u * 1024u)
 typedef struct { uint32_t struct_size; int allow_write; int allow_read; uint32_t max_bytes; } itcore_clipboard_policy;
 int  itcore_set_clipboard_policy(itcore_core *c, const itcore_clipboard_policy *cfg);
-/* 生成 OSC 52 读应答 ESC]52;c;<base64><结尾>。req 为触发它的 CLIPBOARD_READ 事件（须在 itcore_event_release 前调用），
+/* 生成 OSC 52 读应答 ESC]52;<Pc>;<base64><结尾>，Pc 回显 req 的选择参数（req 为 NULL 用 c）。req 为触发它的 CLIPBOARD_READ 事件（须在 itcore_event_release 前调用），
    结尾与请求一致：BEL 请求回 BEL，ST 请求回 ESC\（同 OSC 4/10/11/12）；req 为 NULL 用 ST，非 READ 事件返回 -1。
    未允许读返回 1，utf8 超过 max_bytes 返回 -2（*out=null），成功 0 */
 int  itcore_encode_clipboard_reply(itcore_core *c, const itcore_event *req, const char *utf8, size_t len, itcore_buffer **out);

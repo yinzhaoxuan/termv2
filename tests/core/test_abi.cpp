@@ -135,8 +135,30 @@ static void test_osc52() {
     w = only(c, "\x1b]52;p;5Lit\x1b\\");  // ST 结尾、UTF-8
     CHECK(w.k == ITCORE_EV_CLIPBOARD_WRITE && w.d == "\xe4\xb8\xad");
     CHECK(only(c, "\x1b]52;c;aGk\x07").d == "hi");  // 无填充也接受
-    w = only(c, "\x1b]52;c;\x07");                  // 空 → 清空剪贴板
-    CHECK(w.k == ITCORE_EV_CLIPBOARD_WRITE && w.d.empty());
+    auto none = [&](const std::string &in) {
+        feed(c, in); int n = 0;
+        for (auto &e : drain(c)) if (e.k != ITCORE_EV_RENDER_INVALIDATED) ++n;
+        return n == 0;
+    };
+    CHECK(none("\x1b]52;c;\x07"));                   // 空 Pd：不动剪贴板，不产生事件
+    CHECK(none("\x1b]52;;\x1b\\"));
+    // base64 空白（折行）忽略
+    CHECK(only(c, "\x1b]52;c;aG\r\nk=\x07").d == "hi");
+    CHECK(only(c, "\x1b]52;c; aGk= \x07").d == "hi");
+    CHECK(isReq(only(c, "\x1b]52;c;aGkx\nY\x07"), "c"));  // 有效字符 5 个：多出 1 个不成字节
+    // 清洗：控制字符去掉、非法 UTF-8 → U+FFFD、C1 去掉
+    CHECK(only(c, "\x1b]52;c;YRtbbQAKYg==\x07").d == "a[m\nb");                    // "a\x1b[m\0\nb"：ESC、NUL 去掉，\n 保留
+    CHECK(only(c, "\x1b]52;c;/w==\x07").d == "\xEF\xBF\xBD");                       // 0xFF
+    CHECK(only(c, "\x1b]52;c;wpt4\x07").d == "x");                                   // U+009B（CSI）+ x
+    CHECK(only(c, "\x1b]52;c;wK8=\x07").d == "\xEF\xBF\xBD\xEF\xBF\xBD");             // 过长编码 C0 AF
+    CHECK(isReq(only(c, "\x1b]52;c;7aCA\x07"), "c"));                                  // 代理 U+D800 → 3 个 U+FFFD = 9 字节 > 8
+    CHECK(isReq(only(c, "\x1b]52;c;/////w==\x07"), "c"));                           // 4 个 0xFF → 12 字节 > 8
+    // Pc 校验：非法字符/过长拒绝（负载为空）；空 Pc → s0
+    CHECK(isReq(only(c, "\x1b]52;x;aGk=\x07"), ""));
+    CHECK(isReq(only(c, "\x1b]52;c!;aGk=\x07"), ""));
+    CHECK(isReq(only(c, "\x1b]52;ccccccccc;aGk=\x07"), ""));
+    CHECK(only(c, "\x1b]52;s0;aGk=\x07").k == ITCORE_EV_CLIPBOARD_WRITE);
+    CHECK(only(c, "\x1b]52;;aGk=\x07").k == ITCORE_EV_CLIPBOARD_WRITE);
     CHECK(isReq(only(c, "\x1b]52;c;MTIzNDU2Nzg=\x07"), "c") == false);  // 恰 8 字节：允许
     CHECK(isReq(only(c, "\x1b]52;c;MTIzNDU2Nzg5\x07"), "c"));          // 9 字节：超上限
     CHECK(isReq(only(c, "\x1b]52;c;" + std::string(4096, 'A') + "\x07"), "c"));  // 远超：不解码直接拒
@@ -178,6 +200,9 @@ static void test_osc52() {
     CHECK(replyFor("\x1b]52;c;?\x07") == "\x1b]52;c;aGk=\x07");
     CHECK(replyFor("\x1b]52;c;?\x1b\\") == "\x1b]52;c;aGk=\x1b\\");
     CHECK(replyFor("\x1b]52;c;?\x07\x1b[5n") == "\x1b]52;c;aGk=\x07");  // 与 DSR 同批，非 READ 事件被拒
+    CHECK(replyFor("\x1b]52;p;?\x07") == "\x1b]52;p;aGk=\x07");           // Pc 回显
+    CHECK(replyFor("\x1b]52;;?\x07") == "\x1b]52;s0;aGk=\x07");           // 空 Pc → s0
+    CHECK(only(c, "\x1b]52;q;?\x07").d == "q");
     // 只开读不开写
     p = {sizeof(p), 0, 1, 0};
     CHECK(itcore_set_clipboard_policy(c, &p) == 0);
@@ -188,6 +213,14 @@ static void test_osc52() {
     CHECK(isReq(only(c, "\x1b]52;c;?\x07"), "c"));
     itcore_clipboard_policy bad{4, 1, 1, 0};
     CHECK(itcore_set_clipboard_policy(c, &bad) == -1);
+    // max_bytes 超过 OSC 负载能承载的量：钳到 768 KiB（读应答上限随之）
+    itcore_clipboard_policy big{sizeof(big), 0, 1, 0xFFFFFFFFu};
+    CHECK(itcore_set_clipboard_policy(c, &big) == 0);
+    std::string huge(768u * 1024u + 1, 'x');
+    CHECK(itcore_encode_clipboard_reply(c, nullptr, huge.data(), huge.size(), &b) == -2 && !b);
+    CHECK(itcore_encode_clipboard_reply(c, nullptr, huge.data(), huge.size() - 1, &b) == 0 && b);
+    itcore_buffer_release(b); b = nullptr;
+    CHECK(itcore_set_clipboard_policy(c, nullptr) == 0);
     CHECK(isReq(only(c, "\x1b]52;c;aGk=\x07"), "c"));
     itcore_destroy(c);
 }

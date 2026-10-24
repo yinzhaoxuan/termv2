@@ -201,19 +201,22 @@ struct itcore_core final : itcore::TokenSink {
     // B4 OSC 52
     bool clip_write = false, clip_read = false;
     size_t clip_max = ITCORE_CLIPBOARD_DEFAULT_MAX;
+    // base64 解码：跳过空白（有的程序按 76 列折行）；填充只能在末尾、至多 2 个；有填充时有效字符数须为 4 的倍数
     static bool b64_decode(std::string_view in, size_t cap, std::string *out) {
         out->clear();
-        uint32_t acc = 0; int bits = 0; size_t pad = 0;
+        uint32_t acc = 0; int bits = 0; size_t pad = 0, n = 0;
         for (char ch : in) {
             int v;
+            if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
             if (ch >= 'A' && ch <= 'Z') v = ch - 'A';
             else if (ch >= 'a' && ch <= 'z') v = ch - 'a' + 26;
             else if (ch >= '0' && ch <= '9') v = ch - '0' + 52;
             else if (ch == '+') v = 62;
             else if (ch == '/') v = 63;
-            else if (ch == '=') { ++pad; continue; }
+            else if (ch == '=') { ++pad; ++n; continue; }
             else return false;
             if (pad) return false;  // '=' 之后不得再有数据
+            ++n;
             acc = (acc << 6) | uint32_t(v); bits += 6;
             if (bits >= 8) {
                 bits -= 8;
@@ -221,24 +224,60 @@ struct itcore_core final : itcore::TokenSink {
                 out->push_back(char((acc >> bits) & 0xFF));
             }
         }
-        return pad <= 2 && (in.size() % 4 == 0 || pad == 0);
+        if (n % 4 == 1 && !pad) return false;  // 单个多余字符不构成字节
+        return pad <= 2 && (n % 4 == 0 || pad == 0);
+    }
+    // 写入剪贴板前清洗：非法 UTF-8 → U+FFFD；去掉 NUL、除 \t \n \r 外的 C0、DEL、C1（U+0080..U+009F）
+    static std::string clip_sanitize(const std::string &in) {
+        std::string o; o.reserve(in.size());
+        const auto *b = reinterpret_cast<const unsigned char *>(in.data());
+        size_t i = 0, n = in.size();
+        while (i < n) {
+            unsigned char c = b[i];
+            if (c < 0x80) {
+                if (c >= 0x20 ? c != 0x7F : (c == '\t' || c == '\n' || c == '\r')) o.push_back(char(c));
+                ++i; continue;
+            }
+            size_t len = c >= 0xC2 && c <= 0xDF ? 2 : c >= 0xE0 && c <= 0xEF ? 3 : c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+            bool ok = len && i + len <= n;
+            for (size_t k = 1; ok && k < len; ++k) ok = (b[i + k] & 0xC0) == 0x80;
+            if (ok && len == 3) ok = !(c == 0xE0 && b[i + 1] < 0xA0) && !(c == 0xED && b[i + 1] >= 0xA0);  // 过长 / 代理
+            if (ok && len == 4) ok = !(c == 0xF0 && b[i + 1] < 0x90) && !(c == 0xF4 && b[i + 1] >= 0x90);  // 过长 / > U+10FFFF
+            if (!ok) { o += "\xEF\xBF\xBD"; ++i; continue; }
+            if (len == 2 && c == 0xC2 && b[i + 1] <= 0x9F) { i += 2; continue; }  // C1
+            o.append(in, i, len); i += len;
+        }
+        return o;
+    }
+    // Pc：只允许 xterm 的选择字符 c p q s 0-7，至多 8 个；空 → "s0"（xterm 默认）。非法返回 false
+    static bool clip_selection(std::string_view pc, std::string *out) {
+        if (pc.empty()) { *out = "s0"; return true; }
+        if (pc.size() > 8) return false;
+        for (char ch : pc)
+            if (!(ch == 'c' || ch == 'p' || ch == 'q' || ch == 's' || (ch >= '0' && ch <= '7'))) return false;
+        out->assign(pc);
+        return true;
     }
     void osc52(const std::string &arg, bool bel) {
         auto sc = arg.find(';');
-        std::string sel = arg.substr(0, sc);
+        std::string sel;
+        if (!clip_selection(std::string_view(arg).substr(0, sc), &sel)) { push(ITCORE_EV_CLIPBOARD_REQUEST); return; }  // 非法 Pc：拒绝，负载为空
         if (sc == std::string::npos) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }
         std::string_view data = std::string_view(arg).substr(sc + 1);
+        if (data.empty()) return;  // 空 Pd：不动剪贴板（同上游 iTerm2）
         if (data == "?") {
             if (!clip_read) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }
-            push(ITCORE_EV_CLIPBOARD_READ, sel);
+            push(ITCORE_EV_CLIPBOARD_READ, sel);  // 负载为规范化的 Pc，应答原样回显
             events.back()->bel_term = bel;
             return;
         }
         std::string dec;
-        if (!clip_write || data.size() > (clip_max / 3 + 1) * 4 || !b64_decode(data, clip_max, &dec)) {
+        if (!clip_write || data.size() > (clip_max / 3 + 1) * 4 + data.size() / 64 * 2 || !b64_decode(data, clip_max, &dec)) {
             push(ITCORE_EV_CLIPBOARD_REQUEST, sel);
             return;
         }
+        dec = clip_sanitize(dec);
+        if (dec.size() > clip_max) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }  // 替换字符撑大后超限
         push(ITCORE_EV_CLIPBOARD_WRITE, std::move(dec));
     }
     ~itcore_core() override { for (auto *e : events) delete e; }
@@ -482,6 +521,8 @@ int itcore_set_clipboard_policy(itcore_core *c, const itcore_clipboard_policy *c
     c->clip_write = cfg->allow_write != 0;
     c->clip_read = cfg->allow_read != 0;
     c->clip_max = cfg->max_bytes ? cfg->max_bytes : ITCORE_CLIPBOARD_DEFAULT_MAX;
+    // OSC 负载本身不超过解析器上限（1 MiB），解码后至多 3/4；更大的 max_bytes 没有意义，钳住
+    c->clip_max = std::min<size_t>(c->clip_max, itcore::kMaxStringPayload / 4 * 3);
     return 0;
 }
 int itcore_encode_clipboard_reply(itcore_core *c, const itcore_event *req, const char *utf8, size_t len, itcore_buffer **out) {
@@ -491,8 +532,9 @@ int itcore_encode_clipboard_reply(itcore_core *c, const itcore_event *req, const
     if (!c->clip_read) return 1;
     if (len > c->clip_max) return -2;
     static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string s = "\x1b]52;c;";
-    s.reserve(10 + (len + 2) / 3 * 4 + 2);
+    // Pc 回显请求里规范化后的选择（空请求为 s0）；req 为 NULL 用 c
+    std::string s = "\x1b]52;" + ((req && !req->data.empty()) ? req->data : std::string("c")) + ";";
+    s.reserve(s.size() + (len + 2) / 3 * 4 + 2);
     for (size_t i = 0; i < len; i += 3) {
         uint32_t v = uint32_t(uint8_t(utf8[i])) << 16;
         if (i + 1 < len) v |= uint32_t(uint8_t(utf8[i + 1])) << 8;
