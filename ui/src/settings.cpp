@@ -63,6 +63,24 @@ Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
 
 }  // namespace
 
+const std::vector<std::string>& presetFontFamilies() {
+  static const std::vector<std::string> v{"Cascadia Mono", "Consolas", "Courier New"};
+  return v;
+}
+
+std::optional<std::string> normalizeFontFamily(const std::string& in) {
+  auto b = in.find_first_not_of(" \t\r\n");
+  if (b == std::string::npos) return std::nullopt;
+  std::string s = in.substr(b, in.find_last_not_of(" \t\r\n") - b + 1);
+  size_t chars = 0;  // 按 UTF-16 码元近似：4 字节 UTF-8 序列算 2
+  for (unsigned char c : s) {
+    if (c < 0x20 || c == 0x7f) return std::nullopt;
+    if ((c & 0xC0) != 0x80) chars += c >= 0xF0 ? 2 : 1;
+  }
+  if (chars > 31) return std::nullopt;
+  return s;
+}
+
 SettingsFile defaultSettings() {
   SettingsFile f;
   for (const auto& [action, chord] : kDefaults) f.keybindings[action] = chord;
@@ -78,6 +96,8 @@ std::vector<ValidationError> validateSettings(const SettingsFile& data) {
   std::vector<ValidationError> errs;
   if (!(data.fontSize >= 6.0 && data.fontSize <= 72.0))
     errs.push_back({"fontSize", "字号必须在 6–72"});
+  if (!normalizeFontFamily(data.fontFamily))
+    errs.push_back({"fontFamily", "字体名不能为空、不能含控制字符，且不超过 31 个字符"});
   std::map<std::string, std::string> chordToAction;
   for (const auto& [action, chord] : data.keybindings) {
     if (chord.empty()) { errs.push_back({action, "快捷键不能为空"}); continue; }

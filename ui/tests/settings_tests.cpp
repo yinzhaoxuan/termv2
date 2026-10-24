@@ -51,6 +51,21 @@ int main() {
   { auto r2 = loadSettings(f); CHECK(r2.data.wordChars && *r2.data.wordChars == "/-_."); }
   CHECK(r.data.keybindings.at("pasteCtrlV") == "Ctrl+V");
 
+  // 字体族
+  CHECK(presetFontFamilies().size() == 3 && presetFontFamilies()[0] == d.fontFamily);
+  CHECK(normalizeFontFamily("  Consolas ") == std::string("Consolas"));
+  CHECK(normalizeFontFamily("更纱黑体 Mono SC") == std::string("更纱黑体 Mono SC"));
+  CHECK(!normalizeFontFamily("") && !normalizeFontFamily("   ") && !normalizeFontFamily("A\tB"));
+  CHECK(normalizeFontFamily(std::string(31, 'x')) && !normalizeFontFamily(std::string(32, 'x')));
+  {
+    SettingsFile ff = r.data; ff.fontFamily = "Consolas";
+    CHECK(saveSettings(f, ff, false, &err));
+    CHECK(loadSettings(f).data.fontFamily == "Consolas");
+    ff.fontFamily = "";
+    CHECK(!validateSettings(ff).empty() && !saveSettings(f, ff, false, &err));
+    CHECK(loadSettings(f).data.fontFamily == "Consolas");  // 非法值不写回
+  }
+
   resetKeybindings(r.data);
   CHECK(r.data.keybindings.at("newTab") == "Ctrl+Shift+T");
 

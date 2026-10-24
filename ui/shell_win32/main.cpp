@@ -9,6 +9,7 @@
 #endif
 #include <windows.h>
 #include <commctrl.h>
+#include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <windowsx.h>
@@ -66,6 +67,8 @@ std::string U(const std::wstring& w) {
 constexpr wchar_t kMainClass[] = L"it2w_shell_main";
 constexpr wchar_t kPaneHostClass[] = L"it2w_shell_pane";
 constexpr UINT kMsgViewport = WM_APP + 1;
+constexpr UINT kSysCmdFont = 0x0100;  // 系统菜单「字体…」（低 4 位须为 0）
+constexpr UINT kIdFontPreset = 0x1000, kIdFontOther = 0x10FF;  // 字体弹出菜单项
 constexpr UINT_PTR kIdSearch = 101, kIdTree = 102, kIdTabs = 103, kIdStatus = 104, kIdReconnect = 200;
 
 struct PaneHost {
@@ -491,20 +494,84 @@ void pasteClipboard() {
 
 uishell::PaneBackendFactory makeFactory();
 
-// 字号：6–72，写回 settings.json；经 setFont 运行时应用到所有窗格
-void applyFontSize(double v) {
-  if (v == g->settings.fontSize) { g->statusNote = "字号已是 " + std::to_string((int)v) + " pt"; updateStatusBar(); return; }
-  g->settings.fontSize = v;
+// 字体（族 + 字号）：写回 settings.json；经 setFont 运行时应用到所有窗格，新窗格经 factory 生效
+void applyFont(const std::string& family, double size, const std::string& okNote) {
+  g->settings.fontFamily = family;
+  g->settings.fontSize = size;
   std::string err;
-  if (g->settingsReadOnly) g->statusNote = "settings.json 只读，字号未保存";
+  if (g->settingsReadOnly) g->statusNote = "settings.json 只读，字体未保存（本次运行有效）";
   else if (!saveSettings(g->configDir / "settings.json", g->settings, false, &err)) g->statusNote = "保存 settings.json 失败：" + err;
-  else g->statusNote = "字号 " + std::to_string((int)v) + " pt";
+  else g->statusNote = okNote;
   g->factory = makeFactory();
   for (auto& [id, p] : g->panes) {
-    if (p->backend) p->backend->setFont(g->settings.fontFamily, (float)v);
+    if (p->backend) p->backend->setFont(family, (float)size);
     updateScrollBar(*p);
   }
   updateStatusBar();
+}
+
+// 字号：6–72
+void applyFontSize(double v) {
+  if (v == g->settings.fontSize) { g->statusNote = "字号已是 " + std::to_string((int)v) + " pt"; updateStatusBar(); return; }
+  applyFont(g->settings.fontFamily, v, "字号 " + std::to_string((int)v) + " pt");
+}
+
+bool fontInstalled(const std::string& family) {
+  std::wstring w = W(family);
+  LOGFONTW lf{}; lf.lfCharSet = DEFAULT_CHARSET;
+  wcsncpy(lf.lfFaceName, w.c_str(), LF_FACESIZE - 1);
+  bool found = false;
+  HDC dc = GetDC(nullptr);
+  EnumFontFamiliesExW(dc, &lf, [](const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM p) -> int { *reinterpret_cast<bool*>(p) = true; return 0; },
+                      (LPARAM)&found, 0);
+  ReleaseDC(nullptr, dc);
+  return found;
+}
+
+void applyFontFamily(const std::string& input, double size) {
+  auto fam = normalizeFontFamily(input);
+  if (!fam) { MessageBoxW(g->main, L"字体名无效：不能为空、不能含控制字符，且不超过 31 个字符。", L"字体", MB_OK | MB_ICONWARNING); return; }
+  size = std::clamp(size, kMinFontSize, kMaxFontSize);
+  if (*fam == g->settings.fontFamily && size == g->settings.fontSize) { g->statusNote = "字体已是 " + *fam; updateStatusBar(); return; }
+  applyFont(*fam, size, "字体 " + *fam + " " + std::to_string((int)size) + " pt");
+}
+
+// 其他字体：系统字体对话框，只列等宽字体；字体名框可直接输入任意名称
+void chooseOtherFont() {
+  LOGFONTW lf{};
+  std::wstring cur = W(g->settings.fontFamily);
+  wcsncpy(lf.lfFaceName, cur.c_str(), LF_FACESIZE - 1);
+  HDC dc = GetDC(g->main);
+  lf.lfHeight = -MulDiv((int)std::lround(g->settings.fontSize), GetDeviceCaps(dc, LOGPIXELSY), 72);
+  ReleaseDC(g->main, dc);
+  CHOOSEFONTW cf{}; cf.lStructSize = sizeof cf; cf.hwndOwner = g->main; cf.lpLogFont = &lf;
+  cf.Flags = CF_SCREENFONTS | CF_FIXEDPITCHONLY | CF_INITTOLOGFONTSTRUCT | CF_NOVERTFONTS | CF_LIMITSIZE;
+  cf.nSizeMin = (INT)kMinFontSize; cf.nSizeMax = (INT)kMaxFontSize;
+  if (!ChooseFontW(&cf)) return;  // 取消
+  applyFontFamily(U(lf.lfFaceName), cf.iPointSize > 0 ? cf.iPointSize / 10.0 : g->settings.fontSize);
+}
+
+// 字体菜单：常见等宽字体（未安装的置灰）+「其他…」，在鼠标位置弹出
+void showFontMenu() {
+  HMENU m = CreatePopupMenu(); if (!m) return;
+  const auto& presets = presetFontFamilies();
+  bool inPresets = false;
+  for (size_t i = 0; i < presets.size(); ++i) {
+    bool cur = presets[i] == g->settings.fontFamily; inPresets |= cur;
+    UINT f = MF_STRING | (cur ? MF_CHECKED : 0) | (fontInstalled(presets[i]) ? 0 : MF_GRAYED);
+    std::wstring t = W(presets[i]); if (f & MF_GRAYED) t += L"（未安装）";
+    AppendMenuW(m, f, kIdFontPreset + (UINT)i, t.c_str());
+  }
+  AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+  std::wstring other = inPresets ? L"其他等宽字体…" : L"其他等宽字体…（当前：" + W(g->settings.fontFamily) + L"）";
+  AppendMenuW(m, MF_STRING | (inPresets ? 0 : MF_CHECKED), kIdFontOther, other.c_str());
+  POINT pt; GetCursorPos(&pt);
+  SetForegroundWindow(g->main);
+  UINT cmd = (UINT)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.x, pt.y, 0, g->main, nullptr);
+  DestroyMenu(m);
+  if (cmd >= kIdFontPreset && cmd < kIdFontPreset + presets.size()) applyFontFamily(presets[cmd - kIdFontPreset], g->settings.fontSize);
+  else if (cmd == kIdFontOther) chooseOtherFont();
+  if (Tab* t = g->tabBar.activeTab()) focusPane(t->activePaneId);  // 焦点还给终端
 }
 
 bool runAction(const KeyMatch& m) {
@@ -531,6 +598,7 @@ bool runAction(const KeyMatch& m) {
     return true;
   }
   if (auto fsz = fontSizeFor(a, g->settings.fontSize)) { applyFontSize(*fsz); return true; }
+  if (a == "chooseFont") { showFontMenu(); return true; }  // 无默认快捷键；可在 settings.json 绑定，系统菜单「字体…」同效
   if (a == "copy") { copySelection(); return true; }
   if (a == "paste") { pasteClipboard(); return true; }
   if (a == "pasteCtrlV" || a == "pasteShiftInsert") { pasteClipboard(); return true; }
@@ -806,9 +874,16 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       g->tabs = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_FOCUSNEVER, 0, 0, 0, 0, h, (HMENU)kIdTabs, g->inst, nullptr);
       g->statusBar = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, h, (HMENU)kIdStatus, g->inst, nullptr);
       SetWindowSubclass(g->tabs, TabSubclass, 1, 0);
+      if (HMENU sys = GetSystemMenu(h, FALSE)) {  // 系统菜单（标题栏图标 / Alt+Space）加「字体…」
+        AppendMenuW(sys, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(sys, MF_STRING, kSysCmdFont, L"字体…");
+      }
       for (HWND c : {g->search, g->tree, g->tabs, g->statusBar}) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
       return 0;
     }
+    case WM_SYSCOMMAND:
+      if ((w & 0xFFF0) == kSysCmdFont) { showFontMenu(); return 0; }
+      break;
     case WM_SIZE: layoutAll(); return 0;
     case WM_DPICHANGED: {
       g->dpi = HIWORD(w);
@@ -956,6 +1031,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   app.settings = (ls.status == LoadStatus::NotFound || ls.status == LoadStatus::Corrupt) ? defaultSettings() : ls.data;
   app.settingsReadOnly = ls.readOnly;
   app.settings.fontSize = std::clamp(app.settings.fontSize, kMinFontSize, kMaxFontSize);
+  if (auto fam = normalizeFontFamily(app.settings.fontFamily)) app.settings.fontFamily = *fam;
+  else app.settings.fontFamily = defaultSettings().fontFamily;  // 非法字体名：回退默认，免得之后保存失败
   auto lw = loadWorkspace(app.configDir / "workspace.json");
   app.ws = std::move(lw.data); app.wsReadOnly = lw.readOnly;
 

@@ -34,6 +34,11 @@ SettingsLoadResult loadSettings(const std::filesystem::path& file);
 bool saveSettings(const std::filesystem::path& file, SettingsFile& data,
                   bool readOnly, std::string* error);
 
+// 字体族：菜单里列出的常见等宽字体（顺序即显示顺序）
+const std::vector<std::string>& presetFontFamilies();
+// 用户输入的字体族 → 规范化（去首尾空白）；空、含控制字符或超过 31 个字符（LOGFONT 上限）返回 nullopt
+std::optional<std::string> normalizeFontFamily(const std::string& input);
+
 // 恢复全部快捷键为默认；外观字段不动
 void resetKeybindings(SettingsFile& data);
 
