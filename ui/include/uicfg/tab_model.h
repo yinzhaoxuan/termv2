@@ -23,6 +23,9 @@ class TabBar {
   void prev();
   bool activate(size_t index);
   bool move(size_t from, size_t to);   // 拖动重排，活动标签跟随
+  // 键盘重排（moveTabLeft = -1 / moveTabRight = +1）：活动标签移动 delta 位，仍为活动标签。
+  // 越界（含已在最左/最右）不回绕，返回 false 且不改变顺序。
+  bool moveActive(int delta);
 
   size_t count() const { return tabs_.size(); }
   bool empty() const { return tabs_.empty(); }

@@ -22,6 +22,17 @@ int main() {
   tb.activate(2); CHECK(tb.move(0, 3) && *tb.activeIndex() == 1);
   tb.activate(1); CHECK(tb.move(3, 0) && *tb.activeIndex() == 2);
   CHECK(!tb.move(0, 9));
+  {  // 键盘重排：活动标签跟随移动，到头不回绕
+    std::vector<std::string> before; for (auto& x : tb.tabs()) before.push_back(x.title);
+    tb.activate(1); std::string a = tb.activeTab()->title;
+    CHECK(tb.moveActive(-1) && *tb.activeIndex() == 0 && tb.tabs()[0].title == a && tb.tabs()[1].title == before[0]);
+    CHECK(!tb.moveActive(-1) && *tb.activeIndex() == 0 && tb.tabs()[0].title == a);  // 已在最左
+    CHECK(tb.moveActive(1) && *tb.activeIndex() == 1);
+    for (size_t i = 0; i < before.size(); ++i) CHECK(tb.tabs()[i].title == before[i]);  // 来回一次复原
+    tb.activate(3); CHECK(!tb.moveActive(1) && *tb.activeIndex() == 3);  // 已在最右
+    CHECK(!tb.moveActive(0) && !tb.moveActive(-9));
+    TabBar empty([] { return std::string("x"); }); CHECK(!empty.moveActive(1) && !empty.moveActive(-1));
+  }
   std::string t = tb.activeTab()->title;
   tb.activate(0); CHECK(tb.closeTab(0) && *tb.activeIndex() == 0);
   tb.activate(2); CHECK(tb.closeTab(2) && *tb.activeIndex() == 1);  // 最后一个 → 前一个

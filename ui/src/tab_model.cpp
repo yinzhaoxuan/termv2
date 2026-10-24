@@ -29,6 +29,12 @@ bool TabBar::move(size_t from, size_t to) {
   else if (from > active_ && to <= active_) ++active_;
   return true;
 }
+bool TabBar::moveActive(int delta) {
+  if (tabs_.empty() || delta == 0) return false;
+  long long to = (long long)active_ + delta;
+  if (to < 0 || to >= (long long)tabs_.size()) return false;
+  return move(active_, (size_t)to);
+}
 std::string TabBar::titleFor(size_t i, const std::function<std::optional<std::string>(const std::string&)>& pt) const {
   if (i >= tabs_.size()) return {};
   if (pt) if (auto s = pt(tabs_[i].activePaneId); s && !s->empty()) return *s;

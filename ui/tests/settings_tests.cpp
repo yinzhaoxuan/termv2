@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <fstream>
 #include "uicfg/settings.h"
+#include "uicfg/shell_logic.h"
 using namespace uicfg;
 namespace fs = std::filesystem;
 static int fails = 0;
@@ -11,6 +12,20 @@ int main() {
   CHECK(d.keybindings.at("newTab") == "Ctrl+Shift+T");
   CHECK(d.keybindings.at("copy") == "Ctrl+Shift+C");
   CHECK(validateSettings(d).empty());
+  CHECK(d.keybindings.at("moveTabLeft") == "Ctrl+Shift+PageUp");
+  CHECK(d.keybindings.at("moveTabRight") == "Ctrl+Shift+PageDown");
+  {  // 规范化后也不能有两个默认绑定落在同一组合键上（validateSettings 只比字符串）
+    std::vector<std::pair<Chord, std::string>> seen;
+    for (auto& [a, c] : d.keybindings) {
+      auto ch = parseChord(c); CHECK(ch.has_value()); if (!ch) continue;
+      for (auto& [o, oa] : seen) if (o == *ch) { std::printf("FAIL chord clash %s / %s\n", a.c_str(), oa.c_str()); ++fails; }
+      seen.push_back({*ch, a});
+    }
+    CHECK(matchKey(d.keybindings, {true, true, false, "PageUp"}).action == "moveTabLeft");
+    CHECK(matchKey(d.keybindings, {true, true, false, "PageDown"}).action == "moveTabRight");
+    CHECK(matchKey(d.keybindings, {false, true, false, "PageUp"}).action == "scrollPageUp");  // 滚动键不受影响
+    CHECK(matchKey(d.keybindings, {false, true, false, "PageDown"}).action == "scrollPageDown");
+  }
 
   SettingsFile clash = d;
   clash.keybindings["paste"] = clash.keybindings["copy"];  // 冲突

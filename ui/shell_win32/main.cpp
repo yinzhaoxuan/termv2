@@ -519,6 +519,12 @@ bool runAction(const KeyMatch& m) {
     refreshTabs(); layoutPanes(); if (Tab* t = g->tabBar.activeTab()) focusPane(t->activePaneId);
     return true;
   }
+  if (a == "moveTabLeft" || a == "moveTabRight") {  // 到头不回绕，仍吞掉按键
+    if (g->tabBar.moveActive(a == "moveTabLeft" ? -1 : 1)) {
+      refreshTabs(); layoutPanes(); if (Tab* t = g->tabBar.activeTab()) focusPane(t->activePaneId);
+    }
+    return true;
+  }
   if (a == "focusPane" && m.direction) {
     Tab* t = g->tabBar.activeTab();
     if (t) if (auto n = neighborPane(t->root, toRect(paneArea()), t->activePaneId, *m.direction)) focusPane(*n);

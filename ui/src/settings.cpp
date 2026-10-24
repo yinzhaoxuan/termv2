@@ -15,6 +15,8 @@ const std::pair<const char*, const char*> kDefaults[] = {
     {"splitHorizontal", "Ctrl+Shift+E"},
     {"nextTab", "Ctrl+Tab"},
     {"prevTab", "Ctrl+Shift+Tab"},
+    {"moveTabLeft", "Ctrl+Shift+PageUp"},   // 键盘重排：活动标签左移/右移一位（到头不回绕）
+    {"moveTabRight", "Ctrl+Shift+PageDown"},
     {"focusPane", "Alt+Arrow"},  // Alt+方向键
     {"copy", "Ctrl+Shift+C"},
     {"paste", "Ctrl+Shift+V"},
