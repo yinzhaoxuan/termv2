@@ -502,6 +502,131 @@ static void pump_budget() {
         CHECK(itcore_export_text(c, 1u << 20, &b) == 0 && b);
         if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("NEEDDRAIN_OK") != std::string::npos); itcore_buffer_release(b); }
     }
+    // PUMP-04：afterFeed 不排空（核心一直 NEED_DRAIN 拒收）——非收尾整片留在 carry；收尾重试 N 次后跳过并记日志、继续喂
+    {
+        itcore_core *f = nullptr;
+        CHECK(itcore_create(&o, &f) == 0 && f);
+        std::string bells(4000, '\a');
+        auto fr = itcore_feed(f, reinterpret_cast<const uint8_t *>(bells.data()), bells.size());
+        CHECK(fr.status == ITCORE_NEED_DRAIN && fr.accepted < bells.size());
+        struct LogSink { int n = 0; std::string last; } sink;
+        auto logFn = [](void *ctx, const char *m) { auto *k = static_cast<LogSink *>(ctx); ++k->n; k->last = m; };
+        int feeds = 0;
+        auto noDrain = [&] { ++feeds; };
+        std::deque<Chunk> fq;
+        auto fpop = [&]() -> std::optional<Chunk> { if (fq.empty()) return std::nullopt; Chunk k = std::move(fq.front()); fq.pop_front(); return k; };
+        it2app::PumpCarry carry;
+        fq.push_back({std::string(10, '\a')});
+        fq.push_back({"TAIL_OK"});
+        it2app::PumpBudget nb; nb.log = logFn; nb.logCtx = &sink;
+        CHECK(it2app::pump_core(f, fpop, noDrain, nb, &carry) == PumpResult::FedMore);   // 非收尾：不丢
+        CHECK(carry.bytes == std::string(10, '\a') && carry.off == 0 && fq.size() == 1);
+        CHECK(feeds == 2 && sink.n == 0);                                                 // 首喂 + 重试一次
+        it2app::PumpBudget fb = it2app::PumpBudget::unlimited(); fb.log = logFn; fb.logCtx = &sink;
+        CHECK(fb.final && fb.finalRetries == 8);
+        feeds = 0;
+        // 收尾：不返回 FedMore；这一片（首喂 + 8 次重试，afterFeed 都不排空）跳过并记日志，剩余积压照喂
+        // （之后 afterFeed 恢复排空，"TAIL_OK" 那片能收下，证明跳片后继续）
+        auto drainLater = [&] { if (++feeds > 9) while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
+        CHECK(it2app::pump_core(f, fpop, drainLater, fb, &carry) == PumpResult::Fed);
+        CHECK(carry.empty() && fq.empty() && sink.n == 1);
+        CHECK(sink.last.find("refused 10 bytes after 8") != std::string::npos && sink.last.find("final") != std::string::npos);
+        CHECK(feeds >= 1 + 8 + 1);
+        itcore_buffer *b = nullptr;
+        CHECK(itcore_export_text(f, 1u << 20, &b) == 0 && b);
+        if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("TAIL_OK") != std::string::npos); itcore_buffer_release(b); }
+        // 收尾时重试中途排空成功：不跳片、不记日志
+        auto drainF = [&] { while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
+        drainF();
+        fr = itcore_feed(f, reinterpret_cast<const uint8_t *>(bells.data()), bells.size());
+        CHECK(fr.status == ITCORE_NEED_DRAIN);
+        fq.push_back({"\a\aRETRY_OK"});
+        int calls = 0;
+        auto lateDrain = [&] { if (++calls == 3) drainF(); };   // 第 3 次 afterFeed 才排空
+        sink.n = 0;
+        CHECK(it2app::pump_core(f, fpop, lateDrain, fb, &carry) == PumpResult::Fed);
+        CHECK(sink.n == 0 && carry.empty());
+        drainF();
+        CHECK(itcore_export_text(f, 1u << 20, &b) == 0 && b);
+        if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("RETRY_OK") != std::string::npos); itcore_buffer_release(b); }
+        // 无日志回调：静默跳过（不崩）
+        fr = itcore_feed(f, reinterpret_cast<const uint8_t *>(bells.data()), bells.size());
+        fq.push_back({std::string(5, '\a')});
+        CHECK(it2app::pump_core(f, fpop, [] {}, it2app::PumpBudget::unlimited(), &carry) == PumpResult::Fed && carry.empty());
+        itcore_destroy(f);
+    }
+    // PUMP-04：finishSession 收尾顺序 pump(true) → KillTimer → sched.reset → finish_input → inputFinished
+    {
+        itcore_core *f = nullptr;
+        CHECK(itcore_create(&o, &f) == 0 && f);
+        it2app::PumpScheduler sc;
+        CHECK(sc.readerShouldPost() && sc.postedShouldRun());
+        sc.begin();
+        CHECK(sc.end(true) == it2app::PumpScheduler::Next::Timer && sc.owned());   // 续跑定时器待发
+        std::deque<Chunk> fq;
+        for (int i = 0; i < 40; ++i) fq.push_back({std::string(64 * 1024 - 2, 'k') + "\r\n"});
+        fq.push_back({"ORDER_END"});
+        auto fpop = [&]() -> std::optional<Chunk> { if (fq.empty()) return std::nullopt; Chunk k = std::move(fq.front()); fq.pop_front(); return k; };
+        auto drainF = [&] { while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
+        bool inputFinished = false;
+        std::vector<std::string> steps;
+        it2app::PumpCarry carry;
+        it2app::finish_session_input(f, inputFinished, sc,
+            [&] {
+                CHECK(!inputFinished && sc.owned());
+                CHECK(it2app::pump_core(f, fpop, drainF, it2app::PumpBudget::unlimited(), &carry) == PumpResult::Fed);
+                steps.push_back("pump");
+            },
+            [&] {
+                CHECK(!inputFinished && sc.owned());   // 撤定时器在 reset 之前
+                const char k = 'K';                    // finish_input 尚未调用：仍可喂
+                CHECK(itcore_feed(f, reinterpret_cast<const uint8_t *>(&k), 1).accepted == 1);
+                steps.push_back("kill");
+            });
+        CHECK((steps == std::vector<std::string>{"pump", "kill"}));
+        CHECK(inputFinished && !sc.owned() && fq.empty() && carry.empty());
+        CHECK(sc.readerShouldPost());                  // reset 之后读线程恢复投递资格
+        itcore_buffer *b = nullptr;
+        CHECK(itcore_export_text(f, 1u << 20, &b) == 0 && b);
+        if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("ORDER_ENDK") != std::string::npos); itcore_buffer_release(b); }
+        int pumps = 0;
+        it2app::finish_session_input(f, inputFinished, sc, [&] { ++pumps; }, [] {});   // 二次调用：不重复 finish_input
+        CHECK(pumps == 1 && inputFinished);
+        itcore_destroy(f);
+    }
+    // PUMP-04：?2026 同步段被预算（FedMore）切开时不出半帧；段结束那次 pump 后立即放行
+    {
+        itcore_core *f = nullptr;
+        CHECK(itcore_create(&o, &f) == 0 && f);
+        auto drainF = [&] { while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
+        std::string frame = "\x1b[?2026h\x1b[2J\x1b[H";
+        for (int i = 0; i < 2000; ++i) frame += "row" + std::to_string(i) + std::string(60, '.') + "\r\n";
+        frame += "SYNC_DONE\x1b[?2026l";
+        CHECK(frame.size() > 2 * 64 * 1024);
+        std::deque<Chunk> fq;
+        fq.push_back({frame});
+        auto fpop = [&]() -> std::optional<Chunk> { if (fq.empty()) return std::nullopt; Chunk k = std::move(fq.front()); fq.pop_front(); return k; };
+        it2app::SyncGate gate(ITREN_SYNC_TIMEOUT_MS);
+        CHECK(it2app::frame_due(gate, f, 0, false));    // 同步前：正常出帧
+        it2app::PumpCarry carry;
+        it2app::PumpBudget bb; bb.maxBytes = 64 * 1024;
+        uint64_t now = 1;
+        int partial = 0;
+        PumpResult r;
+        while ((r = it2app::pump_core(f, fpop, drainF, bb, &carry)) == PumpResult::FedMore) {
+            ++partial;
+            CHECK(itcore_mode_query(f, 2026) == ITCORE_MODE_SET);
+            CHECK(!it2app::frame_due(gate, f, now, false));   // 段内（未超时）：不取快照，不出半帧
+            now += 1;
+        }
+        CHECK(r == PumpResult::Fed && partial >= 2 && now < ITREN_SYNC_TIMEOUT_MS);
+        CHECK(itcore_mode_query(f, 2026) != ITCORE_MODE_SET);
+        CHECK(it2app::frame_due(gate, f, now, false));        // 段结束：立即出完整一帧
+        itcore_buffer *b = nullptr;
+        CHECK(itcore_export_text(f, 1u << 20, &b) == 0 && b);
+        if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("SYNC_DONE") != std::string::npos); itcore_buffer_release(b); }
+        itcore_destroy(f);
+    }
     // PUMP-EXIT：积压远超一份预算时收尾（不限预算）一次喂完，结束标记可见，finish 之后不再 feed
     {
         itcore_core *f = nullptr;

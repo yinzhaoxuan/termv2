@@ -47,6 +47,12 @@ uint64_t budgetNowMs(void *) {
     return uint64_t(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
 }
 
+// frame_pump 诊断（核心拒收、收尾跳片）→ 调试器输出
+void pumpLog(void *, const char *msg) {
+    OutputDebugStringA(msg);
+    OutputDebugStringA("\n");
+}
+
 std::string toUtf8(std::wstring_view w) {
     if (w.empty()) return {};
     int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), nullptr, 0, nullptr, nullptr);
@@ -441,10 +447,9 @@ void Win32PaneBackend::onTransportState(TransportState s, std::optional<Transpor
 void Win32PaneBackend::finishSession() {
     if (finished_) return;
     finished_ = true;
-    pump(true);   // 收尾不设预算：积压一次喂完，否则 finish_input 之后剩余输出全丢
-    if (HWND h = hwnd_) KillTimer(h, kPumpContTimer);
-    shared_->sched.reset();
-    if (core_ && !inputFinished_) { itcore_finish_input(core_); inputFinished_ = true; }
+    // 收尾不设预算：积压一次喂完，否则 finish_input 之后剩余输出全丢（顺序见 finish_session_input）
+    it2app::finish_session_input(core_, inputFinished_, shared_->sched, [&] { pump(true); },
+                                 [&] { if (HWND h = hwnd_) KillTimer(h, kPumpContTimer); });
     drainCoreEvents();
     present();
     {
@@ -561,6 +566,7 @@ void Win32PaneBackend::pump(bool drainAll) {
     sched.begin();   // pump 期间持有：读线程不投递
     it2app::PumpBudget budget = drainAll ? it2app::PumpBudget::unlimited() : it2app::PumpBudget{};
     if (!drainAll) budget.nowMs = budgetNowMs;
+    budget.log = pumpLog;
     auto r = it2app::pump_core(core_, [&] { return transport_->pop(); }, [&] { drainCoreEvents(); }, budget, &carry_);
     if (r == it2app::PumpResult::Fatal) {
         // 核心已 fatal：之后（含 finishSession）不得再 feed，否则误报第二次 Fault
