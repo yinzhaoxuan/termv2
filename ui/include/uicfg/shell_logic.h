@@ -53,4 +53,34 @@ std::string vtForChar(const std::string& utf8, bool alt);
 
 std::string pasteRejectedMessage(size_t bytes, size_t limit);
 
+// ---- 滚动历史搜索条（searchHistory，Ctrl+Shift+F）----
+// 状态文字：空 needle → ""；pending → "搜索中…"；hasNewOutput → 提示按 Enter 重搜；restarted → 同上（内容已变化）；
+// found → "n/total"（n = index+1，total=-1 时 "n/?"）；否则 "无结果"
+std::string searchStatusText(const std::string& needle, const uishell::SearchResult& r);
+
+enum class SearchBarKey { Enter, ShiftEnter, Escape };
+struct SearchBarAction {
+  enum Kind { None, Find, Clear, Close } kind = None;
+  bool backward = true;   // Find：true = 向上（更早）
+  bool restart = false;   // Find：先 clearSearch() 再搜，从底部重新开始（needle 不变也算新一轮）
+};
+// 搜索条按键 / 输入状态机（平台无关；Win32 只负责把动作落到 PaneBackend）
+class SearchBarModel {
+ public:
+  SearchBarAction onTextChanged(const std::string& needle);  // 空 → Clear；否则从头向上搜
+  SearchBarAction onKey(SearchBarKey k);                     // Enter=向上，Shift+Enter=向下，Esc=Close
+  // 搜索结果（findInScrollback 的返回或 onSearchUpdated）。restarted 时自动从头重搜一次；
+  // 重搜的结果仍是 restarted 就停下，留给用户按 Enter（防循环）
+  SearchBarAction onResult(const uishell::SearchResult& r);
+  void reset();                                              // 关闭搜索条
+  const std::string& needle() const { return needle_; }
+  const uishell::SearchResult& last() const { return last_; }
+  std::string statusText() const { return searchStatusText(needle_, last_); }
+ private:
+  bool needsRestart() const { return last_.hasNewOutput || last_.restarted; }
+  std::string needle_;
+  uishell::SearchResult last_;
+  bool autoRestarted_ = false;
+};
+
 }  // namespace uicfg

@@ -115,3 +115,41 @@ std::optional<std::wstring> uicfg::parseCommandArg(const std::vector<std::wstrin
   }
   return std::nullopt;
 }
+
+namespace uicfg {
+
+std::string searchStatusText(const std::string& needle, const uishell::SearchResult& r) {
+  if (needle.empty()) return "";
+  if (r.hasNewOutput) return "有新输出，按 Enter 重新搜索";
+  if (r.restarted) return "内容已变化，按 Enter 重新搜索";
+  if (r.pending) return "搜索中…";
+  if (!r.found) return "无结果";
+  return std::to_string(r.index + 1) + "/" + (r.total < 0 ? std::string("?") : std::to_string(r.total));
+}
+
+SearchBarAction SearchBarModel::onTextChanged(const std::string& needle) {
+  needle_ = needle;
+  last_ = {};
+  autoRestarted_ = false;
+  if (needle_.empty()) return {SearchBarAction::Clear, true, false};
+  return {SearchBarAction::Find, true, true};
+}
+
+SearchBarAction SearchBarModel::onKey(SearchBarKey k) {
+  if (k == SearchBarKey::Escape) return {SearchBarAction::Close, true, false};
+  if (needle_.empty()) return {};
+  if (needsRestart()) { autoRestarted_ = false; return {SearchBarAction::Find, true, true}; }  // 从头（底部）向上重搜
+  return {SearchBarAction::Find, k == SearchBarKey::Enter, false};
+}
+
+SearchBarAction SearchBarModel::onResult(const uishell::SearchResult& r) {
+  last_ = r;
+  if (needle_.empty()) return {};
+  if (r.restarted && !autoRestarted_) { autoRestarted_ = true; return {SearchBarAction::Find, true, true}; }
+  if (!r.restarted) autoRestarted_ = false;
+  return {};
+}
+
+void SearchBarModel::reset() { needle_.clear(); last_ = {}; autoRestarted_ = false; }
+
+}  // namespace uicfg

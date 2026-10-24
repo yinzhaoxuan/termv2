@@ -22,6 +22,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -68,9 +69,11 @@ std::string U(const std::wstring& w) {
 constexpr wchar_t kMainClass[] = L"it2w_shell_main";
 constexpr wchar_t kPaneHostClass[] = L"it2w_shell_pane";
 constexpr UINT kMsgViewport = WM_APP + 1;
+constexpr UINT kMsgSearch = WM_APP + 2;  // onSearchUpdated 投递
 constexpr UINT kSysCmdFont = 0x0100;  // 系统菜单「字体…」（低 4 位须为 0）
 constexpr UINT kIdFontPreset = 0x1000, kIdFontOther = 0x10FF;  // 字体弹出菜单项
 constexpr UINT_PTR kIdSearch = 101, kIdTree = 102, kIdTabs = 103, kIdStatus = 104, kIdReconnect = 200;
+constexpr UINT_PTR kIdHistSearch = 105, kIdHistStatus = 106;  // 历史搜索条（searchHistory）
 
 struct PaneHost {
   std::string paneId, connectionId, title;
@@ -86,6 +89,10 @@ struct PaneHost {
 struct App {
   HINSTANCE inst{};
   HWND main{}, search{}, tree{}, tabs{}, statusBar{};
+  HWND histEdit{}, histStatus{};  // 历史搜索条：主窗口子控件，叠在活动窗格右上角
+  std::string histPaneId;         // 搜索条所属窗格；空 = 关闭
+  SearchBarModel histBar;
+  bool histSuppress = false;      // 程序清空编辑框时忽略 EN_CHANGE
   fs::path configDir;
   ConfigDirLock lock;
   ConnectionsFile conns;
@@ -213,6 +220,7 @@ void positionOverlay(PaneHost& p) {
 
 int estimateRows(const PaneHost& p) { return std::max(1, (int)(termRect(p).h / std::max(1.0, cellH()))); }
 
+void positionSearchBar();
 void layoutPanes() {
   RECT area = paneArea();
   const int gap = px(4);  // 分隔条宽度（主窗口客户区，可拖动）
@@ -234,6 +242,7 @@ void layoutPanes() {
     }
   }
   for (auto& [id, p] : g->panes) if (!visible.count(id)) ShowWindow(p->host, SW_HIDE);
+  positionSearchBar();
 }
 
 void layoutAll() {
@@ -319,8 +328,88 @@ void updateStatusBar() {
 }
 
 // ---------- 窗格 ----------
+// ---------- 历史搜索条 ----------
+void focusPane(const std::string& paneId);
+
+void positionSearchBar() {
+  PaneHost* p = g->histPaneId.empty() ? nullptr : paneById(g->histPaneId);
+  if (!p || !IsWindowVisible(p->host)) { ShowWindow(g->histEdit, SW_HIDE); ShowWindow(g->histStatus, SW_HIDE); return; }
+  auto tr = termRect(*p);
+  POINT o{tr.x, tr.y}; MapWindowPoints(p->host, g->main, &o, 1);
+  const int m = px(6), h = px(24), gap = px(4);
+  int right = o.x + tr.w - m, top = o.y + m;
+  int ew = std::min(px(180), std::max(px(60), tr.w / 2)), sw = std::min(px(180), std::max(0, tr.w - ew - 2 * m - gap));
+  // HWND_TOP：新建窗格会排到兄弟窗口最上层，每次布局都重新压回去（窗格宿主有 WS_CLIPSIBLINGS）
+  SetWindowPos(g->histEdit, HWND_TOP, right - ew, top, ew, h, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  SetWindowPos(g->histStatus, HWND_TOP, right - ew - gap - sw, top, sw, h, (sw > 0 ? SWP_SHOWWINDOW : SWP_HIDEWINDOW) | SWP_NOACTIVATE);
+}
+
+void updateSearchStatus() { SetWindowTextW(g->histStatus, W(g->histBar.statusText()).c_str()); }
+
+// 关闭：clearSearch()（结束本轮、清高亮）；refocus 时焦点还给终端
+void closeSearchBar(bool refocus) {
+  if (g->histPaneId.empty()) return;
+  std::string id = std::exchange(g->histPaneId, std::string());
+  if (PaneHost* p = paneById(id); p && p->backend) p->backend->clearSearch();
+  g->histBar.reset();
+  g->histSuppress = true; SetWindowTextW(g->histEdit, L""); g->histSuppress = false;
+  SetWindowTextW(g->histStatus, L"");
+  ShowWindow(g->histEdit, SW_HIDE); ShowWindow(g->histStatus, SW_HIDE);
+  if (refocus) if (Tab* t = g->tabBar.activeTab()) focusPane(t->activePaneId);
+}
+
+void openSearchBar() {
+  PaneHost* p = activePane(); if (!p) return;
+  if (g->histPaneId != p->paneId) { closeSearchBar(false); g->histPaneId = p->paneId; }
+  positionSearchBar(); updateSearchStatus();
+  SetFocus(g->histEdit); SendMessageW(g->histEdit, EM_SETSEL, 0, -1);
+}
+
+void applySearchAction(const SearchBarAction& a) {
+  PaneHost* p = g->histPaneId.empty() ? nullptr : paneById(g->histPaneId);
+  switch (a.kind) {
+    case SearchBarAction::None: break;
+    case SearchBarAction::Close: closeSearchBar(true); return;
+    case SearchBarAction::Clear: if (p && p->backend) p->backend->clearSearch(); break;
+    case SearchBarAction::Find: {
+      uishell::SearchResult r;  // 无后端 / 默认实现：found=false → 「无结果」
+      if (p && p->backend) {
+        if (a.restart) p->backend->clearSearch();  // 同 needle 也强制新一轮（从底部开始）
+        r = p->backend->findInScrollback(g->histBar.needle(), uishell::SearchOptions{}, a.backward);
+      }
+      auto next = g->histBar.onResult(r);
+      updateSearchStatus();
+      if (next.kind == SearchBarAction::Find) applySearchAction(next);  // RESTARTED：自动重搜一次（模型保证不循环）
+      return;
+    }
+  }
+  updateSearchStatus();
+}
+
+void onSearchUpdated(const std::string& paneId, const uishell::SearchResult& r) {
+  if (paneId != g->histPaneId) return;  // 搜索条已关闭或已换窗格
+  auto next = g->histBar.onResult(r);
+  updateSearchStatus();
+  if (next.kind == SearchBarAction::Find) applySearchAction(next);
+}
+
+LRESULT CALLBACK HistEditSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
+  switch (m) {
+    case WM_KEYDOWN:
+      if (w == VK_RETURN) { applySearchAction(g->histBar.onKey(GetKeyState(VK_SHIFT) < 0 ? SearchBarKey::ShiftEnter : SearchBarKey::Enter)); return 0; }
+      if (w == VK_ESCAPE) { applySearchAction(g->histBar.onKey(SearchBarKey::Escape)); return 0; }
+      break;
+    case WM_CHAR:
+      if (w == L'\r' || w == L'\n' || w == 0x1b) return 0;  // 吞掉对应字符，单行编辑框否则会响铃
+      break;
+    case WM_NCDESTROY: RemoveWindowSubclass(h, HistEditSubclass, 1); break;
+  }
+  return DefSubclassProc(h, m, w, l);
+}
+
 void focusPane(const std::string& paneId) {
   Tab* t = g->tabBar.activeTab(); if (!t) return;
+  if (!g->histPaneId.empty() && g->histPaneId != paneId) closeSearchBar(false);  // 换窗格（含切标签）：关搜索条
   t->activePaneId = paneId;
   for (auto& [id, p] : g->panes) if (p->backend) p->backend->setFocused(id == paneId);
   if (PaneHost* p = paneById(paneId)) if (!p->backend) SetFocus(p->host);
@@ -359,6 +448,12 @@ void startSession(PaneHost& p) {
     MessageBoxW(g->main, W(pasteRejectedMessage(bytes, limit)).c_str(), L"粘贴", MB_OK | MB_ICONWARNING);
   };
   ev.onSelectionChanged = [](bool) {};
+  ev.onSearchUpdated = [id](const uishell::SearchResult& r) {  // 异步结果（PENDING 之后）投递到 UI 线程
+    struct SrMsg { std::string id; uishell::SearchResult r; };
+    auto* m = new SrMsg{id, r};
+    if (!g || !PostMessageW(g->main, kMsgSearch, 0, (LPARAM)m)) delete m;
+  };
+  if (g->histPaneId == p.paneId) closeSearchBar(false);  // 换新后端：旧搜索状态作废
   p.status = {SessionState::Starting, 0, false, "", ""};
   p.backend = g->factory(p.connectionId, std::move(ev));
   p.vpOffset = p.vpHistory = 0;
@@ -396,6 +491,7 @@ PaneHost& createPane(const std::string& paneId, const std::string& connectionId,
 void destroyPane(const std::string& paneId) {
   auto it = g->panes.find(paneId); if (it == g->panes.end()) return;
   PaneHost& p = *it->second;
+  if (g->histPaneId == paneId) closeSearchBar(false);  // 先关搜索条（clearSearch 走仍存活的后端）
   if (p.backend) { if (stateNeedsConfirm(p.status.state)) p.backend->requestClose(); p.backend.reset(); }
   g->snaps.onSessionEnded(paneId);
   delete reinterpret_cast<std::string*>(GetWindowLongPtrW(p.host, GWLP_USERDATA));
@@ -661,7 +757,8 @@ bool runAction(const KeyMatch& m) {
     auto sc = scrollCommandFor(a, estimateRows(*p));
     if (sc.isScroll) { if (sc.toBottom) p->backend->scrollToBottom(); else p->backend->scrollViewport(sc.lines); return true; }
   }
-  return false;  // searchHistory 未实现：交给终端
+  if (a == "searchHistory") { if (!p) return false; openSearchBar(); return true; }
+  return false;
 }
 
 std::optional<std::string> keyName(WPARAM vk) {
@@ -923,11 +1020,15 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       g->tabs = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_FOCUSNEVER, 0, 0, 0, 0, h, (HMENU)kIdTabs, g->inst, nullptr);
       g->statusBar = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, h, (HMENU)kIdStatus, g->inst, nullptr);
       SetWindowSubclass(g->tabs, TabSubclass, 1, 0);
+      g->histEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_CLIPSIBLINGS | ES_AUTOHSCROLL, 0, 0, 0, 0, h, (HMENU)kIdHistSearch, g->inst, nullptr);
+      SendMessageW(g->histEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"搜索历史");
+      g->histStatus = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_CLIPSIBLINGS | SS_RIGHT | SS_CENTERIMAGE | SS_NOPREFIX, 0, 0, 0, 0, h, (HMENU)kIdHistStatus, g->inst, nullptr);
+      SetWindowSubclass(g->histEdit, HistEditSubclass, 1, 0);
       if (HMENU sys = GetSystemMenu(h, FALSE)) {  // 系统菜单（标题栏图标 / Alt+Space）加「字体…」
         AppendMenuW(sys, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(sys, MF_STRING, kSysCmdFont, L"字体…");
       }
-      for (HWND c : {g->search, g->tree, g->tabs, g->statusBar}) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+      for (HWND c : {g->search, g->tree, g->tabs, g->statusBar, g->histEdit, g->histStatus}) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
       return 0;
     }
     case WM_SYSCOMMAND:
@@ -943,6 +1044,14 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     case WM_COMMAND:
       if (LOWORD(w) == kIdSearch && HIWORD(w) == EN_CHANGE) { refreshTree(); return 0; }
+      if (LOWORD(w) == kIdHistSearch && HIWORD(w) == EN_CHANGE) {  // 任何文字变化：从头重搜
+        if (!g->histSuppress && !g->histPaneId.empty()) {
+          int n = GetWindowTextLengthW(g->histEdit);
+          std::wstring t(n + 1, L'\0'); t.resize(GetWindowTextW(g->histEdit, t.data(), n + 1));
+          applySearchAction(g->histBar.onTextChanged(U(t)));
+        }
+        return 0;
+      }
       break;
     case WM_NOTIFY: {
       auto* nm = reinterpret_cast<NMHDR*>(l);
@@ -962,6 +1071,12 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
       }
       break;
+    }
+    case kMsgSearch: {
+      struct SrMsg { std::string id; uishell::SearchResult r; };
+      std::unique_ptr<SrMsg> sm(reinterpret_cast<SrMsg*>(l));
+      onSearchUpdated(sm->id, sm->r);
+      return 0;
     }
     case kMsgViewport: {
       struct VpMsg { std::string id; int off, hist; };
