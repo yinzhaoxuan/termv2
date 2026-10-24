@@ -1,12 +1,22 @@
 #pragma once
 #include <filesystem>
 #include <map>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 #include "uicfg/store.h"
 
 namespace uicfg {
+
+// 隐藏字段 osc52（不进界面）→ PaneBackendConfig.osc52（it2app::Osc52Config），新建窗格生效。
+// 默认全关；maxBytes 原样传（0 = 核心默认，核心会钳到 768 KiB）
+struct Osc52Settings {
+  bool allowWrite = false;
+  bool allowRead = false;
+  std::uint32_t maxBytes = 0;
+  bool operator==(const Osc52Settings&) const = default;
+};
 
 // settings.json：快捷键与外观默认值（第 12.4 节）；允许覆盖和恢复默认
 struct SettingsFile {
@@ -18,7 +28,11 @@ struct SettingsFile {
   std::string fontFamily = "Cascadia Mono";
   // 双击选词的额外词字符（ASCII 可见标点）；空 = 后端默认 /-+\~_.；新建窗格生效
   std::optional<std::string> wordChars;
+  // 文件里有 osc52 字段才有值（且只在有值时写回，保持隐藏）。字段缺失、任一子字段缺失或类型不对 → 默认全关
+  std::optional<Osc52Settings> osc52;
+  Osc52Settings osc52OrDefault() const { return osc52.value_or(Osc52Settings{}); }
 };
+
 
 struct SettingsLoadResult {
   LoadStatus status = LoadStatus::NotFound;

@@ -1167,18 +1167,23 @@ uishell::PaneBackendFactory makeFactory() {
   // g->settings 的字体和当前后端工厂不同，才按新字体惰性重建后端工厂（换字体本身不重建）。
   // --command（dd38652）：UI 记录第一个本地窗格是否已创建；已创建后重建的后端工厂不再带 localCommand，
   // 未创建前即使换过字体也照样带上——命令恰好执行一次。
-  struct State { uishell::PaneBackendFactory inner; std::string family; double size = 0; bool localTaken = false; };
+  struct State { uishell::PaneBackendFactory inner; std::string family; double size = 0; bool localTaken = false; Osc52Settings osc52; };
   auto st = std::make_shared<State>();
   return [st](const std::string& connectionId, uishell::PaneEvents ev) -> std::unique_ptr<uishell::PaneBackend> {
-    if (!st->inner || st->family != g->settings.fontFamily || st->size != g->settings.fontSize) {
+    if (!st->inner || st->family != g->settings.fontFamily || st->size != g->settings.fontSize ||
+        st->osc52 != g->settings.osc52OrDefault()) {  // osc52：只影响此后新建的窗格
       it2app::PaneBackendConfig cfg;
       cfg.resolveSsh = resolveSsh;
       cfg.fontFamily = W(g->settings.fontFamily);
       cfg.fontSizePt = (float)g->settings.fontSize;
       cfg.wordChars = g->settings.wordChars;  // 非法值由后端打日志并退回默认
       if (!st->localTaken) cfg.localCommand = g->startupCommand;
+      const Osc52Settings o52 = g->settings.osc52OrDefault();  // 隐藏字段；缺省/非法 = 全关
+      cfg.osc52.allowWrite = o52.allowWrite;
+      cfg.osc52.allowRead = o52.allowRead;
+      cfg.osc52.maxBytes = o52.maxBytes;  // 原样传，核心钳到 768 KiB
       st->inner = it2app::makeWin32PaneBackendFactory(std::move(cfg));
-      st->family = g->settings.fontFamily; st->size = g->settings.fontSize;
+      st->family = g->settings.fontFamily; st->size = g->settings.fontSize; st->osc52 = o52;
     }
     if (connectionId.empty() && !st->localTaken) { st->localTaken = true; g->startupCommand.reset(); }
     return st->inner(connectionId, std::move(ev));

@@ -71,6 +71,41 @@ int main() {
     CHECK(loadSettings(f).data.fontSize == 10.5);
   }
 
+  {  // osc52 隐藏字段
+    auto write = [&](const std::string& body) { std::ofstream o(f, std::ios::binary | std::ios::trunc); o << body; };
+    auto fileHas = [&](const char* key) { std::ifstream i(f); std::string t((std::istreambuf_iterator<char>(i)), {}); return t.find(key) != std::string::npos; };
+    CHECK(!d.osc52 && d.osc52OrDefault() == Osc52Settings{});  // 默认全关
+    CHECK(!d.osc52OrDefault().allowWrite && !d.osc52OrDefault().allowRead && d.osc52OrDefault().maxBytes == 0);
+    // 缺省：不读出、不写出（保持隐藏）
+    SettingsFile s0 = defaultSettings();
+    CHECK(saveSettings(f, s0, false, &err) && !fileHas("osc52"));
+    CHECK(!loadSettings(f).data.osc52);
+    // 读写往返
+    write(R"({"schemaVersion":1,"osc52":{"allowWrite":true,"allowRead":false,"maxBytes":100000}})");
+    auto o = loadSettings(f);
+    CHECK(o.status == LoadStatus::Ok && o.data.osc52 && o.data.osc52->allowWrite && !o.data.osc52->allowRead && o.data.osc52->maxBytes == 100000);
+    CHECK(saveSettings(f, o.data, false, &err) && fileHas("osc52"));
+    { auto o2 = loadSettings(f); CHECK(o2.data.osc52 && *o2.data.osc52 == *o.data.osc52); }
+    // maxBytes 原样（超过 768 KiB 也不在 UI 钳）
+    write(R"({"schemaVersion":1,"osc52":{"allowWrite":true,"allowRead":true,"maxBytes":4000000000}})");
+    { auto o3 = loadSettings(f); CHECK(o3.data.osc52 && o3.data.osc52->allowRead && o3.data.osc52->maxBytes == 4000000000u); }
+    // 任一字段缺失 / 类型不对 → 默认全关（字段仍算存在，写回为全关）
+    const char* bad[] = {
+        R"({"schemaVersion":1,"osc52":{"allowWrite":true,"allowRead":true}})",
+        R"({"schemaVersion":1,"osc52":{"allowWrite":"yes","allowRead":true,"maxBytes":0}})",
+        R"({"schemaVersion":1,"osc52":{"allowWrite":true,"allowRead":true,"maxBytes":-1}})",
+        R"({"schemaVersion":1,"osc52":{"allowWrite":true,"allowRead":true,"maxBytes":1.5}})",
+        R"({"schemaVersion":1,"osc52":{"allowWrite":true,"allowRead":true,"maxBytes":4294967296}})",
+        R"({"schemaVersion":1,"osc52":true})",
+        R"({"schemaVersion":1,"osc52":null})",
+    };
+    for (const char* b : bad) {
+      write(b);
+      auto rb = loadSettings(f);
+      CHECK(rb.status == LoadStatus::Ok && rb.data.osc52 && *rb.data.osc52 == Osc52Settings{});
+    }
+  }
+
   resetKeybindings(r.data);
   CHECK(r.data.keybindings.at("newTab") == "Ctrl+Shift+T");
 
