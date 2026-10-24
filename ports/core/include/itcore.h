@@ -46,7 +46,10 @@ typedef enum { ITCORE_EV_REPLY_BYTES = 1, ITCORE_EV_TITLE = 2, ITCORE_EV_BELL = 
                   与上游 iTerm2 的区别：上游解码后遇 NUL 截断，这里去掉 NUL 等控制字符、保留其后的文本。
                   三档上限：默认 ITCORE_CLIPBOARD_DEFAULT_MAX（100 KiB，解码后）；可配到封顶 768 KiB（OSC 负载上限的 3/4）；
                   OSC 负载本身 1 MiB（解析器上限，超出即截断并拒绝）。 */
-               ITCORE_EV_CLIPBOARD_WRITE = 7, ITCORE_EV_CLIPBOARD_READ = 8 } itcore_event_kind;
+               ITCORE_EV_CLIPBOARD_WRITE = 7, ITCORE_EV_CLIPBOARD_READ = 8,
+               /* 搜索句柄失效（resize / 主备屏切换 / ED 3 / RIS）。只在有活动搜索句柄时发，每个句柄只发一次；
+                  负载为空。渲染据此清掉搜索高亮层，UI 用同一 needle 重新 itcore_search_begin */
+               ITCORE_EV_SEARCH_INVALIDATED = 9 } itcore_event_kind;
 
 int  itcore_create(const itcore_options *opt, itcore_core **out);
 itcore_feed_result itcore_feed(itcore_core *c, const uint8_t *bytes, size_t length);
@@ -220,6 +223,90 @@ int  itcore_set_colors(itcore_core *c, const itcore_colors *cfg);
 /* 快照时刻的生效颜色（配置 + OSC 覆盖）；渲染用它解析 TT=0 默认色与 TT=1 调色板索引 */
 void itcore_snapshot_colors(const itcore_snapshot *s, itcore_colors *out);
 int  itcore_export_text(const itcore_core *c, size_t max_bytes, itcore_buffer **out);
+
+/* ---- 滚动历史纯文本搜索（SRCH-01，草案 /workspace/qa/itcore_search-草案-v0.2.md；v0.1 不支持正则）----
+   范围：主屏 = 历史 + 主网格；备用屏 = 只有备用屏网格。按逻辑行匹配：软换行拼接、硬换行不拼接；硬换行结尾的行
+   去掉尾部空白格。匹配以字素簇为单位（起止都须落在簇边界），空格子当空格。不做变音符 / 全半角折叠、不做规范化。
+   坐标：abs_row = itcore_scrollback_overflow + 当前列宽下从最老历史行起的显示行序号；视口行 = abs_row - overflow -
+   itcore_history_rows（即选区 API 的 first_row 约定）。列按格计，宽字符占 2 格；起点闭区间，end_col 开区间。
+   稳定锚 (seg, off) 与选区端点同源（段身份 + 字符下标，不计宽字符尾格），跨淘汰 / 重排不变；end_off 是闭区间末字符。
+   线程：与 itcore_feed / 选区调用同一线程（UI 线程），核心不加锁。itcore_destroy 释放未 end 的句柄。 */
+typedef struct itcore_search itcore_search;
+enum { ITCORE_SEARCH_CASE_SMART = 0,        /* needle 含大写字母（简单折叠后会变的码点）则区分大小写，否则不区分 */
+       ITCORE_SEARCH_CASE_SENSITIVE = 1,
+       ITCORE_SEARCH_CASE_INSENSITIVE = 2 }; /* Unicode 简单折叠（Ω↔ω，不做 ß→ss）；两侧都忽略 VS15/VS16 */
+enum { ITCORE_SEARCH_F_REGEX = 1u << 0,     /* v0.1 不支持：begin 返回 ITCORE_SEARCH_EUNSUPPORTED */
+       ITCORE_SEARCH_F_BACKWARD = 1u << 1,  /* 首个扫描方向向上；默认起点为内容末尾 */
+       ITCORE_SEARCH_F_WRAP = 1u << 2 };    /* next/prev 到边界后回绕（终点为起点） */
+typedef struct {
+    uint32_t struct_size;      /* = sizeof(itcore_search_options) */
+    uint8_t  case_mode;        /* ITCORE_SEARCH_CASE_* */
+    uint32_t flags;            /* ITCORE_SEARCH_F_* */
+    uint64_t start_seg;        /* 起点锚；0 = 默认：BACKWARD 用内容末尾，否则用屏幕首行（核心不知道视口滚动位置） */
+    uint32_t start_off;
+    uint32_t max_results;      /* 0 = 100000；达到后停止收集并置 PF_TRUNCATED */
+    uint32_t max_match_cells;  /* 0 = 1024；超过该格数的匹配丢弃 */
+} itcore_search_options;
+typedef struct {
+    int64_t  start_abs_row; uint16_t start_col;   /* 闭：首格 */
+    int64_t  end_abs_row;   uint16_t end_col;     /* 开：end_abs_row 是末格所在行，end_col ∈ [1, cols] */
+    uint64_t start_seg; uint32_t start_off;       /* 闭 */
+    uint64_t end_seg;   uint32_t end_off;         /* 闭：末字符 */
+} itcore_search_match;
+enum { ITCORE_SEARCH_DONE = 0,         /* 扫描完成，total 精确 */
+       ITCORE_SEARCH_RUNNING = 1,      /* 未完成，total = -1 */
+       ITCORE_SEARCH_PENDING = 2,      /* next/prev：已扫区域里没有，继续 step */
+       ITCORE_SEARCH_NOT_FOUND = 3,    /* next/prev：全部扫完也没有（或不回绕且到边界） */
+       ITCORE_SEARCH_RESTARTED = 4,    /* 失效后第一次 step 返回（只一次）；之后一律 RESTART */
+       ITCORE_SEARCH_EINVAL = -1,
+       ITCORE_SEARCH_RESTART = -2,     /* 句柄已失效（resize / 主备屏切换 / ED 3 / RIS / 被新的 begin 取代），仍需 end */
+       ITCORE_SEARCH_EREGEX = -3,      /* 保留给 v0.2 正则编译失败 */
+       ITCORE_SEARCH_EUNSUPPORTED = -4 /* v0.1：F_REGEX 不支持 */ };
+enum { ITCORE_SEARCH_PF_WRAPPED = 1u << 0, ITCORE_SEARCH_PF_TRUNCATED = 1u << 1,
+       ITCORE_SEARCH_PF_INCOMPLETE = 1u << 2,   /* v0.1 不会置位（留给正则资源上限） */
+       ITCORE_SEARCH_PF_NEW_CONTENT = 1u << 3 }; /* begin 之后有新输出，不在本轮范围（v0.1 不做 tail find） */
+typedef struct {
+    uint32_t struct_size;      /* 调用方填 sizeof(itcore_search_progress) */
+    int32_t  status;           /* DONE / RUNNING / RESTARTED / RESTART */
+    float    progress;         /* 0..1，按已扫格数 / begin 时的总格数 */
+    int64_t  total;            /* -1 = 未完成；完成后为存活结果数（之后淘汰 / 改写会继续修正） */
+    int64_t  current;          /* 当前结果在文档顺序（上→下）中的 0 基序号；-1 = 无 */
+    uint32_t flags;            /* ITCORE_SEARCH_PF_* */
+    uint32_t dropped;          /* 本次 step 因淘汰 / 行改写丢弃的结果数 */
+    uint32_t changed;          /* 本次 step 新增的结果数（>0 时渲染重查 ranges_in_view） */
+} itcore_search_progress;
+typedef struct itcore_search_range {
+    int64_t  row;              /* 绝对行号（同 itcore_search_match 的 abs_row） */
+    uint16_t start_col;        /* 格，含 */
+    uint16_t end_col;          /* 格，不含 */
+    uint8_t  is_current;       /* 1 = 当前结果 */
+    uint8_t  reserved[3];
+} itcore_search_range;
+/* 开始搜索（不扫描内容）。needle 为 UTF-8，len=0 / opt=NULL / opt->struct_size 偏小 / 未知 flags 或 case_mode
+   返回 EINVAL 且不分配；F_REGEX 返回 EUNSUPPORTED。同一 core 只有一个活动句柄：再次 begin 使旧句柄进入 RESTART。成功 0 */
+int  itcore_search_begin(itcore_core *c, const char *needle, size_t len, const itcore_search_options *opt, itcore_search **out);
+/* 在预算内推进扫描：budget_cells（0 = 不限）与 budget_us（0 = 不限）先到先停，检查点在逻辑行之间，每次至少扫一行。
+   每次先校验已扫网格行的 revision（改写则重扫该逻辑行）并剔除已淘汰段上的结果。新结果按文档顺序写入 buf
+   （最多 cap 条，放不下的下次再给；buf 可为 NULL 当 cap=0）。prog 必填。返回 prog->status */
+int  itcore_search_step(itcore_search *h, uint32_t budget_cells, uint32_t budget_us, itcore_search_progress *prog,
+                        itcore_search_match *buf, uint32_t cap, uint32_t *n_out);
+/* 相对当前结果（初始为起点锚：next 含起点、prev 不含）移动一个结果，并设为当前结果。找到返回 DONE / RUNNING；
+   已扫区域没有返回 PENDING；不回绕且到边界或根本没有返回 NOT_FOUND。out / index 可为 NULL */
+int  itcore_search_next(itcore_search *h, itcore_search_match *out, int64_t *index);
+int  itcore_search_prev(itcore_search *h, itcore_search_match *out, int64_t *index);
+/* 按结果的稳定锚设置字符粒度选区（不改变当前结果）。成功 0；index 无效 -1；句柄失效 RESTART */
+int  itcore_search_select(itcore_search *h, int64_t index);
+/* 结果 → 当前视口坐标（first_row 约定同选区 API）。锚已淘汰 / 不在当前屏返回 -1，成功 0 */
+int  itcore_search_match_to_view(const itcore_core *c, const itcore_search_match *m, int32_t *start_row, uint16_t *start_col,
+                                 int32_t *end_row, uint16_t *end_col_excl);
+/* 视口 [first_row, first_row + rows)（绝对行号）里的全部命中，跨软换行的命中每行一条，按文档顺序。
+   返回需要的总条数，只写前 cap 条（out 可为 NULL 当 cap=0）；句柄失效返回 RESTART；已淘汰的行不返回 */
+int  itcore_search_ranges_in_view(itcore_search *h, int64_t first_row, uint32_t rows, itcore_search_range *out, uint32_t cap);
+/* 释放句柄（不清选区）。h 可为 NULL */
+void itcore_search_end(itcore_search *h);
+/* 累计淘汰的历史行数（只增不减，ED 3 / RIS 不重置） */
+uint64_t itcore_scrollback_overflow(const itcore_core *c);
+
 void itcore_destroy(itcore_core *c);
 #ifdef __cplusplus
 }

@@ -5,6 +5,7 @@
 #include "screen.h"
 #include "encode.h"
 #include "ucd_width.h"
+#include "search.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -47,6 +48,13 @@ std::string sanitize_title(const std::string &in) {
     return out;
 }
 }  // namespace
+
+// 搜索句柄：属于创建它的 core；itcore_destroy 释放未 end 的句柄
+struct itcore_search {
+    itcore_core *owner = nullptr;
+    itcore::Searcher *s = nullptr;
+    ~itcore_search() { delete s; }
+};
 
 struct itcore_core final : itcore::TokenSink {
     itcore::Parser parser;
@@ -283,7 +291,16 @@ struct itcore_core final : itcore::TokenSink {
         if (dec.size() > clip_max) { push(ITCORE_EV_CLIPBOARD_REQUEST, sel); return; }  // 替换字符撑大后超限
         push(ITCORE_EV_CLIPBOARD_WRITE, std::move(dec));
     }
-    ~itcore_core() override { for (auto *e : events) delete e; }
+    ~itcore_core() override {
+        for (auto *e : events) delete e;
+        for (auto *h : searches) delete h;
+    }
+    std::vector<itcore_search *> searches;  // 全部未 end 的句柄
+    itcore_search *active_search = nullptr;  // 最近一次 begin 的句柄
+    // resize / 主备屏切换 / ED 3 / RIS 后：活动句柄失效时发一次 SEARCH_INVALIDATED
+    void check_search() {
+        if (active_search && active_search->s->take_invalidation_notice()) push(ITCORE_EV_SEARCH_INVALIDATED);
+    }
 
     void push(itcore_event_kind k, std::string d = {}) {
         if (k == ITCORE_EV_RENDER_INVALIDATED) {
@@ -293,6 +310,10 @@ struct itcore_core final : itcore::TokenSink {
         events.push_back(new itcore_event{k, std::move(d)});
     }
     void token(const itcore::Token &t) override {
+        token_impl(t);
+        if (active_search) check_search();
+    }
+    void token_impl(const itcore::Token &t) {
         using itcore::TokenType;
         switch (t.type) {
         case TokenType::Text:
@@ -604,7 +625,62 @@ int itcore_resize(itcore_core *c, uint16_t columns, uint16_t rows, uint64_t gene
     c->resize_gen = generation ? generation : c->resize_gen + 1;
     c->screen->resize(columns, rows);
     c->push(ITCORE_EV_RENDER_INVALIDATED);
+    c->check_search();
     return 0;
+}
+
+int itcore_search_begin(itcore_core *c, const char *needle, size_t len, const itcore_search_options *opt,
+                        itcore_search **out) {
+    if (out) *out = nullptr;
+    if (!c || !c->screen || !out) return ITCORE_SEARCH_EINVAL;
+    itcore::Searcher *s = nullptr;
+    int rc = itcore::Searcher::create(*c->screen, needle, len, opt, &s);
+    if (rc != 0) return rc;
+    auto *h = new (std::nothrow) itcore_search;
+    if (!h) { delete s; return ITCORE_SEARCH_EINVAL; }
+    h->owner = c;
+    h->s = s;
+    if (c->active_search) c->active_search->s->supersede();
+    c->active_search = h;
+    c->searches.push_back(h);
+    *out = h;
+    return 0;
+}
+int itcore_search_step(itcore_search *h, uint32_t budget_cells, uint32_t budget_us, itcore_search_progress *prog,
+                       itcore_search_match *buf, uint32_t cap, uint32_t *n_out) {
+    if (n_out) *n_out = 0;
+    if (!h) return ITCORE_SEARCH_EINVAL;
+    return h->s->step(budget_cells, budget_us, prog, buf, cap, n_out);
+}
+int itcore_search_next(itcore_search *h, itcore_search_match *out, int64_t *index) {
+    return h ? h->s->next(out, index) : ITCORE_SEARCH_EINVAL;
+}
+int itcore_search_prev(itcore_search *h, itcore_search_match *out, int64_t *index) {
+    return h ? h->s->prev(out, index) : ITCORE_SEARCH_EINVAL;
+}
+int itcore_search_select(itcore_search *h, int64_t index) {
+    return h ? h->s->select(index) : ITCORE_SEARCH_EINVAL;
+}
+int itcore_search_match_to_view(const itcore_core *c, const itcore_search_match *m, int32_t *start_row,
+                                uint16_t *start_col, int32_t *end_row, uint16_t *end_col_excl) {
+    if (!c || !c->screen || !m) return -1;
+    return itcore::Searcher::to_view(*c->screen, m, start_row, start_col, end_row, end_col_excl);
+}
+int itcore_search_ranges_in_view(itcore_search *h, int64_t first_row, uint32_t rows, itcore_search_range *out,
+                                 uint32_t cap) {
+    return h ? h->s->ranges(first_row, rows, out, cap) : ITCORE_SEARCH_EINVAL;
+}
+void itcore_search_end(itcore_search *h) {
+    if (!h) return;
+    itcore_core *c = h->owner;
+    if (c) {
+        if (c->active_search == h) c->active_search = nullptr;
+        c->searches.erase(std::remove(c->searches.begin(), c->searches.end(), h), c->searches.end());
+    }
+    delete h;
+}
+uint64_t itcore_scrollback_overflow(const itcore_core *c) {
+    return (c && c->screen) ? c->screen->scrollback().evicted() : 0;
 }
 
 int itcore_encode_text(itcore_core *c, const char *utf8, size_t len, itcore_buffer **o) {

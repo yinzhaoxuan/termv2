@@ -416,6 +416,7 @@ void Scrollback::trim() {
            (lines_.size() > max_lines_ || bytes_ > max_bytes_)) {
         bytes_ -= lines_.front().mem_bytes();
         lines_.pop_front();
+        ++evicted_;
     }
 }
 void Scrollback::clear() { ++gen_; lines_.clear(); bytes_ = 0; }
@@ -664,6 +665,7 @@ static void reflow_merged(const Scrollback &sb, uint16_t cols, std::vector<Row> 
 
 void Screen::resize(uint16_t cols, uint16_t rows) {
     if (!cols || !rows) return;
+    if (cols != main_.cols() || rows != main_.rows()) ++search_serial_;
     // 主屏：把当前网格软/硬行卸到 scrollback 再重排回填（简化：仅改网格尺寸，scrollback 重排用于快照）
     main_.resize(cols, rows);
     alt_.resize(cols, rows);
@@ -1064,6 +1066,7 @@ void Screen::set_mode(const Token &t, bool set) {
 void Screen::enter_alt(bool clear) {
     if (!modes_.alt) {
         sel_clear();
+        ++search_serial_;
         saved_main_.cur = main_.cursor();
         saved_main_.fg = pen_.fg; saved_main_.bg = pen_.bg; saved_main_.flags = pen_.flags;
         saved_main_.valid = true;
@@ -1075,6 +1078,7 @@ void Screen::enter_alt(bool clear) {
 void Screen::leave_alt(bool clear) {
     if (modes_.alt) {
         sel_clear();
+        ++search_serial_;
         modes_.alt = false;
         if (clear) alt_.clear_all(Cell::blank());
         if (saved_main_.valid) {
@@ -1098,6 +1102,7 @@ void Screen::maybe_compact() {
 void Screen::full_reset() {
     uint16_t cols = main_.cols(), rows = main_.rows();
     if (modes_.sync_output) ++sync_ends_;
+    ++search_serial_;
     modes_ = ScreenModes{};
     pen_ = Pen{};
     saved_main_ = SavedCursor{}; saved_alt_ = SavedCursor{};
@@ -1212,7 +1217,7 @@ void Screen::apply_one(const Token &t, std::string *reply) {
         else if (cmd == "CUP" || cmd == "HVP") do_cup(param_or(t2, 0, 1), param_or(t2, 1, 1));
         else if (cmd == "ED") {
             int m = param_or(t2, 0, 0);
-            if (m == 3) { scrollback_.clear(); want_compact_ = true; if (sel_.active && !sel_.alt) sel_clear(); }
+            if (m == 3) { ++search_serial_; scrollback_.clear(); want_compact_ = true; if (sel_.active && !sel_.alt) sel_clear(); }
             g.erase_in_display(m == 3 ? 2 : m, blank);
         }
         else if (cmd == "EL") g.erase_in_line(param_or(t2, 0, 0), blank);
@@ -1571,6 +1576,11 @@ bool Screen::sel_extend(int32_t first_row, uint16_t col, uint16_t row) {
     sel_.head = p;
     sel_touch(old);
     return true;
+}
+void Screen::sel_set(SelPos anchor, SelPos head) {
+    Selection old = sel_;
+    sel_ = Selection{true, modes_.alt, 0, anchor, head};
+    sel_touch(old);
 }
 void Screen::sel_clear() {
     if (!sel_.active) return;

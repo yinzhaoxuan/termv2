@@ -205,6 +205,8 @@ public:
     template <class F> void for_each_line(F f) { ++gen_; for (auto &l : lines_) f(l); }
     // 内容代数：push/淘汰/clear/可写遍历都 +1（history_display_rows 缓存键，B2）
     uint64_t generation() const { return gen_; }
+    // 累计淘汰的逻辑段数（只增不减；clear 不重置），同上游 cumulativeScrollbackOverflow（搜索绝对行号用）
+    uint64_t evicted() const { return evicted_; }
     // 绝对显示行（从最旧开始）→ (逻辑行下标, 行内列偏移)；失败返回 false。
     bool map_display_row(uint16_t cols, size_t display_row, size_t *logic_i, size_t *cell_off) const;
     size_t display_rows(uint16_t cols) const;
@@ -215,6 +217,7 @@ private:
     uint64_t max_bytes_;
     size_t bytes_ = 0;
     uint64_t gen_ = 0;
+    uint64_t evicted_ = 0;
 };
 
 struct ScreenModes {
@@ -303,6 +306,10 @@ public:
     // 截断点落在 UTF-8 字符边界并尽量落在行首
     std::string export_text(size_t max_bytes) const;
     uint64_t sel_serial() const { return sel_serial_; }
+    // 搜索：直接按 (段, 字符) 设置字符粒度选区（itcore_search_select）；head 为闭区间末字符
+    void sel_set(SelPos anchor, SelPos head);
+    // 搜索失效计数：只在 resize（尺寸真变）、主/备屏切换、ED 3、RIS 时 +1（字素池压缩不算）
+    uint64_t search_serial() const { return search_serial_; }
 
     size_t mem_bytes() const;
 private:
@@ -346,6 +353,7 @@ private:
     SavedCursor saved_main_, saved_alt_;
     uint64_t revision_ = 1;
     uint64_t sync_ends_ = 0;
+    uint64_t search_serial_ = 0;
     uint64_t next_logic_id_ = 1;
     // 正在写入的当前逻辑行缓冲（视口内软换行累积）；硬换行时压入 scrollback。
     // 简化：滚动出顶部的行按 wrap 标记合并/压入。
