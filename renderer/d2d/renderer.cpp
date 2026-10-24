@@ -124,6 +124,42 @@ void log_hr(const char *step, HRESULT hr) {
 }
 bool fail_hr(const char *step, HRESULT hr) { log_hr(step, hr); return false; }
 
+// 字体族名归一到 DirectWrite：系统字体集合里有就原样用；否则按 GDI 名（ChooseFont 的 lfFaceName，
+// 如 "Cascadia Mono SemiBold"，GDI 把字重拆成单独的族）经 IDWriteGdiInterop 映射回 DirectWrite 族名
+// （"Cascadia Mono"）。都找不到返回 false：CreateTextFormat 对不存在的族名照样成功，会悄悄退回系统字体。
+bool resolve_family(IDWriteFactory *dw, const std::wstring &in, std::wstring *out) {
+    if (!dw || in.empty()) return false;
+    bool ok = false;
+    IDWriteFontCollection *col = nullptr;
+    if (SUCCEEDED(dw->GetSystemFontCollection(&col, FALSE)) && col) {
+        UINT32 idx = 0; BOOL exists = FALSE;
+        if (SUCCEEDED(col->FindFamilyName(in.c_str(), &idx, &exists)) && exists) { *out = in; ok = true; }
+        col->Release();
+    }
+    if (ok || in.size() >= LF_FACESIZE) return ok;
+    IDWriteGdiInterop *gdi = nullptr;
+    if (FAILED(dw->GetGdiInterop(&gdi)) || !gdi) return false;
+    LOGFONTW lf{};
+    lf.lfCharSet = DEFAULT_CHARSET;
+    wcsncpy(lf.lfFaceName, in.c_str(), LF_FACESIZE - 1);
+    IDWriteFont *font = nullptr; IDWriteFontFamily *fam = nullptr; IDWriteLocalizedStrings *names = nullptr;
+    if (SUCCEEDED(gdi->CreateFontFromLOGFONT(&lf, &font)) && font && SUCCEEDED(font->GetFontFamily(&fam)) && fam &&
+        SUCCEEDED(fam->GetFamilyNames(&names)) && names && names->GetCount() > 0) {
+        UINT32 i = 0; BOOL has = FALSE;
+        if (FAILED(names->FindLocaleName(L"en-us", &i, &has)) || !has) i = 0;
+        UINT32 len = 0;
+        if (SUCCEEDED(names->GetStringLength(i, &len))) {
+            std::wstring n(len + 1, L'\0');
+            if (SUCCEEDED(names->GetString(i, n.data(), len + 1))) { n.resize(len); *out = n; ok = !n.empty(); }
+        }
+    }
+    if (names) names->Release();
+    if (fam) fam->Release();
+    if (font) font->Release();
+    gdi->Release();
+    return ok;
+}
+
 }  // namespace
 
 // 4 个样式 TextFormat 全部建成才替换 Impl 里的旧格式（失败保持旧字体）
@@ -222,6 +258,9 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
     hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                              reinterpret_cast<IUnknown **>(&impl_->dwrite));
     if (FAILED(hr)) return fail_hr("DWriteCreateFactory", hr);
+    // 启动时 settings 里的族名也归一（找不到则原样，CreateTextFormat 自行回退并记日志）
+    if (std::wstring rf; resolve_family(impl_->dwrite, impl_->family, &rf)) impl_->family = rf;
+    else std::fprintf(stderr, "[renderer] font family not found, falling back\n");
     if (!create_formats(*impl_, impl_->family, impl_->size_pt)) return false;
     device_kind_ = kind;
     impl_->saved_metrics = metrics_;
@@ -256,7 +295,9 @@ void D2DRenderer::set_snapshot(const itcore_snapshot *snap) { snap_ = snap; }
 bool D2DRenderer::set_font(const wchar_t *font_family, float font_size_pt) {
     std::wstring fam = font_family && *font_family ? std::wstring(font_family) : impl_->family;
     if (!impl_->dwrite) { impl_->family = fam; impl_->size_pt = font_size_pt; return true; }  // init 前/失败：下次 init 生效
-    if (!create_formats(*impl_, fam, font_size_pt)) return false;
+    std::wstring rf;
+    if (!resolve_family(impl_->dwrite, fam, &rf)) return false;  // 族名不存在：保持旧字体，backend 走回退
+    if (!create_formats(*impl_, rf, font_size_pt)) return false;
     impl_->dirty.invalidate(); impl_->layout.reset(); impl_->last_vis = -1; impl_->blink_rows.clear();
     return true;
 }
