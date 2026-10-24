@@ -68,8 +68,7 @@ std::string U(const std::wstring& w) {
 
 constexpr wchar_t kMainClass[] = L"it2w_shell_main";
 constexpr wchar_t kPaneHostClass[] = L"it2w_shell_pane";
-constexpr UINT kMsgViewport = WM_APP + 1;
-constexpr UINT kMsgSearch = WM_APP + 2;  // onSearchUpdated 投递
+constexpr UINT kMsgSearch = WM_APP + 2;  // onSearchUpdated 投递（viewport 已直接更新，不再 Post）
 constexpr UINT kSysCmdFont = 0x0100;  // 系统菜单「字体…」（低 4 位须为 0）
 constexpr UINT kIdFontPreset = 0x1000, kIdFontOther = 0x10FF;  // 字体弹出菜单项
 constexpr UINT_PTR kIdSearch = 101, kIdTree = 102, kIdTabs = 103, kIdStatus = 104, kIdReconnect = 200;
@@ -419,11 +418,15 @@ void focusPane(const std::string& paneId) {
 
 void onPaneStatus(const std::string& paneId, const uishell::SessionStatus& st) {
   PaneHost* p = paneById(paneId); if (!p) return;
+  auto prev = p->status.state;
   p->status = st;
   updateScrollBar(*p);  // 改字体后网格行数可能变化
   if (st.state == SessionState::Exited || st.state == SessionState::Failed) g->snaps.onSessionEnded(paneId);
   positionOverlay(*p);
-  refreshTabs(); refreshTree(); updateStatusBar();
+  refreshTabs();
+  // 会话树不用 pane title；OSC 标题（≤10/s）刷屏时 DeleteAllItems 会饿死变白（PERF-01）
+  if (statusAffectsSessionTree(prev, st.state)) refreshTree();
+  updateStatusBar();
 }
 
 void startSession(PaneHost& p) {
@@ -439,10 +442,9 @@ void startSession(PaneHost& p) {
     if (MessageBoxW(g->main, W(lp.message).c_str(), L"打开链接", MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) == IDOK)
       ShellExecuteW(g->main, L"open", W(lp.url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
   };
-  ev.onViewportChanged = [id](int off, int hist) {  // 投递到 UI 线程（契约要求 UI 线程回调，这里再保险一次）
-    struct VpMsg { std::string id; int off, hist; };
-    auto* m = new VpMsg{id, off, hist};
-    if (!g || !PostMessageW(g->main, kMsgViewport, 0, (LPARAM)m)) delete m;
+  ev.onViewportChanged = [id](int off, int hist) {  // 契约：PaneEvents 只在 UI 线程回调，直接更新（PERF-01 去掉多余 Post）
+    if (!g) return;
+    if (PaneHost* p = paneById(id)) { p->vpOffset = off; p->vpHistory = hist; updateScrollBar(*p); }
   };
   ev.onPasteRejected = [](size_t bytes, size_t limit) {
     MessageBoxW(g->main, W(pasteRejectedMessage(bytes, limit)).c_str(), L"粘贴", MB_OK | MB_ICONWARNING);
@@ -1078,12 +1080,6 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       struct SrMsg { std::string id; uishell::SearchResult r; };
       std::unique_ptr<SrMsg> sm(reinterpret_cast<SrMsg*>(l));
       onSearchUpdated(sm->id, sm->r);
-      return 0;
-    }
-    case kMsgViewport: {
-      struct VpMsg { std::string id; int off, hist; };
-      std::unique_ptr<VpMsg> vm(reinterpret_cast<VpMsg*>(l));
-      if (PaneHost* p = paneById(vm->id)) { p->vpOffset = vm->off; p->vpHistory = vm->hist; updateScrollBar(*p); }
       return 0;
     }
     // ---- 分隔条拖动（分隔条是主窗口客户区里窗格之间的间隙）----

@@ -75,6 +75,12 @@ PaneOverlay overlayFor(const uishell::SessionStatus& st) {
   if (st.state == S::Exited) return {true, true, "会话已退出（退出码 " + std::to_string(st.exitCode) + "）"};
   return {false, false, {}};
 }
+
+bool statusAffectsSessionTree(uishell::SessionState prev, uishell::SessionState next) {
+  using S = uishell::SessionState;
+  auto inRunningSet = [](S s) { return s != S::Exited && s != S::Failed; };  // 与 SessionSnapshots 生命周期一致
+  return inRunningSet(prev) != inRunningSet(next);
+}
 std::string pasteRejectedMessage(size_t bytes, size_t limit) {
   return "粘贴内容过大（" + std::to_string(bytes / 1024) + " KiB），上限 " + std::to_string(limit / 1024) + " KiB，未发送。";
 }

@@ -40,6 +40,16 @@ int main() {
   CHECK(o.visible && o.showReconnect && o.text.find("认证失败") != std::string::npos);
   st.state = uishell::SessionState::Running; CHECK(!overlayFor(st).visible);
   CHECK(stateLabel(uishell::SessionState::Reconnecting) == "正在重连");
+  {  // PERF-01：标题变化不刷树；仅进出运行集合才 refreshTree
+    using S = uishell::SessionState;
+    CHECK(!statusAffectsSessionTree(S::Running, S::Running));       // 同状态（OSC 标题等）
+    CHECK(!statusAffectsSessionTree(S::Starting, S::Running));      // 仍在 snaps 内
+    CHECK(!statusAffectsSessionTree(S::Running, S::Reconnecting));
+    CHECK(statusAffectsSessionTree(S::Running, S::Exited));         // onSessionEnded
+    CHECK(statusAffectsSessionTree(S::Reconnecting, S::Failed));
+    CHECK(statusAffectsSessionTree(S::Exited, S::Starting));        // 重进（若有）
+    CHECK(!statusAffectsSessionTree(S::Exited, S::Failed));         // 都已不在集合
+  }
   CHECK(pasteRejectedMessage(40 * 1024, 32 * 1024).find("32") != std::string::npos);
   CHECK(vtForKey("Up", false, false, false) == "\x1b[A");
   CHECK(vtForKey("Left", true, false, false) == "\x1b[1;5D");

@@ -43,6 +43,9 @@ LinkPrompt linkPrompt(const std::string& url);
 struct PaneOverlay { bool visible; bool showReconnect; std::string text; };
 PaneOverlay overlayFor(const uishell::SessionStatus& st);
 std::string stateLabel(uishell::SessionState s);
+// 会话树标签来自连接名 + snaps 运行计数，不用 pane title。
+// snaps：启动起算，直到 Exited/Failed 才 erase。仅当新旧状态在「计入运行」集合上不同时才需 refreshTree。
+bool statusAffectsSessionTree(uishell::SessionState prev, uishell::SessionState next);
 
 // 非字符按键 → VT 序列（xterm 风格，修饰键用 CSI 1;m）。可打印字符、Enter/Tab/Backspace/Esc
 // 走 WM_CHAR，不在这里（Shift+Tab 例外，返回 CSI Z）。不认识的键返回空串。
