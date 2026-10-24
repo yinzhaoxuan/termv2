@@ -33,7 +33,9 @@ std::string narrow(const std::wstring &w) {
 std::wstring buildCommandLineW(const LaunchSpec &spec) {
     std::vector<std::string> argv{narrow(spec.executable)};
     for (auto &a : spec.arguments) argv.push_back(narrow(a));
-    return widen(buildWindowsCommandLine(argv));
+    std::wstring cmd = widen(buildWindowsCommandLine(argv));
+    if (!spec.rawArgumentTail.empty()) cmd += L' ' + spec.rawArgumentTail;
+    return cmd;
 }
 std::vector<wchar_t> buildEnvironmentBlock(const LaunchSpec &spec) {
     EnvList env;

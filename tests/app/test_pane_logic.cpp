@@ -534,6 +534,25 @@ static void swap_config() {
     CHECK(h.swap_config().effect == itren::SwapEffect::FlipSequential && h.swap_config().buffer_count == 2);
 }
 
+// --command：按 shell 拼参数；cmd 用 /s /k "..." 原样保留命令里的引号与 &、|
+static void local_command() {
+    using it2app::planLocalShellCommand;
+    auto e = planLocalShellCommand(L"C:\\Windows\\System32\\cmd.exe", L"");
+    CHECK(e && e->args.empty() && e->rawTail.empty());
+    auto c = planLocalShellCommand(L"C:\\Windows\\System32\\CMD.EXE", L"dir /s");
+    CHECK(c && c->args == (std::vector<std::wstring>{L"/s", L"/k"}) && c->rawTail == L"\"dir /s\"");
+    auto q = planLocalShellCommand(L"cmd.exe", L"\"C:\\a b\\t.cmd\" x & echo \"y\"");
+    CHECK(q && q->rawTail == L"\"\"C:\\a b\\t.cmd\" x & echo \"y\"\"");
+    auto p = planLocalShellCommand(L"C:/Program Files/PowerShell/7/pwsh.exe", L"Get-ChildItem -Recurse");
+    CHECK(p && p->args == (std::vector<std::wstring>{L"-NoExit", L"-Command", L"Get-ChildItem -Recurse"}) && p->rawTail.empty());
+    CHECK(planLocalShellCommand(L"powershell.exe", L"x")->args.size() == 3);
+    auto o = planLocalShellCommand(L"D:\\msys64\\usr\\bin\\bash.exe", L"-lc 'ls -R /'");
+    CHECK(o && o->args.empty() && o->rawTail == L"-lc 'ls -R /'");
+    CHECK(!planLocalShellCommand(L"cmd.exe", L"dir\r\nformat c:"));
+    CHECK(!planLocalShellCommand(L"cmd.exe", L"a\nb"));
+    CHECK(!planLocalShellCommand(L"cmd.exe", std::wstring(L"a\0b", 3)));
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "churn") churn();
@@ -543,7 +562,8 @@ int main(int argc, char **argv) {
     else if (w == "font") font();
     else if (w == "wordchars") wordchars();
     else if (w == "pump") pump_budget();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); } }
+    else if (w == "command") local_command();
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

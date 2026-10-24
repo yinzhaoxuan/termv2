@@ -27,6 +27,7 @@ struct GridSize { uint16_t cols = 80, rows = 24; };
 struct LaunchSpec {
     std::wstring executable;                 // 绝对路径
     std::vector<std::wstring> arguments;     // 不含 argv[0]
+    std::wstring rawArgumentTail;            // 非空时原样追加在已加引号的参数之后（cmd.exe /s /k "..." 这类不按 MSVCRT 规则解析的 shell）
     std::optional<std::wstring> workingDirectory;
     std::vector<std::pair<std::wstring, std::wstring>> environment;  // 已过滤、已排序；空表示继承
     GridSize initialSize;                    // 钳到 ≥ 20×5

@@ -22,6 +22,9 @@ struct PaneBackendConfig {
     // 再走 resolveSsh。policy.vmId 须为 GUID；ssh.target.hostName 留空，由后台解析填入。
     std::function<std::optional<it2w::HyperVLaunch>(const std::string &connectionId, std::string *error)> resolveHyperV;
     std::wstring localShell;            // 空：%ComSpec%，再退回 System32\cmd.exe
+    // --command：只交给工厂创建的第一个本地窗格（之后新开的本地标签是普通 shell）；拼法见 planLocalShellCommand。
+    // 空或 nullopt：不加参数。含换行：该窗格 Failed。
+    std::optional<std::wstring> localCommand;
     std::wstring fontFamily = L"Consolas";
     float fontSizePt = 12.f;
     uint32_t scrollbackLines = 5000;

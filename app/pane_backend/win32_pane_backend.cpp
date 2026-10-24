@@ -106,8 +106,9 @@ struct HyperVT final : Transport {
 
 class Win32PaneBackend final : public uishell::PaneBackend {
 public:
-    Win32PaneBackend(std::string connectionId, uishell::PaneEvents ev, std::shared_ptr<const PaneBackendConfig> cfg)
-        : connId_(std::move(connectionId)), ev_(std::move(ev)), cfg_(std::move(cfg)) {
+    Win32PaneBackend(std::string connectionId, uishell::PaneEvents ev, std::shared_ptr<const PaneBackendConfig> cfg,
+                     std::optional<std::wstring> localCommand = std::nullopt)
+        : connId_(std::move(connectionId)), ev_(std::move(ev)), cfg_(std::move(cfg)), localCommand_(std::move(localCommand)) {
         status_ = {uishell::SessionState::Starting, 0, false, {}, {}};
     }
     // 析构：先断开 PaneEvents，再 teardown（close 队列 → 之后的投递一律丢弃）
@@ -167,6 +168,7 @@ private:
     std::string connId_;
     uishell::PaneEvents ev_;
     std::shared_ptr<const PaneBackendConfig> cfg_;
+    std::optional<std::wstring> localCommand_;  // --command，仅第一个本地窗格；重连（新 attempt）同样带上
     // 与关闭线程 / 传输回调共享的唯一状态（不含 this、不含 PaneEvents）
     std::shared_ptr<SessionShared> shared_ = std::make_shared<SessionShared>();
     std::shared_ptr<UiDispatchQueue> queue_ = shared_->queue;
@@ -322,6 +324,12 @@ bool Win32PaneBackend::startSession() {
             wchar_t buf[MAX_PATH];
             DWORD n = GetEnvironmentVariableW(L"ComSpec", buf, MAX_PATH);
             spec.executable = (n > 0 && n < MAX_PATH) ? std::wstring(buf, n) : L"C:\\Windows\\System32\\cmd.exe";
+        }
+        if (localCommand_) {
+            auto plan = planLocalShellCommand(spec.executable, *localCommand_);
+            if (!plan) { fail("--command 含换行，已拒绝"); return false; }
+            spec.arguments = std::move(plan->args);
+            spec.rawArgumentTail = std::move(plan->rawTail);
         }
         spec.initialSize = gs;  // environment 为空 → 继承
         auto *raw = lt->t.get();
@@ -1193,8 +1201,11 @@ bool shutdownPaneBackends(unsigned timeoutMs) {
 
 uishell::PaneBackendFactory makeWin32PaneBackendFactory(PaneBackendConfig cfg) {
     auto shared = std::make_shared<const PaneBackendConfig>(std::move(cfg));
-    return [shared](const std::string &connectionId, uishell::PaneEvents ev) -> std::unique_ptr<uishell::PaneBackend> {
-        return std::make_unique<Win32PaneBackend>(connectionId, std::move(ev), shared);
+    auto commandTaken = std::make_shared<bool>(false);  // 工厂只在 UI 线程调用
+    return [shared, commandTaken](const std::string &connectionId, uishell::PaneEvents ev) -> std::unique_ptr<uishell::PaneBackend> {
+        std::optional<std::wstring> cmd;
+        if (connectionId.empty() && shared->localCommand && !*commandTaken) { *commandTaken = true; cmd = shared->localCommand; }
+        return std::make_unique<Win32PaneBackend>(connectionId, std::move(ev), shared, std::move(cmd));
     };
 }
 

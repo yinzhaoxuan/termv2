@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 typedef struct itcore_core itcore_core;
 
@@ -24,6 +25,14 @@ int applyWordChars(itcore_core *core, const std::optional<std::string> &wordChar
 // B4：OSC 52 配置下发（默认全关；读与写分别授权；maxBytes 0 用核心默认）。UI 线程调用。
 struct Osc52Config { bool allowWrite = false; bool allowRead = false; uint32_t maxBytes = 0; };
 int applyOsc52(itcore_core *core, const Osc52Config &cfg);
+
+// --command：按本地 shell 的解析规则把一条命令拼进启动参数（只用于第一个本地窗格）。
+//  cmd.exe          → args {/s, /k}，rawTail = "\"" + 命令 + "\""（/s 只剥最外层一对引号，命令内的引号、&、| 原样交给 cmd）
+//  powershell/pwsh  → args {-NoExit, -Command, 命令}（按 CommandLineToArgvW 规则加引号）
+//  其它 shell       → rawTail = 命令（原样追加，由该 shell 自行解析）
+// 空命令 → 不加参数；含 CR/LF/NUL → nullopt（拒绝，窗格 Failed）。shell 名按文件名比较，不区分大小写。
+struct LocalShellLaunch { std::vector<std::wstring> args; std::wstring rawTail; };
+std::optional<LocalShellLaunch> planLocalShellCommand(const std::wstring &shellPath, const std::wstring &command);
 
 inline constexpr std::size_t kPasteLimitBytes = 32u * 1024u;  // 与核心 / InputScheduler 上限一致
 

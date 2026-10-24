@@ -227,5 +227,22 @@ KeyPlan planKey(unsigned vk, unsigned uiMods, uint32_t translated, uint32_t base
     return p;
 }
 
-}  // namespace it2app
+std::optional<LocalShellLaunch> planLocalShellCommand(const std::wstring &shellPath, const std::wstring &command) {
+    LocalShellLaunch out;
+    if (command.empty()) return out;
+    for (wchar_t c : command) if (c == L'\r' || c == L'\n' || c == L'\0') return std::nullopt;
+    auto slash = shellPath.find_last_of(L"\\/");
+    std::wstring name = slash == std::wstring::npos ? shellPath : shellPath.substr(slash + 1);
+    for (auto &c : name) if (c >= L'A' && c <= L'Z') c = wchar_t(c - L'A' + L'a');
+    if (name == L"cmd.exe" || name == L"cmd") {
+        out.args = {L"/s", L"/k"};
+        out.rawTail = L"\"" + command + L"\"";
+    } else if (name == L"powershell.exe" || name == L"powershell" || name == L"pwsh.exe" || name == L"pwsh") {
+        out.args = {L"-NoExit", L"-Command", command};
+    } else {
+        out.rawTail = command;
+    }
+    return out;
+}
 
+}  // namespace it2app
