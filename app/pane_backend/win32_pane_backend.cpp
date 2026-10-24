@@ -33,9 +33,10 @@ namespace {
 
 constexpr UINT WM_PANE_WAKE = WM_APP + 0x41;
 constexpr UINT_PTR kTickTimer = 1;
-constexpr UINT_PTR kPumpContTimer = 2;  // 一次性：pump 预算用尽后续跑
+constexpr UINT_PTR kPumpContTimer = 2;  // 一次性：pump 续跑（FedMore 或 Fed+missed）
 constexpr UINT_PTR kSearchTimer = 3;    // 搜索分批计数 / PENDING 落定：busy 期间每 kSearchMs 续跑一次
 constexpr UINT kSearchMs = 10;
+constexpr UINT kPumpContMs = 8;         // PERF-02：续跑间隔（原 1ms 太密，会话树/对话框 WM_PAINT 轮不到）
 constexpr uint32_t kSearchBudgetCells = 256 * 1024, kSearchBudgetUs = 4000;  // 每次 step：UI 线程最多约 4ms
 constexpr UINT kTickMs = 50;
 constexpr wchar_t kPaneClass[] = L"it2w_pane_backend";
@@ -188,6 +189,11 @@ private:
     void revealSearchRow(int32_t viewRow);  // 当前结果不在视口内时滚动，使其位于视口中部
     void endSearch(bool notifyRestarted);   // itcore_destroy 之前调用（句柄归核心所有）
     bool altScreen() const { return core_ && itcore_mode_query(core_, 1049) == ITCORE_MODE_SET; }
+    // PERF-02：片间让出。PeekMessage 抽空时跳过会重入 pump 的消息（WAKE / 续跑·tick·搜索定时器），
+    // 取出暂存，抽空结束后再 Post/SetTimer 回去（收尾 finishing 时丢弃续跑/搜索定时器，WAKE 仍补回）。
+    // 返回 true：调用前已有 QS_INPUT|QS_PAINT（本轮应 FedMore，把消息循环还给关闭点击/绘制）。
+    bool yieldUiMessages(bool finishing);
+    static bool yieldUiThunk(void *ctx);
 
     std::string connId_;
     uishell::PaneEvents ev_;
@@ -237,6 +243,8 @@ private:
     std::optional<HvAction> hvResult_;   // T09 解析结果（Fail 时作为错误文本）
     std::optional<uint32_t> localExit_;
     bool focused_ = false, closing_ = false, finished_ = false, skipChar_ = false;
+    bool pendingStart_ = false;             // M17：网格仍是 20×5 下限时推迟 startSession（ConPTY 过小会丢启动输出）
+    bool finishingPump_ = false;            // PERF-02：正在 pump_core_final（yield 每片都抽消息，但不提前 FedMore）
     int downCol_ = -1, downRow_ = -1;
     std::uint64_t attempt_ = 1;          // 当前 attempt；reconnect +1
     std::uint64_t prevAttemptId_ = 0;    // 0 = 无旧归档
@@ -298,6 +306,14 @@ bool Win32PaneBackend::attach(void *parentHwnd, const uishell::PixelRect &rc, fl
     // wake 在队列锁内调用、close 时清空，只捕获窗口句柄（不捕获 this）
     queue_->setWake([h] { PostMessageW(h, WM_PANE_WAKE, 0, 0); });
     SetTimer(h, kTickTimer, kTickMs, nullptr);
+    // M17：ConPTY 在过小网格（钳制后仍 20×5）上创建会丢启动输出；先建窗口/渲染器，等首次真正变大再 startSession。
+    // 推迟期间保持 Starting（构造时已是），不 Failed。
+    if (gridAtSessionFloor(resize_.dims())) {
+        pendingStart_ = true;
+        publishStatus();
+        return true;
+    }
+    pendingStart_ = false;
     if (!startSession()) return true;  // 窗口已建，状态为 Failed，UI 可显示错误
     return true;
 }
@@ -425,6 +441,7 @@ bool Win32PaneBackend::startSession() {
 void Win32PaneBackend::fail(std::string text) {
     { std::lock_guard l(statusMu_); status_.state = uishell::SessionState::Failed; status_.errorText = std::move(text); }
     finished_ = true;
+    pendingStart_ = false;
     publishStatus();
 }
 
@@ -448,7 +465,8 @@ void Win32PaneBackend::onTransportState(TransportState s, std::optional<Transpor
 void Win32PaneBackend::finishSession() {
     if (finished_) return;
     finished_ = true;
-    // 收尾不设预算：积压一次喂完，否则 finish_input 之后剩余输出全丢（顺序见 finish_session_input）
+    pendingStart_ = false;
+    // PERF-02：收尾按片喂完（pump(true)→pump_core_final + yieldUi），片间让确认框/会话树先画；喂完再 finish_input
     it2app::finish_session_input(core_, inputFinished_, shared_->sched, [&] { pump(true); },
                                  [&] { if (HWND h = hwnd_) KillTimer(h, kPumpContTimer); });
     drainCoreEvents();
@@ -563,14 +581,61 @@ void Win32PaneBackend::postPump() {
     postTo<Win32PaneBackend>(*queue_, [](Win32PaneBackend &p) { if (p.shared_->sched.postedShouldRun()) p.pump(); });
 }
 
+bool Win32PaneBackend::yieldUiThunk(void *ctx) {
+    auto *self = static_cast<Win32PaneBackend *>(ctx);
+    return self->yieldUiMessages(self->finishingPump_);
+}
+
+bool Win32PaneBackend::yieldUiMessages(bool finishing) {
+    HWND h = hwnd_;
+    if (!h) return false;
+    // 非收尾：仅当已有输入/绘制挂起时才抽空并提前让出；收尾：每片都抽，好让确认框/会话树先画出来
+    const bool want = finishing || HIWORD(GetQueueStatus(QS_INPUT | QS_PAINT)) != 0;
+    if (!want) return false;
+    bool wake = false, cont = false, search = false;
+    MSG msg;
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        // 跳过会重入 pump 的消息：取出暂存，抽空后再补（收尾丢弃续跑/搜索定时器）
+        if (msg.hwnd == h && msg.message == WM_PANE_WAKE) { wake = true; continue; }
+        if (msg.hwnd == h && msg.message == WM_TIMER) {
+            if (msg.wParam == kPumpContTimer) { cont = !finishing; continue; }
+            if (msg.wParam == kTickTimer) continue;          // 周期性，丢这一拍；下一拍还会来
+            if (msg.wParam == kSearchTimer) { search = !finishing; continue; }
+        }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    if (wake) PostMessageW(h, WM_PANE_WAKE, 0, 0);
+    if (cont) { KillTimer(h, kPumpContTimer); SetTimer(h, kPumpContTimer, kPumpContMs, nullptr); }
+    if (search) { KillTimer(h, kSearchTimer); SetTimer(h, kSearchTimer, kSearchMs, nullptr); }
+    return !finishing;  // 非收尾：告诉 pump_core 提前 FedMore；收尾由 pump_core_final 片间再调
+}
+
 void Win32PaneBackend::pump(bool drainAll) {
     if (!core_ || !transport_ || inputFinished_) return;
     auto &sched = shared_->sched;
     sched.begin();   // pump 期间持有：读线程不投递
-    it2app::PumpBudget budget = drainAll ? it2app::PumpBudget::unlimited() : it2app::PumpBudget{};
-    if (!drainAll) budget.nowMs = budgetNowMs;
-    budget.log = pumpLog;
-    auto r = it2app::pump_core(core_, [&] { return transport_->pop(); }, [&] { drainCoreEvents(); }, budget, &carry_);
+    auto pop = [&] { return transport_->pop(); };
+    auto after = [&] { drainCoreEvents(); };
+    it2app::PumpResult r;
+    if (drainAll) {
+        // PERF-02：收尾按片推进 + yieldUi（只在 finishSession；刷屏路径绝不 unlimited）
+        it2app::PumpBudget slice = it2app::PumpBudget::finalSlice();
+        slice.nowMs = budgetNowMs;
+        slice.log = pumpLog;
+        slice.yieldUi = &Win32PaneBackend::yieldUiThunk;
+        slice.yieldCtx = this;
+        finishingPump_ = true;
+        r = it2app::pump_core_final(core_, pop, after, &carry_, slice);
+        finishingPump_ = false;
+    } else {
+        it2app::PumpBudget budget{};
+        budget.nowMs = budgetNowMs;
+        budget.log = pumpLog;
+        budget.yieldUi = &Win32PaneBackend::yieldUiThunk;
+        budget.yieldCtx = this;
+        r = it2app::pump_core(core_, pop, after, budget, &carry_);
+    }
     if (r == it2app::PumpResult::Fatal) {
         // 核心已 fatal：之后（含 finishSession）不得再 feed，否则误报第二次 Fault
         inputFinished_ = true; carry_.clear(); sched.reset();
@@ -579,13 +644,14 @@ void Win32PaneBackend::pump(bool drainAll) {
         return;
     }
     using Next = it2app::PumpScheduler::Next;
+    // FedMore → Timer；Fed 但 missed → 也是 Timer（PumpScheduler::end，禁止 Post 续跑）
     Next next = sched.end(it2app::nextAfterPump(r) == it2app::PumpNext::Timer);
     if (next == Next::Timer) {
-        // 继续持有直到 WM_TIMER：续跑只走定时器（低于 WM_PAINT/输入）；SetTimer 失败退回投递
-        if (HWND h = hwnd_; !h || !SetTimer(h, kPumpContTimer, 1, nullptr)) next = sched.timerFailed();
+        // 继续持有直到 WM_TIMER（低于 WM_PAINT/输入）；SetTimer 失败则释放，靠 kTickTimer，不 Post
+        if (HWND h = hwnd_; !h || !SetTimer(h, kPumpContTimer, kPumpContMs, nullptr)) next = sched.timerFailed();
     }
-    if (next == Next::Post) postPump();
-    if (next != Next::Timer) if (HWND h = hwnd_) KillTimer(h, kPumpContTimer);  // tick 那次已取空：撤掉挂着的续跑，免一次空 pump
+    if (next == Next::Post) postPump();  // 正常路径不再返回 Post；保留以防将来扩展
+    if (next != Next::Timer) if (HWND h = hwnd_) KillTimer(h, kPumpContTimer);  // 已取空：撤掉挂着的续跑
     if (r == it2app::PumpResult::Fed || r == it2app::PumpResult::FedMore) {
         syncSelection();       // 输出可能清掉选区（切备用屏 / RIS / ED 3）
         syncViewport();        // 已上翻时偏移随历史增长，视图停在原处
@@ -653,6 +719,11 @@ void Win32PaneBackend::applyBounds(const uishell::PixelRect &rc, float dpi) {
         if (transport_ && !closing_) transport_->resize(GridSize{resize_.dims().cols, resize_.dims().rows}, *gen);
         renderer_->set_expected_generation(*gen);
         releaseSnap();
+    }
+    // M17：推迟的 startSession —— 网格严格大于下限后才启 ConPTY/SSH（避免 20×5 丢 --command 启动输出）
+    if (pendingStart_ && !closing_ && !finished_ && gridReadyForSessionStart(resize_.dims())) {
+        pendingStart_ = false;
+        if (!startSession()) { /* fail() 已置 Failed */ }
     }
     renderer_->resize_surface();
     present(true);  // 改尺寸绕过 SyncGate，强制出一帧
@@ -817,7 +888,13 @@ void Win32PaneBackend::reconnect() {
     { std::lock_guard l(statusMu_); status_ = {uishell::SessionState::Starting, 0, false, {}, {}}; }
     queue_->setWake([h] { PostMessageW(h, WM_PANE_WAKE, 0, 0); });
     publishStatus();
-    if (startSession()) present();
+    // 重连时窗口通常已有真实尺寸；若仍卡在下限则继续推迟
+    if (gridAtSessionFloor(resize_.dims())) {
+        pendingStart_ = true;
+    } else {
+        pendingStart_ = false;
+        if (startSession()) present();
+    }
     syncViewport(true);
     syncSelection();
 }

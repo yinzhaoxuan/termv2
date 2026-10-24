@@ -437,7 +437,7 @@ static void wordchars() {
     itcore_destroy(c);
 }
 
-// PUMP-01/02：pump_core 预算（字节 / 注入时钟 / 16 KiB 切片 + carry），用尽后经定时器续跑；PumpScheduler 持有期间读线程不投递；收尾不限预算
+// PUMP-01/02/PERF-02：pump_core 预算；续跑一律 Timer（含 Fed+missed）；收尾用 pump_core_final 按片 + yieldUi
 static void pump_budget() {
     itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 80, 24, 100, 1u << 20};
     itcore_core *c = nullptr;
@@ -571,10 +571,16 @@ static void pump_budget() {
         bool inputFinished = false;
         std::vector<std::string> steps;
         it2app::PumpCarry carry;
+        int finalYields = 0;
         it2app::finish_session_input(f, inputFinished, sc,
             [&] {
                 CHECK(!inputFinished && sc.owned());
-                CHECK(it2app::pump_core(f, fpop, drainF, it2app::PumpBudget::unlimited(), &carry) == PumpResult::Fed);
+                // PERF-02：收尾按片 + yield（与 Win32 pump(true) 一致），不是一次 unlimited
+                it2app::PumpBudget slice = it2app::PumpBudget::finalSlice();
+                slice.yieldUi = [](void *ctx) -> bool { ++*static_cast<int *>(ctx); return false; };
+                slice.yieldCtx = &finalYields;
+                CHECK(it2app::pump_core_final(f, fpop, drainF, &carry, slice) == PumpResult::Fed);
+                CHECK(finalYields >= 1);           // 多片积压 → 片间至少 yield 一次
                 steps.push_back("pump");
             },
             [&] {
@@ -647,7 +653,8 @@ static void pump_budget() {
         if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("__END_MARK__") != std::string::npos); itcore_buffer_release(b); }
         itcore_destroy(f);
     }
-    // 调度：读线程合并投递；UI 线程 pump 期间与续跑定时器待发期间不投递；释放时补投漏掉的唤醒
+    // PERF-02 调度：读线程合并投递；UI 线程 pump / 续跑定时器待发期间不投递；
+    // Fed+missed / FedMore 一律 Timer（禁止 Post 续跑）；SetTimer 失败 → None（靠 kTickTimer）
     {
         using Next = it2app::PumpScheduler::Next;
         it2app::PumpScheduler sc;
@@ -665,25 +672,69 @@ static void pump_budget() {
         sc.begin();                                // WM_TIMER → pump，持有不间断
         for (int i = 0; i < 100; ++i) posts += sc.readerShouldPost();
         CHECK(posts == 0);
-        CHECK(sc.end(false) == Next::Post && !sc.owned());  // 取空但期间来过数据 → UI 线程自己补投一次
-        CHECK(!sc.readerShouldPost());             // 补投已 pending：读线程合并
-        CHECK(sc.postedShouldRun());
-        sc.begin();
-        CHECK(sc.end(false) == Next::None);        // 期间没新数据：不投递
-        CHECK(sc.readerShouldPost());              // 之后的新数据照常投递
-        // 已投递、随后 UI 线程因 tick 进入持有（续跑待发）：投递的任务跳过，交给定时器
+        // 取空但期间来过数据（missed）：也走 Timer，禁止 Post（刷屏 Fed+missed 的 Post 会饿死关闭点击）
+        CHECK(sc.end(false) == Next::Timer && sc.owned());
+        posts = 0;
+        for (int i = 0; i < 100; ++i) posts += sc.readerShouldPost();
+        CHECK(posts == 0);                         // 仍持有：读线程不投递
+        sc.begin();                                // 续跑定时器触发
+        CHECK(sc.end(false) == Next::None);        // 期间没新数据：释放
+        CHECK(!sc.owned());
+        CHECK(sc.readerShouldPost());              // 之后的新数据照常冷启动投递
+        // SetTimer 失败：释放持有，不 Post（靠周期性 tick）
         sc.begin();
         CHECK(sc.end(true) == Next::Timer);
-        CHECK(!sc.postedShouldRun());
-        CHECK(sc.timerFailed() == Next::Post);     // SetTimer 失败：释放并固定补投（missed 为假也投）
+        CHECK(!sc.postedShouldRun());              // owned 时投递的任务跳过
+        CHECK(sc.timerFailed() == Next::None);
         CHECK(!sc.owned());
-        CHECK(sc.postedShouldRun());
-        CHECK(sc.readerShouldPost());              // 一条投递在路上（pending），UI 线程因 tick 进入 pump
+        CHECK(sc.readerShouldPost());              // 释放后读线程可冷启动
+        // release() 同样不 Post
         sc.begin(); CHECK(sc.end(true) == Next::Timer);
-        CHECK(sc.timerFailed() == Next::None);     // SetTimer 失败：已有投递在路上，合并不重复投
-        CHECK(sc.postedShouldRun());               // 那条投递随后执行
+        CHECK(sc.release() == Next::None && !sc.owned());
         sc.reset();
         CHECK(sc.readerShouldPost());
+    }
+    // PERF-02：yieldUi 返回 true → 提前 FedMore（片间让出）；收尾 pump_core_final 片间调用 yield
+    {
+        itcore_core *f = nullptr;
+        CHECK(itcore_create(&o, &f) == 0 && f);
+        struct Chunk { std::string bytes; };
+        std::deque<Chunk> fq;
+        for (int i = 0; i < 20; ++i) fq.push_back({std::string(16 * 1024, 'y')});
+        auto fpop = [&]() -> std::optional<Chunk> {
+            if (fq.empty()) return std::nullopt;
+            Chunk k = std::move(fq.front()); fq.pop_front(); return k;
+        };
+        int yields = 0;
+        auto yieldAlways = [](void *ctx) -> bool { ++*static_cast<int *>(ctx); return true; };
+        it2app::PumpBudget bb; bb.maxBytes = 256 * 1024;  // 足够多，靠 yield 提前停
+        bb.yieldUi = yieldAlways; bb.yieldCtx = &yields;
+        it2app::PumpCarry carry;
+        CHECK(it2app::pump_core(f, fpop, [] {}, bb, &carry) == PumpResult::FedMore);
+        CHECK(yields == 1);                        // 喂完第一片后 yield → FedMore
+        CHECK(!fq.empty());                        // 还有积压
+        // pump_core_final：按片喂完，片间每次 FedMore 都再调一次 yield
+        yields = 0;
+        auto yieldCount = [](void *ctx) -> bool { ++*static_cast<int *>(ctx); return false; };  // 不提前停
+        it2app::PumpBudget slice = it2app::PumpBudget::finalSlice();
+        slice.maxBytes = 32 * 1024;
+        slice.yieldUi = yieldCount; slice.yieldCtx = &yields;
+        CHECK(it2app::pump_core_final(f, fpop, [] {}, &carry, slice) == PumpResult::Fed);
+        CHECK(fq.empty() && carry.empty());
+        CHECK(yields >= 2);                        // 至少两片 → 片间 yield ≥1，加上片内检查
+        itcore_destroy(f);
+    }
+    // M17：会话启动网格门闩——仍在 20×5 下限时推迟；严格大于后再启
+    {
+        CHECK(it2app::gridAtSessionFloor({it2app::kMinCols, it2app::kMinRows}));
+        CHECK(!it2app::gridReadyForSessionStart({it2app::kMinCols, it2app::kMinRows}));
+        CHECK(!it2app::gridAtSessionFloor({it2app::kMinCols, uint16_t(it2app::kMinRows + 1)}));
+        CHECK(it2app::gridReadyForSessionStart({it2app::kMinCols, uint16_t(it2app::kMinRows + 1)}));
+        CHECK(it2app::gridReadyForSessionStart({uint16_t(it2app::kMinCols + 1), it2app::kMinRows}));
+        CHECK(it2app::gridReadyForSessionStart({80, 24}));
+        auto floor = it2app::clampGrid(1, 1);
+        CHECK(floor.cols == it2app::kMinCols && floor.rows == it2app::kMinRows);
+        CHECK(it2app::gridAtSessionFloor(floor));
     }
     itcore_destroy(c);
 }

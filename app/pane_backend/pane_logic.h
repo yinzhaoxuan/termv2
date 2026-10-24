@@ -68,6 +68,12 @@ struct GridDims { uint16_t cols = 80, rows = 24; };
 inline constexpr uint16_t kMinCols = 20, kMinRows = 5;
 GridDims clampGrid(int cols, int rows);
 
+// ConPTY 在过小网格上创建会丢启动输出：伪控制台按初始 20×5 截断，首次真正 resize 之前超过 5 行的
+// 输出（例如 --command "echo hi & ver"）会消失。attach 时若钳制后仍是下限，推迟 startSession，
+// 直到网格严格大于下限（cols>kMinCols 或 rows>kMinRows）再启 shell。
+inline bool gridAtSessionFloor(GridDims d) { return d.cols == kMinCols && d.rows == kMinRows; }
+inline bool gridReadyForSessionStart(GridDims d) { return !gridAtSessionFloor(d); }
+
 // 网格变化 → generation 递增；同尺寸不递增（只需 ResizeBuffers）。
 class ResizeTracker {
 public:
@@ -115,12 +121,13 @@ struct CloseOutcome {
     bool timedOut = false;  // 超出预算被强杀
     std::string detail;
 };
-// PUMP-01：谁负责下一次 pump。UI 线程在 pump 期间以及续跑定时器待发期间“持有”pump，此时读线程不投递，
-// 免得投递的 pump 插到 WM_PAINT / 输入前面。读线程先记 missed 再看 owned：pump 结束释放时若 missed 被置位，
-// 由 UI 线程自己补投一次，不丢唤醒（seq_cst：读线程看到 owned 为真 ⇒ missed 的写先于释放）。
+// PUMP-01 / PERF-02：谁负责下一次 pump。UI 线程在 pump 期间以及续跑定时器待发期间“持有”pump，此时读线程不投递。
+// 读线程先记 missed 再看 owned。pump 结束时若还有积压（more）或期间来过新数据（missed），一律继续持有并走
+// 续跑定时器——禁止用 Post 续跑（PostMessage 优先于输入/WM_PAINT，刷屏时 Fed+missed 的 Post 会饿死关闭点击）。
+// 空闲时读线程仍可 Post 一次冷启动；SetTimer 失败则释放持有，靠周期性 kTickTimer，不 Post。
 class PumpScheduler {
 public:
-    // 读线程：有新输出时是否投递 pump（同一时刻至多一条投递）
+    // 读线程：有新输出时是否投递 pump（同一时刻至多一条投递；仅空闲冷启动用）
     bool readerShouldPost() {
         missed_.store(true);
         if (owned_.load()) return false;
@@ -129,17 +136,21 @@ public:
     // 投递的 pump 任务开始执行：清掉 pending；UI 线程正持有（续跑定时器待发）时返回 false，交给定时器
     bool postedShouldRun() { pending_.store(false); return !owned_.load(); }
     void begin() { owned_.store(true); missed_.store(false); }
-    enum class Next { None, Timer, Post };
-    // pump 结束：还有积压（more）→ 继续持有，调用方设续跑定时器；否则释放，期间有新数据则 Post（调用方自己投递）
-    Next end(bool more) { return more ? Next::Timer : release(); }
-    // SetTimer 失败：明知还有积压，释放后固定补投一次（不等 tick）
+    enum class Next { None, Timer, Post };  // Post 保留枚举；end/timerFailed/release 不再返回 Post 续跑
+    // pump 结束：more 或 missed → Timer（保持 owned）；否则释放
+    Next end(bool more) {
+        if (more || missed_.exchange(false)) return Next::Timer;  // owned 保持 true
+        owned_.store(false);
+        pending_.store(false);
+        return Next::None;
+    }
+    // SetTimer 失败：释放持有，靠 kTickTimer 拉一次（不 Post，避免饿死输入/绘制）
     Next timerFailed() {
-        owned_.store(false); missed_.store(false);
-        return pending_.exchange(true) ? Next::None : Next::Post;   // 已有投递在路上则合并
+        owned_.store(false); missed_.store(false); pending_.store(false);
+        return Next::None;
     }
     Next release() {
-        owned_.store(false);
-        if (missed_.exchange(false) && !pending_.exchange(true)) return Next::Post;
+        owned_.store(false); missed_.store(false); pending_.store(false);
         return Next::None;
     }
     void reset() { owned_.store(false); missed_.store(false); pending_.store(false); }

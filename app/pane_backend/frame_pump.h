@@ -32,7 +32,20 @@ struct PumpBudget {
     int finalRetries = 8;
     void (*log)(void *ctx, const char *msg) = nullptr;
     void *logCtx = nullptr;
-    static PumpBudget unlimited() { PumpBudget b; b.maxBytes = SIZE_MAX; b.nowMs = nullptr; b.final = true; return b; }  // 收尾用
+    // 片间让出 UI（可注入）。返回 true → 提前结束本轮（当作预算用尽，返回 FedMore），以便消息循环处理输入/绘制。
+    // Win32：若 QS_INPUT|QS_PAINT 已挂起则 Peek+Dispatch 非 pump 消息并返回 true；不得 Dispatch 续跑定时器/WAKE（防重入）。
+    bool (*yieldUi)(void *ctx) = nullptr;
+    void *yieldCtx = nullptr;
+    // 单次不限预算（测试 / 旧路径）。正式收尾请用 pump_core_final：按片推进并 yieldUi，避免卡住消息循环。
+    static PumpBudget unlimited() { PumpBudget b; b.maxBytes = SIZE_MAX; b.nowMs = nullptr; b.final = true; return b; }
+    // 收尾用的单片预算：final=true（NEED_DRAIN 重试），但仍按字节/时间切片，便于片间 yieldUi
+    static PumpBudget finalSlice() {
+        PumpBudget b;
+        b.final = true;
+        b.maxBytes = 64u * 1024u;
+        b.maxMs = 8;
+        return b;
+    }
 };
 // 一块输出里还没喂给核心的部分（跨 pump 调用保留；换 attempt 时清空）
 struct PumpCarry {
@@ -96,11 +109,27 @@ PumpResult pump_core(itcore_core *core, PopFn &&pop, AfterFeed &&afterFeed, cons
         const size_t adv = fr.accepted ? fr.accepted : n;
         cur.off += adv;
         fed += adv;
+        // 切片之间：若 UI 有输入/绘制待处理，提前让出（收尾同样返回 FedMore，由 pump_core_final 片间再 yield）
+        if (budget.yieldUi && budget.yieldUi(budget.yieldCtx)) { afterFeed(); return PumpResult::FedMore; }
+    }
+}
+
+// 收尾按片喂完积压：每片用 finalSlice 预算，片间调用 budget.yieldUi（可空）。
+// 语义与一次 unlimited 相同（全部喂完才返回），但不会长时间占住 UI 线程。
+// NEED_DRAIN 走 final 重试；非 FedMore 结束（Fed / Idle / Fatal）。
+template <class PopFn, class AfterFeed>
+PumpResult pump_core_final(itcore_core *core, PopFn &&pop, AfterFeed &&afterFeed, PumpCarry *carry,
+                           PumpBudget slice = PumpBudget::finalSlice()) {
+    slice.final = true;
+    for (;;) {
+        auto r = pump_core(core, pop, afterFeed, slice, carry);
+        if (r != PumpResult::FedMore) return r;
+        if (slice.yieldUi) (void)slice.yieldUi(slice.yieldCtx);  // 片间再抽一次，给对话框/会话树 WM_PAINT
     }
 }
 
 // finishSession 的输入收尾顺序（平台无关，可测）：
-//   pumpFinal()（不限预算喂完积压）→ killContTimer()（撤掉挂着的续跑）→ sched.reset()（读线程恢复投递资格，
+//   pumpFinal()（按片喂完积压，片间可 yieldUi）→ killContTimer()（撤掉挂着的续跑）→ sched.reset()（读线程恢复投递资格，
 //   但 inputFinished 之后 pump 直接返回）→ itcore_finish_input → inputFinished = true。
 // finish_input 必须在最后一次 feed 之后；inputFinished 必须在 finish_input 之后才置位（pumpFinal 内仍须能喂）。
 template <class PumpFinal, class KillTimer>
@@ -112,8 +141,8 @@ void finish_session_input(itcore_core *core, bool &inputFinished, PumpScheduler 
     if (core && !inputFinished) { itcore_finish_input(core); inputFinished = true; }
 }
 
-// 续跑方式：预算用尽时不能 PostMessage（投递消息先于输入/WM_PAINT，仍会饿死），改用一次性 1ms 定时器
-// （WM_TIMER 优先级低于 WM_PAINT 与输入）。
+// 续跑方式：FedMore 与 Fed+missed 都走定时器（见 PumpScheduler::end），禁止 Post 续跑。
+// WM_TIMER 优先级低于 WM_PAINT 与输入，关闭点击才能进 MessageBoxW。
 enum class PumpNext { None, Timer };
 inline PumpNext nextAfterPump(PumpResult r) { return r == PumpResult::FedMore ? PumpNext::Timer : PumpNext::None; }
 
