@@ -108,6 +108,9 @@ struct App {
   bool skipChar = false;
   bool quitting = false;
   UINT dpi = 96;
+  // --command：只交给启动时创建的第一个工厂（后端再只给它的第一个本地窗格）。改字体会重建工厂，
+  // 所以首次 makeFactory 后清掉，避免之后新开的本地窗格又执行一遍。
+  std::optional<std::wstring> startupCommand;
 };
 App* g = nullptr;
 
@@ -1004,6 +1007,7 @@ uishell::PaneBackendFactory makeFactory() {
   cfg.fontFamily = W(g->settings.fontFamily);
   cfg.fontSizePt = (float)g->settings.fontSize;
   cfg.wordChars = g->settings.wordChars;  // 非法值由后端打日志并退回默认
+  if (g->startupCommand) { cfg.localCommand = std::move(g->startupCommand); g->startupCommand.reset(); }  // dd38652
   return it2app::makeWin32PaneBackendFactory(std::move(cfg));
 #endif
 }
@@ -1036,6 +1040,22 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   auto lw = loadWorkspace(app.configDir / "workspace.json");
   app.ws = std::move(lw.data); app.wsReadOnly = lw.readOnly;
 
+  {  // it2w_shell.exe --command "<命令行>" / --command=<命令行>
+    int argc = 0;
+    std::vector<std::wstring> argv;
+    if (LPWSTR* av = CommandLineToArgvW(GetCommandLineW(), &argc)) {
+      for (int i = 0; i < argc; ++i) argv.emplace_back(av[i]);
+      LocalFree(av);
+    }
+    if (auto cmd = parseCommandArg(argv)) {
+      if (cmd->empty()) {  // --command 无值：不传给后端，提示一次
+        app.statusNote = "--command 缺少命令行，已忽略";
+        OutputDebugStringW(L"it2w_shell: --command 缺少命令行，已忽略\n");
+      } else {
+        app.startupCommand = std::move(*cmd);
+      }
+    }
+  }
   app.factory = makeFactory();
 
   WNDCLASSEXW wc = {}; wc.cbSize = sizeof wc; wc.lpfnWndProc = MainProc; wc.hInstance = inst; wc.lpszClassName = kMainClass;
