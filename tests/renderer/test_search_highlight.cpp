@@ -74,8 +74,9 @@ int main() {
   s1 = resolve_cell(t, c, false, SearchHit::Other); assert(s1.fg == 0x0000FF && s1.bg == 0xFF0000);
   c.flags = ITREN_CELL_DIM;                                                  // DIM 向高亮背景混
   o = resolve_cell(t, c, false, SearchHit::Other); assert(o.bg == 0xFFFF00 && o.fg == blend50(0x000000, 0xFFFF00));
-  c.flags = ITREN_CELL_HIDDEN;                                               // HIDDEN 不被高亮暴露
+  c.flags = ITREN_CELL_HIDDEN;                                               // HIDDEN 不被高亮暴露：橙/黄底空白格
   o = resolve_cell(t, c, false, SearchHit::Current); assert(o.fg == sc.current_bg && o.bg == sc.current_bg && o.underline == sc.current_bg);
+  o = resolve_cell(t, c, false, SearchHit::Other); assert(o.fg == sc.other_bg && o.bg == sc.other_bg && o.underline == sc.other_bg);
   c.flags = 0; c.underline_color = 0x0200FF00;                               // 自定义下划线色保留
   o = resolve_cell(t, c, false, SearchHit::Other); assert(o.underline == 0x00FF00);
   Theme t2; t2.search.other_bg = 0x123456;                                   // 可配置

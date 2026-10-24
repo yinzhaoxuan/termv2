@@ -992,8 +992,8 @@ uishell::SearchResult Win32PaneBackend::findInScrollback(std::string_view needle
     o.regex = opt.regex;  // v0.1：true → found=false（PaneSearch 不退回子串搜索）
     o.wrap = opt.wrapAround;
     const PaneSearch::State s = search_.find(core_, needleUtf8, o, backward);
-    if (s.found && s.hasView) revealSearchRow(s.viewRow);
-    else present();  // 视口未滚也要刷高亮（含未找到时清掉旧当前命中色）
+    if (s.found && s.hasView) revealSearchRow(s.viewRow);  // 含「已在视口」：reveal 内 present（SRCH-HL-03）
+    else present();  // 未找到 / 无视口坐标：清或刷新高亮
     armSearchTimer();
     return toUiSearch(s);
 }
@@ -1040,10 +1040,13 @@ void Win32PaneBackend::revealSearchRow(int32_t viewRow) {
     vp_.updateHistory(int(std::min<uint32_t>(itcore_history_rows(core_), INT_MAX)));
     const int rows = resize_.dims().rows;
     const int32_t first = vp_.firstRow();
-    if (viewRow >= first && viewRow < first + rows) return;
+    // SRCH-HL-03：命中已在视口内也必须 present。findInScrollback 在 found&&hasView 时只调
+    // reveal、不走 else present；若此处早退，syncSearchHighlight 永不跑，单命中在屏内
+    // （CJK/emoji/HIDDEN/SOFTWRAP 等）就会出现「1/1 但无黄/橙」——真机 M20/M24b。
+    if (viewRow >= first && viewRow < first + rows) { present(); return; }
     const int64_t target = int64_t(viewRow) - rows / 2;
     const int64_t delta = std::clamp<int64_t>(target - first, INT_MIN, INT_MAX);
-    if (!vp_.scroll(int(delta))) return;
+    if (!vp_.scroll(int(delta))) { present(); return; }  // 夹紧后无位移：仍刷高亮
     present();
     syncViewport(true);
 }
