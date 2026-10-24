@@ -285,8 +285,9 @@ typedef struct itcore_search_range {
     uint8_t  is_current;       /* 1 = 当前结果 */
     uint8_t  reserved[3];
 } itcore_search_range;
-/* 开始搜索（不扫描内容）。needle 为 UTF-8，len=0 / opt=NULL / opt->struct_size 偏小 / 未知 flags 或 case_mode
-   返回 EINVAL 且不分配；F_REGEX 返回 EUNSUPPORTED。同一 core 只有一个活动句柄：再次 begin 使旧句柄进入 RESTART。成功 0 */
+/* 开始搜索（不扫描内容）。needle 为 UTF-8，len=0 / opt=NULL / opt->struct_size 偏小 / 未知 flags 或 case_mode /
+   不区分大小写或 smart 折叠后 needle 变空（例如只含 VS15/16）返回 EINVAL 且不分配；F_REGEX 返回 EUNSUPPORTED。
+   同一 core 只有一个活动句柄：再次 begin 使旧句柄进入 RESTART。成功 0 */
 int  itcore_search_begin(itcore_core *c, const char *needle, size_t len, const itcore_search_options *opt, itcore_search **out);
 /* 在预算内推进扫描：budget_cells（0 = 不限）与 budget_us（0 = 不限）先到先停，检查点在逻辑行之间，每次至少扫一行。
    每次先校验已扫网格行的 revision（改写则重扫该逻辑行）并剔除已淘汰段上的结果。新结果按文档顺序写入 buf

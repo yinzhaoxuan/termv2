@@ -188,15 +188,20 @@ int Searcher::create(Screen &s, const char *needle, size_t len, const itcore_sea
         for (uint32_t cp : raw) if (fold_cp(cp) != cp) { fold = false; break; }
     }
 
-    Searcher *h = new Searcher(s);
-    h->fold_ = fold;
+    // 不区分大小写 / smart 折叠时去掉 VS15/16；折叠后 needle 为空则 EINVAL（区分大小写模式原样保留）
+    std::vector<uint32_t> folded;
     for (uint32_t cp : raw) {
         if (fold) {
             if (is_vs(cp)) continue;
             cp = fold_cp(cp);
         }
-        h->needle_.push_back(cp);
+        folded.push_back(cp);
     }
+    if (fold && folded.empty()) return ITCORE_SEARCH_EINVAL;
+
+    Searcher *h = new Searcher(s);
+    h->fold_ = fold;
+    h->needle_ = std::move(folded);
     h->flags_ = opt->flags;
     h->max_results_ = opt->max_results ? opt->max_results : 100000;
     h->max_cells_ = opt->max_match_cells ? opt->max_match_cells : 1024;

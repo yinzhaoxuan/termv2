@@ -608,6 +608,21 @@ static void test_lifecycle() {
         CHECK(itcore_search_begin(c, "a", 1, &bad, &h) == ITCORE_SEARCH_EINVAL && h == nullptr);
         auto rx = o; rx.flags = ITCORE_SEARCH_F_REGEX;
         CHECK(itcore_search_begin(c, "a", 1, &rx, &h) == ITCORE_SEARCH_EUNSUPPORTED && h == nullptr);
+        // 折叠后 needle 为空（仅 VS15/16）：不区分大小写 / smart → EINVAL；区分大小写原样保留
+        const char vs15[] = "\xEF\xB8\x8E";  // U+FE0E
+        const char vs16[] = "\xEF\xB8\x8F";  // U+FE0F
+        h = reinterpret_cast<itcore_search *>(1);
+        auto ins = opts(ITCORE_SEARCH_CASE_INSENSITIVE);
+        CHECK(itcore_search_begin(c, vs16, 3, &ins, &h) == ITCORE_SEARCH_EINVAL && h == nullptr);
+        h = reinterpret_cast<itcore_search *>(1);
+        auto smart = opts(ITCORE_SEARCH_CASE_SMART);
+        CHECK(itcore_search_begin(c, vs15, 3, &smart, &h) == ITCORE_SEARCH_EINVAL && h == nullptr);
+        std::string both = std::string(vs15) + vs16;
+        h = reinterpret_cast<itcore_search *>(1);
+        CHECK(itcore_search_begin(c, both.data(), both.size(), &ins, &h) == ITCORE_SEARCH_EINVAL && h == nullptr);
+        auto *hs = begin(c, vs16, ITCORE_SEARCH_CASE_SENSITIVE);
+        CHECK(run(hs).total == 0);
+        itcore_search_end(hs);
         CHECK(itcore_search_begin(nullptr, "a", 1, &o, &h) == ITCORE_SEARCH_EINVAL);
         CHECK(itcore_search_step(nullptr, 0, 0, nullptr, nullptr, 0, nullptr) == ITCORE_SEARCH_EINVAL);
         h = begin(c, "a");

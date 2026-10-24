@@ -48,7 +48,7 @@ public:
     bool active() const { return h_ != nullptr; }
     bool busy() const { return h_ && (status_ == ITCORE_SEARCH_RUNNING || pendingDir_.has_value()); }
     void end();
-    // 视口内的高亮区间（草案 §2.6），first_row 为绝对行号；渲染层接入前供调用方使用
+    // 视口内的高亮区间（草案 §2.6）；firstViewRow 为视口相对行（相对当前屏幕第 0 行）；内部换算成绝对行号再调 itcore_search_ranges_in_view
     std::vector<itcore_search_range> ranges(int32_t firstViewRow, uint32_t rows) const;
 
 private:
