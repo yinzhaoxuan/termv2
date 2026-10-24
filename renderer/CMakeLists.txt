@@ -48,3 +48,8 @@ add_test(NAME renderer_glyph_cache COMMAND test_renderer_glyph_cache)
 add_executable(test_renderer_selection_ime ${PROJECT_SOURCE_DIR}/tests/renderer/test_selection_ime.cpp)
 target_link_libraries(test_renderer_selection_ime PRIVATE itcore_mock itrender_layout)
 add_test(NAME renderer_selection_ime COMMAND test_renderer_selection_ime)
+
+# FONT-02：启动字体族找不到时退回内置等宽默认
+add_executable(test_renderer_font_family ${PROJECT_SOURCE_DIR}/tests/renderer/test_font_family.cpp)
+target_link_libraries(test_renderer_font_family PRIVATE itrender_layout)
+add_test(NAME renderer_font_family COMMAND test_renderer_font_family)
