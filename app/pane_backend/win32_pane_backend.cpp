@@ -164,6 +164,7 @@ private:
     void setClipboardUtf8(std::string_view u8);
     std::string getClipboardUtf8();
     void present(bool force = false);  // force：绕过 SyncGate（改尺寸）
+    void syncSearchHighlight();        // 把 PaneSearch::ranges() 建进 D2DRenderer 高亮层（无活动搜索则 clear）
     void releaseSnap();
     void onTransportState(TransportState, std::optional<TransportFault>);
     void finishSession();
@@ -541,7 +542,9 @@ void Win32PaneBackend::drainCoreEvents() {
             }
             break;
         case ITCORE_EV_SEARCH_INVALIDATED:  // resize / 主备屏切换 / ED3 / RIS：下一次 step 得到 RESTARTED
+            if (renderer_) renderer_->clear_search_highlight();  // 先清层，避免失效结果继续黄/橙
             armSearchTimer();
+            present();
             break;
         default: break;
         }
@@ -590,6 +593,23 @@ void Win32PaneBackend::pump(bool drainAll) {
     }
 }
 
+void Win32PaneBackend::syncSearchHighlight() {
+    if (!renderer_) return;
+    if (!core_ || !search_.active()) { renderer_->clear_search_highlight(); return; }
+    const uint16_t rows = resize_.dims().rows, cols = resize_.dims().cols;
+    const auto rr = search_.ranges(vp_.firstRow(), rows);
+    std::vector<itren::SearchRange> v;
+    v.reserve(rr.size());
+    for (const auto &r : rr)  // itcore_search_range.is_current 是 uint8_t，SearchRange 用 bool
+        v.push_back({r.row, r.start_col, r.end_col, r.is_current != 0});
+    // PaneSearch::ranges 入参是视口行，内部换成绝对行；返回的 row 也是绝对行号
+    const int64_t first_abs =
+        int64_t(itcore_scrollback_overflow(core_)) + int64_t(itcore_history_rows(core_)) + vp_.firstRow();
+    itren::SearchHighlight hl;
+    hl.build(v, first_abs, rows, cols);
+    renderer_->set_search_highlight(std::move(hl));
+}
+
 void Win32PaneBackend::present(bool force) {
     if (!renderer_ || !core_) return;
     // ?2026：同步输出期间不取快照，超过 ITREN_SYNC_TIMEOUT_MS 兜底出一帧；关闭（含 DECSTR/RIS）后立即出帧
@@ -602,6 +622,7 @@ void Win32PaneBackend::present(bool force) {
     renderer_->set_snapshot(snap_);
     renderer_->set_focused(focused_);
     renderer_->set_clock(nowMs());
+    syncSearchHighlight();  // 每帧按当前视口重建高亮；无活动搜索 → clear（hit=None，画面与接入前一致）
     renderer_->present_frame();  // 设备丢失在 present_frame 内 recover_device
 }
 
@@ -890,6 +911,7 @@ uishell::SearchResult Win32PaneBackend::findInScrollback(std::string_view needle
     o.wrap = opt.wrapAround;
     const PaneSearch::State s = search_.find(core_, needleUtf8, o, backward);
     if (s.found && s.hasView) revealSearchRow(s.viewRow);
+    else present();  // 视口未滚也要刷高亮（含未找到时清掉旧当前命中色）
     armSearchTimer();
     return toUiSearch(s);
 }
@@ -897,13 +919,14 @@ uishell::SearchResult Win32PaneBackend::findInScrollback(std::string_view needle
 void Win32PaneBackend::clearSearch() {
     search_.end();
     if (HWND h = hwnd_) KillTimer(h, kSearchTimer);
-    present();  // 高亮层接入后在此清层；视口不动
+    present();  // syncSearchHighlight → clear；视口不动
 }
 
 void Win32PaneBackend::endSearch(bool notifyRestarted) {
     if (HWND h = hwnd_) KillTimer(h, kSearchTimer);
     if (!search_.active()) return;
     search_.end();
+    present();  // RESTARTED / reconnect：清高亮层
     if (notifyRestarted && ev_.onSearchUpdated) {
         uishell::SearchResult r;
         r.restarted = true;
@@ -923,6 +946,7 @@ void Win32PaneBackend::searchTick() {
     }
     if (auto u = search_.tick(kSearchBudgetCells, kSearchBudgetUs)) {
         if (u->moved && u->hasView) revealSearchRow(u->viewRow);
+        else present();  // 高亮刷新（含 tick 内 RESTARTED→end 后清层）；reveal 已 present
         if (ev_.onSearchUpdated) ev_.onSearchUpdated(toUiSearch(*u));
     }
     // 计数完成、无挂起移动后停掉快速定时器；之后新输出 / 改写由 50ms tick 发现，失效由事件重新挂上

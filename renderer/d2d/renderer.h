@@ -5,6 +5,7 @@
 #include "grid_metrics.h"
 #include "itcore.h"
 #include "ime_layout.h"
+#include "search_highlight.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -58,6 +59,10 @@ public:
     void set_focused(bool f) { focused_ = f; }
     void note_input(uint64_t tick_ms) { last_input_ms_ = tick_ms; }
     void set_clock(uint64_t tick_ms) { now_ms_ = tick_ms; }
+    // 搜索高亮（草案 §2.6）：每帧由后端把 PaneSearch::ranges() 转成 SearchHighlight 后传入；
+    // 与上一帧比出脏行，present_frame 只重画那些行。clear / RESTARTED 调 clear_search_highlight。
+    void set_search_highlight(SearchHighlight hl);
+    void clear_search_highlight();
     // 动画（光标闪烁 / SGR 5）需要的下一次重绘时间点；0 = 不需要
     bool wants_animation() const { return animating_; }
 
@@ -87,6 +92,8 @@ private:
     uint64_t expected_gen_ = 0;
     uint64_t last_drawn_revision_ = 0;
     Preedit preedit_{};
+    SearchHighlight search_hl_;                 // 视口高亮表；无活动搜索时为空（any()==false）
+    std::vector<uint16_t> search_dirty_;        // set/clear 时相对上一帧的脏行，present_frame 消费
     bool focused_ = true, animating_ = false;
     uint64_t last_input_ms_ = 0, now_ms_ = 0;
     bool device_lost_ = false;

@@ -302,6 +302,17 @@ void D2DRenderer::shutdown() {
 
 void D2DRenderer::set_snapshot(const itcore_snapshot *snap) { snap_ = snap; }
 
+void D2DRenderer::set_search_highlight(SearchHighlight hl) {
+    search_dirty_ = SearchHighlight::dirty_rows(search_hl_, hl);
+    search_hl_ = std::move(hl);
+}
+void D2DRenderer::clear_search_highlight() {
+    SearchHighlight empty = search_hl_;
+    empty.clear();  // 保留尺寸，dirty_rows 才能标出旧命中行
+    search_dirty_ = SearchHighlight::dirty_rows(search_hl_, empty);
+    search_hl_ = std::move(empty);
+}
+
 bool D2DRenderer::set_font(const wchar_t *font_family, float font_size_pt) {
     std::wstring fam = font_family && *font_family ? std::wstring(font_family) : impl_->family;
     if (!impl_->dwrite) { impl_->family = fam; impl_->size_pt = font_size_pt; return true; }  // init 前/失败：下次 init 生效
@@ -435,6 +446,9 @@ bool D2DRenderer::present_frame() {
     // SGR 5：相位翻转时只把含闪烁格的行标脏（行级跟踪，BLINK-01）
     const uint64_t now = now_ms_;
     const bool blink_on = ((now / 1000) % 2) == 0;
+    // 搜索高亮变化：只标脏行（next/prev 换当前命中、滚动视口、clear/RESTARTED）
+    for (uint16_t y : search_dirty_) I.dirty.mark(y);
+    search_dirty_.clear();
     // 评审第 1 点：只画脏行
     std::vector<uint16_t> rows = blink_frame_rows(I.dirty, I.blink_rows, I.last_blink_on, snap_, L.rows, full, blink_on);
 
@@ -470,11 +484,11 @@ bool D2DRenderer::present_frame() {
         uint16_t x = 0;
         while (x < cols) {
             if (cells[x].flags & ITCORE_CELL_CONTINUATION) { ++x; continue; }
-            uint32_t bg = resolve_cell(I.theme, cells[x], rev != 0).bg;
+            uint32_t bg = resolve_cell(I.theme, cells[x], rev != 0, search_hl_.kind(y, x)).bg;
             uint16_t x1 = uint16_t(x + (cells[x].width ? cells[x].width : 1));
             while (x1 < cols) {
                 if (cells[x1].flags & ITCORE_CELL_CONTINUATION) { ++x1; continue; }
-                if (resolve_cell(I.theme, cells[x1], rev != 0).bg != bg) break;
+                if (resolve_cell(I.theme, cells[x1], rev != 0, search_hl_.kind(y, x1)).bg != bg) break;
                 x1 = uint16_t(x1 + (cells[x1].width ? cells[x1].width : 1));
             }
             if (x1 > cols) x1 = cols;
@@ -488,7 +502,7 @@ bool D2DRenderer::present_frame() {
         for (uint16_t col = 0; col < cols; ++col) {
             const itcore_cell &c = cells[col];
             if (c.flags & ITCORE_CELL_CONTINUATION) continue;
-            auto rcol = resolve_cell(I.theme, c, rev != 0);
+            auto rcol = resolve_cell(I.theme, c, rev != 0, search_hl_.kind(y, col));
             const bool text_on = text_visible(c, now);
             auto st = text_style(c.flags, ITCORE_CELL_BOLD, ITCORE_CELL_ITALIC, ITCORE_CELL_UNDERLINE);
             uint8_t cw = c.width ? c.width : 1;
@@ -599,7 +613,7 @@ bool D2DRenderer::present_frame() {
                 auto rc = metrics_.cell_rect(dc, cr, wide ? 2 : 1);
                 D2D1_RECT_F r = D2D1::RectF(float(rc.x), float(rc.y), float(rc.x + rc.w), float(rc.y + rc.h));
                 auto st = text_style(c.flags, ITCORE_CELL_BOLD, ITCORE_CELL_ITALIC, ITCORE_CELL_UNDERLINE);
-                I.brush_fg->SetColor(rgb_f(resolve_cell(I.theme, c, rev != 0).bg));
+                I.brush_fg->SetColor(rgb_f(resolve_cell(I.theme, c, rev != 0, search_hl_.kind(cr, dc)).bg));
                 I.d2d->DrawTextW(gs.c_str(), UINT32(gs.size()), I.formats[st.format_index()], r, I.brush_fg,
                                  D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
             }
@@ -625,6 +639,16 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *, float font_s
 }
 void D2DRenderer::shutdown() { snap_ = nullptr; }
 void D2DRenderer::set_snapshot(const itcore_snapshot *snap) { snap_ = snap; }
+void D2DRenderer::set_search_highlight(SearchHighlight hl) {
+    search_dirty_ = SearchHighlight::dirty_rows(search_hl_, hl);
+    search_hl_ = std::move(hl);
+}
+void D2DRenderer::clear_search_highlight() {
+    SearchHighlight empty = search_hl_;
+    empty.clear();
+    search_dirty_ = SearchHighlight::dirty_rows(search_hl_, empty);
+    search_hl_ = std::move(empty);
+}
 bool D2DRenderer::set_font(const wchar_t *, float font_size_pt) { stub_size_pt_ = font_size_pt; return true; }
 FontMetricsDip D2DRenderer::font_metrics() const { return estimate_font_metrics(stub_size_pt_); }
 bool D2DRenderer::resize_surface() { return true; }
