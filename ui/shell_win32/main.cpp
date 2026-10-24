@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <dwrite.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <windowsx.h>
@@ -108,8 +109,7 @@ struct App {
   bool skipChar = false;
   bool quitting = false;
   UINT dpi = 96;
-  // --command：只交给启动时创建的第一个工厂（后端再只给它的第一个本地窗格）。改字体会重建工厂，
-  // 所以首次 makeFactory 后清掉，避免之后新开的本地窗格又执行一遍。
+  // --command：只给第一个本地窗格（见 makeFactory：UI 记“已用过”，后端工厂按字体惰性重建时不再带上）
   std::optional<std::wstring> startupCommand;
 };
 App* g = nullptr;
@@ -505,38 +505,78 @@ void applyFont(const std::string& family, double size, const std::string& okNote
   if (g->settingsReadOnly) g->statusNote = "settings.json 只读，字体未保存（本次运行有效）";
   else if (!saveSettings(g->configDir / "settings.json", g->settings, false, &err)) g->statusNote = "保存 settings.json 失败：" + err;
   else g->statusNote = okNote;
-  g->factory = makeFactory();
-  for (auto& [id, p] : g->panes) {
+  // 不重建工厂：新窗格由 makeFactory 的包装按 g->settings 取字体。滚动条等后端换完字体经 onStatus 再刷新
+  // （setFont 是异步的，这里读到的还是旧 cellSize）
+  for (auto& [id, p] : g->panes)
     if (p->backend) p->backend->setFont(family, (float)size);
-    updateScrollBar(*p);
-  }
   updateStatusBar();
 }
 
 // 字号：6–72
 void applyFontSize(double v) {
-  if (v == g->settings.fontSize) { g->statusNote = "字号已是 " + std::to_string((int)v) + " pt"; updateStatusBar(); return; }
-  applyFont(g->settings.fontFamily, v, "字号 " + std::to_string((int)v) + " pt");
+  v = normalizeFontSize(v);
+  if (v == g->settings.fontSize) { g->statusNote = "字号已是 " + formatFontSize(v) + " pt"; updateStatusBar(); return; }
+  applyFont(g->settings.fontFamily, v, "字号 " + formatFontSize(v) + " pt");
+}
+
+// ---- DirectWrite：字体族判断与渲染同一套（渲染 set_font 用系统字体集合 FindFamilyName）----
+template <class T> struct ComPtr {
+  T* p = nullptr;
+  ~ComPtr() { if (p) p->Release(); }
+  T** operator&() { return &p; }
+  T* operator->() const { return p; }
+  explicit operator bool() const { return p != nullptr; }
+};
+
+IDWriteFactory* dwFactory() {
+  static IDWriteFactory* f = [] {
+    IDWriteFactory* x = nullptr;
+    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(&x)))) x = nullptr;
+    return x;
+  }();
+  return f;
 }
 
 bool fontInstalled(const std::string& family) {
-  std::wstring w = W(family);
-  LOGFONTW lf{}; lf.lfCharSet = DEFAULT_CHARSET;
-  wcsncpy(lf.lfFaceName, w.c_str(), LF_FACESIZE - 1);
-  bool found = false;
-  HDC dc = GetDC(nullptr);
-  EnumFontFamiliesExW(dc, &lf, [](const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM p) -> int { *reinterpret_cast<bool*>(p) = true; return 0; },
-                      (LPARAM)&found, 0);
-  ReleaseDC(nullptr, dc);
-  return found;
+  IDWriteFactory* f = dwFactory(); if (!f) return false;
+  ComPtr<IDWriteFontCollection> coll;
+  if (FAILED(f->GetSystemFontCollection(&coll, FALSE)) || !coll) return false;
+  UINT32 idx = 0; BOOL exists = FALSE;
+  return SUCCEEDED(coll->FindFamilyName(W(family).c_str(), &idx, &exists)) && exists;
+}
+
+// ChooseFont 的 LOGFONT（lfFaceName 可能是 "Cascadia Mono SemiBold" 这类 GDI 拆分族名）→ DirectWrite 族名
+std::optional<std::string> dwFamilyFromLogFont(const LOGFONTW& lf) {
+  IDWriteFactory* f = dwFactory(); if (!f) return std::nullopt;
+  ComPtr<IDWriteGdiInterop> gdi; ComPtr<IDWriteFont> font; ComPtr<IDWriteFontFamily> fam; ComPtr<IDWriteLocalizedStrings> names;
+  if (FAILED(f->GetGdiInterop(&gdi)) || !gdi) return std::nullopt;
+  if (FAILED(gdi->CreateFontFromLOGFONT(&lf, &font)) || !font) return std::nullopt;
+  if (FAILED(font->GetFontFamily(&fam)) || !fam) return std::nullopt;
+  if (FAILED(fam->GetFamilyNames(&names)) || !names) return std::nullopt;
+  std::vector<std::pair<std::wstring, std::wstring>> list;
+  for (UINT32 i = 0, n = names->GetCount(); i < n; ++i) {
+    UINT32 ll = 0, nl = 0;
+    if (FAILED(names->GetLocaleNameLength(i, &ll)) || FAILED(names->GetStringLength(i, &nl))) continue;
+    std::wstring loc(ll + 1, L'\0'), name(nl + 1, L'\0');
+    if (FAILED(names->GetLocaleName(i, loc.data(), ll + 1)) || FAILED(names->GetString(i, name.data(), nl + 1))) continue;
+    loc.resize(ll); name.resize(nl);
+    list.emplace_back(std::move(loc), std::move(name));
+  }
+  std::wstring pick = pickFamilyName(list);
+  if (pick.empty()) return std::nullopt;
+  return U(pick);
 }
 
 void applyFontFamily(const std::string& input, double size) {
   auto fam = normalizeFontFamily(input);
   if (!fam) { MessageBoxW(g->main, L"字体名无效：不能为空、不能含控制字符，且不超过 31 个字符。", L"字体", MB_OK | MB_ICONWARNING); return; }
-  size = std::clamp(size, kMinFontSize, kMaxFontSize);
+  if (!fontInstalled(*fam)) {  // 只有 DirectWrite 确认存在才应用并写 settings.json（否则渲染会悄悄退回比例字体）
+    MessageBoxW(g->main, (L"DirectWrite 找不到字体族「" + W(*fam) + L"」，未应用。").c_str(), L"字体", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  size = normalizeFontSize(size);
   if (*fam == g->settings.fontFamily && size == g->settings.fontSize) { g->statusNote = "字体已是 " + *fam; updateStatusBar(); return; }
-  applyFont(*fam, size, "字体 " + *fam + " " + std::to_string((int)size) + " pt");
+  applyFont(*fam, size, "字体 " + *fam + " " + formatFontSize(size) + " pt");
 }
 
 // 其他字体：系统字体对话框，只列等宽字体；字体名框可直接输入任意名称
@@ -551,7 +591,13 @@ void chooseOtherFont() {
   cf.Flags = CF_SCREENFONTS | CF_FIXEDPITCHONLY | CF_INITTOLOGFONTSTRUCT | CF_NOVERTFONTS | CF_LIMITSIZE;
   cf.nSizeMin = (INT)kMinFontSize; cf.nSizeMax = (INT)kMaxFontSize;
   if (!ChooseFontW(&cf)) return;  // 取消
-  applyFontFamily(U(lf.lfFaceName), cf.iPointSize > 0 ? cf.iPointSize / 10.0 : g->settings.fontSize);
+  auto fam = dwFamilyFromLogFont(lf);
+  if (!fam) {
+    MessageBoxW(g->main, (L"无法把「" + std::wstring(lf.lfFaceName) + L"」转换成 DirectWrite 字体族，未应用。").c_str(), L"字体", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  // iPointSize 是 1/10 磅，可能是 10.5 这类小数：applyFontFamily 内四舍五入到 0.5
+  applyFontFamily(*fam, cf.iPointSize > 0 ? cf.iPointSize / 10.0 : g->settings.fontSize);
 }
 
 // 字体菜单：常见等宽字体（未安装的置灰）+「其他…」，在鼠标位置弹出
@@ -1002,13 +1048,26 @@ uishell::PaneBackendFactory makeFactory() {
 #ifdef IT2W_SHELL_STUB_BACKEND
   return it2w_shell::makeStubFactory();
 #else
-  it2app::PaneBackendConfig cfg;
-  cfg.resolveSsh = resolveSsh;
-  cfg.fontFamily = W(g->settings.fontFamily);
-  cfg.fontSizePt = (float)g->settings.fontSize;
-  cfg.wordChars = g->settings.wordChars;  // 非法值由后端打日志并退回默认
-  if (g->startupCommand) { cfg.localCommand = std::move(g->startupCommand); g->startupCommand.reset(); }  // dd38652
-  return it2app::makeWin32PaneBackendFactory(std::move(cfg));
+  // 只建一次（启动时）。后端工厂把配置拷成 const，字体又只在配置里，所以包一层：创建窗格时若
+  // g->settings 的字体和当前后端工厂不同，才按新字体惰性重建后端工厂（换字体本身不重建）。
+  // --command（dd38652）：UI 记录第一个本地窗格是否已创建；已创建后重建的后端工厂不再带 localCommand，
+  // 未创建前即使换过字体也照样带上——命令恰好执行一次。
+  struct State { uishell::PaneBackendFactory inner; std::string family; double size = 0; bool localTaken = false; };
+  auto st = std::make_shared<State>();
+  return [st](const std::string& connectionId, uishell::PaneEvents ev) -> std::unique_ptr<uishell::PaneBackend> {
+    if (!st->inner || st->family != g->settings.fontFamily || st->size != g->settings.fontSize) {
+      it2app::PaneBackendConfig cfg;
+      cfg.resolveSsh = resolveSsh;
+      cfg.fontFamily = W(g->settings.fontFamily);
+      cfg.fontSizePt = (float)g->settings.fontSize;
+      cfg.wordChars = g->settings.wordChars;  // 非法值由后端打日志并退回默认
+      if (!st->localTaken) cfg.localCommand = g->startupCommand;
+      st->inner = it2app::makeWin32PaneBackendFactory(std::move(cfg));
+      st->family = g->settings.fontFamily; st->size = g->settings.fontSize;
+    }
+    if (connectionId.empty() && !st->localTaken) { st->localTaken = true; g->startupCommand.reset(); }
+    return st->inner(connectionId, std::move(ev));
+  };
 #endif
 }
 
@@ -1034,9 +1093,15 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   auto ls = loadSettings(app.configDir / "settings.json");
   app.settings = (ls.status == LoadStatus::NotFound || ls.status == LoadStatus::Corrupt) ? defaultSettings() : ls.data;
   app.settingsReadOnly = ls.readOnly;
-  app.settings.fontSize = std::clamp(app.settings.fontSize, kMinFontSize, kMaxFontSize);
-  if (auto fam = normalizeFontFamily(app.settings.fontFamily)) app.settings.fontFamily = *fam;
-  else app.settings.fontFamily = defaultSettings().fontFamily;  // 非法字体名：回退默认，免得之后保存失败
+  app.settings.fontSize = normalizeFontSize(app.settings.fontSize);
+  {  // 非法或 DirectWrite 不存在的字体名：本次运行回退默认（不改 settings.json），免得渲染退回比例字体
+    auto fam = normalizeFontFamily(app.settings.fontFamily);
+    if (fam && fontInstalled(*fam)) app.settings.fontFamily = *fam;
+    else {
+      if (fam) app.statusNote = "字体「" + *fam + "」不存在，已用默认 " + defaultSettings().fontFamily;
+      app.settings.fontFamily = defaultSettings().fontFamily;
+    }
+  }
   auto lw = loadWorkspace(app.configDir / "workspace.json");
   app.ws = std::move(lw.data); app.wsReadOnly = lw.readOnly;
 
@@ -1049,7 +1114,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     }
     if (auto cmd = parseCommandArg(argv)) {
       if (cmd->empty()) {  // --command 无值：不传给后端，提示一次
-        app.statusNote = "--command 缺少命令行，已忽略";
+        app.statusNote += (app.statusNote.empty() ? "" : "；") + std::string("--command 缺少命令行，已忽略");
         OutputDebugStringW(L"it2w_shell: --command 缺少命令行，已忽略\n");
       } else {
         app.startupCommand = std::move(*cmd);

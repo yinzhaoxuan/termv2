@@ -1,4 +1,5 @@
 #include "uicfg/shell_models.h"
+#include <cmath>
 #include <cstdio>
 static int fails = 0;
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
@@ -76,6 +77,17 @@ int main() {
   auto l2 = attemptPanelLayout(100, true, 1);
   CHECK(l2.panelH == 35 && l2.termH == 45);
   CHECK(attemptHeader(3) == "上一次 attempt #3（只读）");
+  // 字号：ChooseFont 小数磅值 / 越界 / 非有限
+  CHECK(normalizeFontSize(10.5) == 10.5 && normalizeFontSize(10.4) == 10.5 && normalizeFontSize(10.2) == 10.0);
+  CHECK(normalizeFontSize(10.75) == 11.0 && normalizeFontSize(3) == 6.0 && normalizeFontSize(100) == 72.0);
+  CHECK(normalizeFontSize(std::nan("")) == 12.0 && normalizeFontSize(INFINITY) == 12.0);
+  CHECK(formatFontSize(12) == "12" && formatFontSize(10.5) == "10.5" && formatFontSize(6) == "6" && formatFontSize(72) == "72");
+  CHECK(fontSizeFor("fontBigger", 10.5) == 11.0 && fontSizeFor("fontSmaller", 10.5) == 10.0);
+  // DirectWrite 族名挑选
+  CHECK(pickFamilyName({}).empty());
+  CHECK(pickFamilyName({{L"zh-cn", L"等线"}, {L"en-US", L"DengXian"}}) == L"DengXian");
+  CHECK(pickFamilyName({{L"ja-jp", L"ＭＳ ゴシック"}, {L"zh-cn", L"x"}}) == L"ＭＳ ゴシック");
+  CHECK(pickFamilyName({{L"en-us", L"Cascadia Mono"}}) == L"Cascadia Mono");
   if (fails) { std::printf("%d failures\n", fails); return 1; }
   std::printf("shell_models ok\n"); return 0;
 }

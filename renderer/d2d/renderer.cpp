@@ -2,7 +2,6 @@
 // Direct2D/DirectWrite 网格渲染原型（DESIGN-T06）。
 // 非 WIN32 构建：提供可链接的空实现，便于 Linux CI 编译门闸。
 #include "renderer.h"
-#include "font_family.h"
 #include "cell_style.h"
 #include "frame_policy.h"
 #include "cursor_geometry.h"
@@ -259,18 +258,9 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
     hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                              reinterpret_cast<IUnknown **>(&impl_->dwrite));
     if (FAILED(hr)) return fail_hr("DWriteCreateFactory", hr);
-    // 启动时 settings 里的族名也归一；找不到则退回内置等宽默认（Consolas → Courier New），
-    // 不再拿不存在的族名建 TextFormat（度量会退回估算）。全都找不到才原样交给 DirectWrite 回退（FONT-02）
-    {
-        bool fell_back = false;
-        std::wstring rf = pick_font_family(impl_->family,
-            [&](const std::wstring &n, std::wstring *o) { return resolve_family(impl_->dwrite, n, o); }, &fell_back);
-        if (rf.empty()) std::fprintf(stderr, "[renderer] 字体族与内置默认都找不到，交给 DirectWrite 回退\n");
-        else {
-            if (fell_back) std::fprintf(stderr, "[renderer] 字体族找不到，退回 %ls\n", rf.c_str());
-            impl_->family = rf;
-        }
-    }
+    // 启动时 settings 里的族名也归一（找不到则原样，CreateTextFormat 自行回退并记日志）
+    if (std::wstring rf; resolve_family(impl_->dwrite, impl_->family, &rf)) impl_->family = rf;
+    else std::fprintf(stderr, "[renderer] font family not found, falling back\n");
     if (!create_formats(*impl_, impl_->family, impl_->size_pt)) return false;
     device_kind_ = kind;
     impl_->saved_metrics = metrics_;

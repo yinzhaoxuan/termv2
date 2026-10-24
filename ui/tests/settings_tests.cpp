@@ -65,6 +65,11 @@ int main() {
     CHECK(!validateSettings(ff).empty() && !saveSettings(f, ff, false, &err));
     CHECK(loadSettings(f).data.fontFamily == "Consolas");  // 非法值不写回
   }
+  {  // ChooseFont 的小数磅值：校验通过、存取不丢小数
+    SettingsFile fs = r.data; fs.fontFamily = "Consolas"; fs.fontSize = 10.5;
+    CHECK(validateSettings(fs).empty() && saveSettings(f, fs, false, &err));
+    CHECK(loadSettings(f).data.fontSize == 10.5);
+  }
 
   resetKeybindings(r.data);
   CHECK(r.data.keybindings.at("newTab") == "Ctrl+Shift+T");

@@ -50,6 +50,12 @@ std::string itemLabel(const TreeItem& it);    // "● web-1 · 10.0.0.1 (2)"
 constexpr double kMinFontSize = 6.0, kMaxFontSize = 72.0, kDefaultFontSize = 12.0;
 // fontBigger / fontSmaller / fontReset → 新字号（夹在 6–72）；非字号动作返回 nullopt
 std::optional<double> fontSizeFor(const std::string& action, double current);
+// 外部来的字号（ChooseFont 的 10.5、settings.json 手改）→ 钳到 6–72 并四舍五入到 0.5；非有限值 → 默认
+double normalizeFontSize(double pt);
+// 显示用：整数不带小数（"12"），否则一位小数（"10.5"）
+std::string formatFontSize(double pt);
+// DirectWrite 本地化族名列表（locale, name）里挑一个：优先 en-us（不分大小写），否则第一个；空列表 → 空串
+std::wstring pickFamilyName(const std::vector<std::pair<std::wstring, std::wstring>>& names);
 
 // ---- 按键路由 ----
 enum class KeyRoute {

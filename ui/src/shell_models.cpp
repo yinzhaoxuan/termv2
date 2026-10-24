@@ -108,6 +108,28 @@ std::optional<double> fontSizeFor(const std::string& action, double cur) {
   return std::clamp(v, kMinFontSize, kMaxFontSize);
 }
 
+double normalizeFontSize(double pt) {
+  if (!std::isfinite(pt)) return kDefaultFontSize;
+  return std::clamp(std::round(pt * 2) / 2, kMinFontSize, kMaxFontSize);
+}
+
+std::string formatFontSize(double pt) {
+  double r = std::round(pt * 10) / 10;
+  if (r == std::floor(r)) return std::to_string((long long)r);
+  long long t = std::llround(r * 10);
+  return std::to_string(t / 10) + "." + std::to_string(t % 10);
+}
+
+std::wstring pickFamilyName(const std::vector<std::pair<std::wstring, std::wstring>>& names) {
+  for (auto& [loc, name] : names) {
+    if (loc.size() != 5) continue;
+    std::wstring l = loc;
+    for (auto& c : l) if (c >= L'A' && c <= L'Z') c = wchar_t(c - L'A' + L'a');
+    if (l == L"en-us") return name;
+  }
+  return names.empty() ? std::wstring() : names.front().second;
+}
+
 bool isSpecialKey(const std::string& k) {
   static const char* names[] = {"Up", "Down", "Left", "Right", "Home", "End", "PageUp", "PageDown",
                                 "Insert", "Delete", "Enter", "Tab", "Backspace", "Escape"};
