@@ -724,6 +724,36 @@ static void pump_budget() {
         CHECK(yields >= 2);                        // 至少两片 → 片间 yield ≥1，加上片内检查
         itcore_destroy(f);
     }
+    // PERF-03：pump 重入守卫——已在 pump 中时第二次 tryEnter 失败；析构后可再进；
+    // 模拟「pump 中再调 pump」（MessageBox 嵌套）第二次被忽略，只记一次 feed
+    {
+        bool pumping = false;
+        {
+            it2app::PumpReentrancyGuard g1(pumping);
+            CHECK(g1.entered() && pumping);
+            it2app::PumpReentrancyGuard g2(pumping);
+            CHECK(!g2.entered() && pumping);       // 第二次被忽略
+        }
+        CHECK(!pumping);
+        {
+            it2app::PumpReentrancyGuard g3(pumping);
+            CHECK(g3.entered() && pumping);
+        }
+        CHECK(!pumping);
+        // 嵌套：外层已持有时内层直接跳过，只记一次 feed
+        int feeds = 0;
+        {
+            it2app::PumpReentrancyGuard outer(pumping);
+            CHECK(outer);
+            ++feeds;
+            {
+                it2app::PumpReentrancyGuard inner(pumping);
+                if (inner) ++feeds;                // 不应进入
+                CHECK(!inner.entered());
+            }
+        }
+        CHECK(feeds == 1 && !pumping);
+    }
     // M17：会话启动网格门闩——仍在 20×5 下限时推迟；严格大于后再启
     {
         CHECK(it2app::gridAtSessionFloor({it2app::kMinCols, it2app::kMinRows}));

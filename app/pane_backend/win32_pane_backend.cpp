@@ -159,8 +159,7 @@ private:
     bool startSession();
     void fail(std::string text);
     void pushCellPixelSize();          // GridMetrics → itcore_set_cell_pixel_size
-    void pump(bool drainAll = false);  // UI 线程：取输出 → 喂核心 → 事件 → present；drainAll 不设预算（收尾）
-    void postPump();                   // UI 线程自己补投一次 pump（PumpScheduler 返回 Post 时）
+    void pump(bool drainAll = false);  // UI 线程：取输出 → 喂核心 → 事件 → present；drainAll=收尾按片+yield（pump_core_final）
     void drainCoreEvents();
     void setClipboardUtf8(std::string_view u8);
     std::string getClipboardUtf8();
@@ -245,6 +244,7 @@ private:
     bool focused_ = false, closing_ = false, finished_ = false, skipChar_ = false;
     bool pendingStart_ = false;             // M17：网格仍是 20×5 下限时推迟 startSession（ConPTY 过小会丢启动输出）
     bool finishingPump_ = false;            // PERF-02：正在 pump_core_final（yield 每片都抽消息，但不提前 FedMore）
+    bool pumping_ = false;                  // PERF-03：pump 重入守卫（嵌套 MessageBox 期间 tick 再入则跳过）
     int downCol_ = -1, downRow_ = -1;
     std::uint64_t attempt_ = 1;          // 当前 attempt；reconnect +1
     std::uint64_t prevAttemptId_ = 0;    // 0 = 无旧归档
@@ -577,10 +577,6 @@ void Win32PaneBackend::flushTitle() {
     }
 }
 
-void Win32PaneBackend::postPump() {
-    postTo<Win32PaneBackend>(*queue_, [](Win32PaneBackend &p) { if (p.shared_->sched.postedShouldRun()) p.pump(); });
-}
-
 bool Win32PaneBackend::yieldUiThunk(void *ctx) {
     auto *self = static_cast<Win32PaneBackend *>(ctx);
     return self->yieldUiMessages(self->finishingPump_);
@@ -612,6 +608,9 @@ bool Win32PaneBackend::yieldUiMessages(bool finishing) {
 }
 
 void Win32PaneBackend::pump(bool drainAll) {
+    // PERF-03：嵌套消息循环（MessageBoxW）期间 tick/续跑再入 → 直接跳过，避免双喂
+    it2app::PumpReentrancyGuard guard(pumping_);
+    if (!guard) return;
     if (!core_ || !transport_ || inputFinished_) return;
     auto &sched = shared_->sched;
     sched.begin();   // pump 期间持有：读线程不投递
@@ -650,13 +649,13 @@ void Win32PaneBackend::pump(bool drainAll) {
         // 继续持有直到 WM_TIMER（低于 WM_PAINT/输入）；SetTimer 失败则释放，靠 kTickTimer，不 Post
         if (HWND h = hwnd_; !h || !SetTimer(h, kPumpContTimer, kPumpContMs, nullptr)) next = sched.timerFailed();
     }
-    if (next == Next::Post) postPump();  // 正常路径不再返回 Post；保留以防将来扩展
+    // Next::Post 已废弃，不再用于续跑（见 PumpScheduler）；冷启动仍走读线程 Post WM_PANE_WAKE
     if (next != Next::Timer) if (HWND h = hwnd_) KillTimer(h, kPumpContTimer);  // 已取空：撤掉挂着的续跑
     if (r == it2app::PumpResult::Fed || r == it2app::PumpResult::FedMore) {
         syncSelection();       // 输出可能清掉选区（切备用屏 / RIS / ED 3）
         syncViewport();        // 已上翻时偏移随历史增长，视图停在原处
-        // PERF-01：续跑中（Timer/Post）不卡 vsync；取空且无续跑则 VSync 稳态
-        const bool cont = (next == Next::Timer || next == Next::Post);
+        // PERF-01：续跑中不卡 vsync；取空且无续跑则 VSync 稳态
+        const bool cont = (next == Next::Timer);
         present(false, cont ? itren::PresentMode::Immediate : itren::PresentMode::VSync);
     }
 }
@@ -1264,11 +1263,17 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     case WM_TIMER:
         if (w == kPumpContTimer) {
             KillTimer(h, kPumpContTimer);  // 一次性；持有状态延续到 pump() 内部，期间读线程不投递
-            pump();
+            if (!pumping_) pump();  // PERF-03：嵌套循环里再入则跳过（pump 内亦有守卫）
             return 0;
         }
         if (w == kSearchTimer) { searchTick(); return 0; }
-        if (w == kTickTimer) { drainUi(); pump(); flushTitle(); autoScrollTick(); if (search_.active()) searchTick(); if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present(); }
+        if (w == kTickTimer) {
+            drainUi();
+            if (!pumping_) pump();  // PERF-03：MessageBox 嵌套期间 tick 不重入 pump
+            flushTitle(); autoScrollTick();
+            if (search_.active()) searchTick();
+            if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present();
+        }
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;

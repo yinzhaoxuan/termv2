@@ -136,7 +136,7 @@ public:
     // 投递的 pump 任务开始执行：清掉 pending；UI 线程正持有（续跑定时器待发）时返回 false，交给定时器
     bool postedShouldRun() { pending_.store(false); return !owned_.load(); }
     void begin() { owned_.store(true); missed_.store(false); }
-    enum class Next { None, Timer, Post };  // Post 保留枚举；end/timerFailed/release 不再返回 Post 续跑
+    enum class Next { None, Timer, Post };  // Post 已废弃（禁止用于续跑）；end/timerFailed/release 永不返回 Post
     // pump 结束：more 或 missed → Timer（保持 owned）；否则释放
     Next end(bool more) {
         if (more || missed_.exchange(false)) return Next::Timer;  // owned 保持 true
@@ -157,6 +157,24 @@ public:
     bool owned() const { return owned_.load(); }
 private:
     std::atomic<bool> owned_{false}, missed_{false}, pending_{false};
+};
+
+// PERF-03：pump 重入守卫。yieldUi 里 DispatchMessage → MessageBoxW 会开嵌套消息循环，
+// 本窗 kTickTimer（及续跑定时器）仍可能再次进入 pump；外层还在 pump_core / carry_ 时
+// 再次 begin+feed 会双喂。tryEnter 已在内则失败；成功则持有到析构。
+class PumpReentrancyGuard {
+public:
+    explicit PumpReentrancyGuard(bool &flag) : flag_(flag), held_(false) {
+        if (!flag_) { flag_ = true; held_ = true; }
+    }
+    ~PumpReentrancyGuard() { if (held_) flag_ = false; }
+    PumpReentrancyGuard(const PumpReentrancyGuard &) = delete;
+    PumpReentrancyGuard &operator=(const PumpReentrancyGuard &) = delete;
+    bool entered() const { return held_; }
+    explicit operator bool() const { return held_; }
+private:
+    bool &flag_;
+    bool held_;
 };
 
 // 会话共享状态：窗格与关闭线程 / 传输回调之间唯一共享的东西。不含窗格指针、不含 PaneEvents。
