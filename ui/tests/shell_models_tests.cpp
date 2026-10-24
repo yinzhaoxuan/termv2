@@ -69,6 +69,15 @@ int main() {
   CHECK(isSpecialKey("Numpad5") && routeKey("Char", false, false, false, true, false) == KeyRoute::SendKey);
   CHECK(!isSpecialKey("F25") && isSpecialKey("F1") && !isSpecialKey("Q"));
   CHECK(keyMods(true, true, true) == 7 && keyMods(false, true, false) == 1);
+  {  // Alt+Space → 系统菜单（不吞 WM_SYSKEYDOWN，DefWindowProc 才出 SC_KEYMENU）
+    constexpr unsigned SYSKEYDOWN = 0x0104, SYSCHAR = 0x0106, KEYDOWN = 0x0100, SPACE = 0x20;
+    CHECK(passAltSpaceToSystemMenu(SYSKEYDOWN, SPACE, false, true));   // SYSKEYDOWN+Alt+Space：放行
+    CHECK(passAltSpaceToSystemMenu(SYSCHAR, SPACE, false, true));      // SYSCHAR+Space+Alt：放行
+    CHECK(!passAltSpaceToSystemMenu(SYSKEYDOWN, SPACE, true, true));   // 有 Ctrl：不放行
+    CHECK(!passAltSpaceToSystemMenu(KEYDOWN, SPACE, false, true));     // 普通 KEYDOWN：不放行
+    CHECK(!passAltSpaceToSystemMenu(SYSKEYDOWN, SPACE, false, false)); // 无 Alt：不放行
+    CHECK(!passAltSpaceToSystemMenu(SYSKEYDOWN, 0x41, false, true));   // Alt+A：不放行
+  }
   // 旧 attempt 面板
   auto l0 = attemptPanelLayout(600, false, 1);
   CHECK(l0.panelH == 0 && l0.termY == 0 && l0.termH == 600);

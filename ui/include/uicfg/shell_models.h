@@ -68,6 +68,10 @@ enum class KeyRoute {
 KeyRoute routeKey(const std::string& key, bool imeProcessKey, bool imeComposing,
                   bool ctrl, bool alt, bool altGrText);
 bool isSpecialKey(const std::string& key);
+// Alt+Space → 系统菜单（SC_KEYMENU）：msg 为 WM_SYSKEYDOWN(0x0104) / WM_SYSCHAR(0x0106)、
+// w 为 VK_SPACE(0x20)、Alt 按下且无 Ctrl 时返回 true（handleKey 应 return false 交给 DefWindowProc）。
+// 普通 KEYDOWN、有 Ctrl（含 AltGr）不放行。
+bool passAltSpaceToSystemMenu(unsigned msg, unsigned w, bool ctrl, bool alt);
 unsigned keyMods(bool ctrl, bool shift, bool alt);  // PaneBackend::KeyMods
 
 // ---- 旧 attempt 面板（只读，位于分隔行之上）----

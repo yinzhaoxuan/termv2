@@ -153,6 +153,11 @@ KeyRoute routeKey(const std::string& key, bool processKey, bool composing, bool 
   return KeyRoute::Text;
 }
 
+bool passAltSpaceToSystemMenu(unsigned msg, unsigned w, bool ctrl, bool alt) {
+  constexpr unsigned kSysKeyDown = 0x0104, kSysChar = 0x0106, kSpace = 0x20;  // WM_SYSKEYDOWN / WM_SYSCHAR / VK_SPACE
+  return (msg == kSysKeyDown || msg == kSysChar) && w == kSpace && alt && !ctrl;
+}
+
 AttemptPanelLayout attemptPanelLayout(int h, bool hasOld, double sc) {
   AttemptPanelLayout l;
   h = std::max(0, h);

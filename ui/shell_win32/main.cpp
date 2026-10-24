@@ -800,6 +800,7 @@ bool handleKey(UINT msg, WPARAM w, LPARAM l) {
     if (processKey || g->imeComposing) return false;  // 输入法组字：交给 IME
     if (isModifierVk(w)) return false;
     bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;
+    if (passAltSpaceToSystemMenu(msg, (unsigned)w, ctrl, alt)) return false;  // Alt+Space → 系统菜单（字体…）
     auto k = keyName(w);
     if (k) {
       auto m = matchKey(g->settings.keybindings, {ctrl, shift, alt, *k});
@@ -824,6 +825,7 @@ bool handleKey(UINT msg, WPARAM w, LPARAM l) {
   }
   if (msg == WM_CHAR || msg == WM_SYSCHAR) {
     if (g->skipChar) { g->skipChar = false; return true; }
+    if (passAltSpaceToSystemMenu(msg, (unsigned)w, GetKeyState(VK_CONTROL) < 0, GetKeyState(VK_MENU) < 0)) return false;
     static wchar_t highSurrogate = 0;
     wchar_t ch = (wchar_t)w;
     if (IS_HIGH_SURROGATE(ch)) { highSurrogate = ch; return true; }
