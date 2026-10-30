@@ -4,6 +4,7 @@
 #include "pane_search.h"
 #include "grid_metrics.h"
 #include <deque>
+#include <algorithm>
 #include <optional>
 #include "frame_policy.h"
 #include "itcore.h"
@@ -479,7 +480,7 @@ static void wordchars() {
     itcore_destroy(c);
 }
 
-// PUMP-01/02/PERF-02：pump_core 预算；续跑一律 Timer（含 Fed+missed）；收尾用 pump_core_final 按片 + yieldUi
+// PUMP-01/02：pump_core 预算；续跑一律 Timer（含 Fed+missed）；收尾由 PumpDriver 分轮推进
 static void pump_budget() {
     itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 80, 24, 100, 1u << 20};
     itcore_core *c = nullptr;
@@ -597,51 +598,6 @@ static void pump_budget() {
         CHECK(it2app::pump_core(f, fpop, [] {}, it2app::PumpBudget::unlimited(), &carry) == PumpResult::Fed && carry.empty());
         itcore_destroy(f);
     }
-    // PUMP-04：finishSession 收尾顺序 pump(true) → KillTimer → sched.reset → finish_input → inputFinished
-    {
-        itcore_core *f = nullptr;
-        CHECK(itcore_create(&o, &f) == 0 && f);
-        it2app::PumpScheduler sc;
-        CHECK(sc.readerShouldPost() && sc.postedShouldRun());
-        sc.begin();
-        CHECK(sc.end(true) == it2app::PumpScheduler::Next::Timer && sc.owned());   // 续跑定时器待发
-        std::deque<Chunk> fq;
-        for (int i = 0; i < 40; ++i) fq.push_back({std::string(64 * 1024 - 2, 'k') + "\r\n"});
-        fq.push_back({"ORDER_END"});
-        auto fpop = [&]() -> std::optional<Chunk> { if (fq.empty()) return std::nullopt; Chunk k = std::move(fq.front()); fq.pop_front(); return k; };
-        auto drainF = [&] { while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
-        bool inputFinished = false;
-        std::vector<std::string> steps;
-        it2app::PumpCarry carry;
-        int finalYields = 0;
-        it2app::finish_session_input(f, inputFinished, sc,
-            [&] {
-                CHECK(!inputFinished && sc.owned());
-                // PERF-02：收尾按片 + yield（与 Win32 pump(true) 一致），不是一次 unlimited
-                it2app::PumpBudget slice = it2app::PumpBudget::finalSlice();
-                slice.yieldUi = [](void *ctx) -> bool { ++*static_cast<int *>(ctx); return false; };
-                slice.yieldCtx = &finalYields;
-                CHECK(it2app::pump_core_final(f, fpop, drainF, &carry, slice) == PumpResult::Fed);
-                CHECK(finalYields >= 1);           // 多片积压 → 片间至少 yield 一次
-                steps.push_back("pump");
-            },
-            [&] {
-                CHECK(!inputFinished && sc.owned());   // 撤定时器在 reset 之前
-                const char k = 'K';                    // finish_input 尚未调用：仍可喂
-                CHECK(itcore_feed(f, reinterpret_cast<const uint8_t *>(&k), 1).accepted == 1);
-                steps.push_back("kill");
-            });
-        CHECK((steps == std::vector<std::string>{"pump", "kill"}));
-        CHECK(inputFinished && !sc.owned() && fq.empty() && carry.empty());
-        CHECK(sc.readerShouldPost());                  // reset 之后读线程恢复投递资格
-        itcore_buffer *b = nullptr;
-        CHECK(itcore_export_text(f, 1u << 20, &b) == 0 && b);
-        if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("ORDER_ENDK") != std::string::npos); itcore_buffer_release(b); }
-        int pumps = 0;
-        it2app::finish_session_input(f, inputFinished, sc, [&] { ++pumps; }, [] {});   // 二次调用：不重复 finish_input
-        CHECK(pumps == 1 && inputFinished);
-        itcore_destroy(f);
-    }
     // PUMP-04：?2026 同步段被预算（FedMore）切开时不出半帧；段结束那次 pump 后立即放行
     {
         itcore_core *f = nullptr;
@@ -736,7 +692,7 @@ static void pump_budget() {
         sc.reset();
         CHECK(sc.readerShouldPost());
     }
-    // PERF-02：yieldUi 返回 true → 提前 FedMore（片间让出）；收尾 pump_core_final 片间调用 yield
+    // yield 查询返回 true 后立即 FedMore；Running 和 final 每轮均至多再喂一片
     {
         itcore_core *f = nullptr;
         CHECK(itcore_create(&o, &f) == 0 && f);
@@ -755,46 +711,12 @@ static void pump_budget() {
         CHECK(it2app::pump_core(f, fpop, [] {}, bb, &carry) == PumpResult::FedMore);
         CHECK(yields == 1);                        // 喂完第一片后 yield → FedMore
         CHECK(!fq.empty());                        // 还有积压
-        // pump_core_final：按片喂完，片间每次 FedMore 都再调一次 yield
-        yields = 0;
-        auto yieldCount = [](void *ctx) -> bool { ++*static_cast<int *>(ctx); return false; };  // 不提前停
-        it2app::PumpBudget slice = it2app::PumpBudget::finalSlice();
-        slice.maxBytes = 32 * 1024;
-        slice.yieldUi = yieldCount; slice.yieldCtx = &yields;
-        CHECK(it2app::pump_core_final(f, fpop, [] {}, &carry, slice) == PumpResult::Fed);
-        CHECK(fq.empty() && carry.empty());
-        CHECK(yields >= 2);                        // 至少两片 → 片间 yield ≥1，加上片内检查
+        // final 预算也只跑一轮，交还调用者再安排定时器。
+        auto slice = it2app::PumpBudget::finalSlice();
+        slice.yieldUi = yieldAlways; slice.yieldCtx = &yields;
+        CHECK(it2app::pump_core(f, fpop, [] {}, slice, &carry) == PumpResult::FedMore);
+        CHECK(yields == 2 && !fq.empty());
         itcore_destroy(f);
-    }
-    // PERF-03：pump 重入守卫——已在 pump 中时第二次 tryEnter 失败；析构后可再进；
-    // 模拟「pump 中再调 pump」（MessageBox 嵌套）第二次被忽略，只记一次 feed
-    {
-        bool pumping = false;
-        {
-            it2app::PumpReentrancyGuard g1(pumping);
-            CHECK(g1.entered() && pumping);
-            it2app::PumpReentrancyGuard g2(pumping);
-            CHECK(!g2.entered() && pumping);       // 第二次被忽略
-        }
-        CHECK(!pumping);
-        {
-            it2app::PumpReentrancyGuard g3(pumping);
-            CHECK(g3.entered() && pumping);
-        }
-        CHECK(!pumping);
-        // 嵌套：外层已持有时内层直接跳过，只记一次 feed
-        int feeds = 0;
-        {
-            it2app::PumpReentrancyGuard outer(pumping);
-            CHECK(outer);
-            ++feeds;
-            {
-                it2app::PumpReentrancyGuard inner(pumping);
-                if (inner) ++feeds;                // 不应进入
-                CHECK(!inner.entered());
-            }
-        }
-        CHECK(feeds == 1 && !pumping);
     }
     // M17：会话启动网格门闩——仍在 20×5 下限时推迟；严格大于后再启
     {
@@ -965,9 +887,336 @@ static void search_driver() {
     }
 }
 
+// 与生产 backend 共用 PumpDriver；伪消息循环只在 step 返回之后调度消息。
+struct PumpTestLoop {
+    struct Task { int owner; std::function<void()> run; };
+    std::deque<Task> input, paint, timers;
+    void cancel(int owner) {
+        auto erase = [owner](auto &q) { std::erase_if(q, [owner](const Task &t) { return t.owner == owner; }); };
+        erase(timers); erase(input); erase(paint);
+    }
+    bool one() {
+        auto *q = !input.empty() ? &input : !paint.empty() ? &paint : &timers;
+        if (q->empty()) return false;
+        auto task = std::move(q->front()); q->pop_front(); task.run(); return true;
+    }
+    void run(int limit = 10000) { while (limit-- && one()) {} CHECK(limit > 0); }
+    void modal(int n) { while (n-- && one()) {} }
+};
+struct PumpTestTrace {
+    int afterFeeds = 0, finishedInputs = 0, terminalPublishes = 0, faults = 0, steps = 0, callbacks = 0;
+    bool insideStep = false;
+    TerminalStatus terminal;
+    std::string log, exported;
+    std::vector<FrameMode> frames;
+};
+struct PumpTestPane {
+    struct Chunk { std::string bytes; };
+    PumpTestLoop &loop;
+    int id;
+    PumpDriver driver;
+    PumpScheduler sched;
+    itcore_core *core = nullptr;
+    std::deque<Chunk> output;
+    PendingEvents events;
+    std::shared_ptr<char> life = std::make_shared<char>();
+    std::shared_ptr<PumpTestTrace> trace = std::make_shared<PumpTestTrace>();
+    std::function<void()> bell, title, viewport;
+    uint64_t queueDropped = 0;
+    bool drainEvents = true, timerWorks = true, yieldAfterSlice = false, inputEnded = true;
+    bool pumpInputEnded() const { return inputEnded; }
+    explicit PumpTestPane(PumpTestLoop &l, int i) : loop(l), id(i) { makeCore(); }
+    ~PumpTestPane() {
+        life.reset(); events.clear(); driver.stop(*this, sched); loop.cancel(id);
+        itcore_destroy(core);
+    }
+    void makeCore() {
+        itcore_options o{}; o.abi_version = ITCORE_ABI_VERSION; o.struct_size = sizeof o;
+        o.columns = 80; o.rows = 24; o.scrollback_lines = 32;
+        CHECK(itcore_create(&o, &core) == 0 && core);
+    }
+    bool armPumpTimer() {
+        cancelPumpTimer();
+        if (!timerWorks) return false;
+        loop.timers.push_back({id, [this] { step(); }}); return true;
+    }
+    void cancelPumpTimer() { std::erase_if(loop.timers, [this](const auto &t) { return t.owner == id; }); }
+    std::optional<Chunk> popOutput() {
+        if (output.empty()) return std::nullopt;
+        auto c = std::move(output.front()); output.pop_front(); return c;
+    }
+    void record(std::function<void()> fn) {
+        if (!fn) return;
+        auto t = trace;
+        events.add([t, fn = std::move(fn)] { CHECK(!t->insideStep); ++t->callbacks; fn(); });
+    }
+    void afterFeed() {
+        ++trace->afterFeeds;
+        if (!drainEvents) return;
+        while (auto *e = itcore_next_event(core)) {
+            if (itcore_event_type(e) == ITCORE_EV_BELL) record(bell);
+            if (itcore_event_type(e) == ITCORE_EV_TITLE) record(title);
+            itcore_event_release(e);
+        }
+    }
+    void finishPumpInput(itcore_core *c) {
+        CHECK(driver.carry.empty() && output.empty());
+        ++trace->finishedInputs; itcore_finish_input(c);
+    }
+    void presentPump(FrameMode mode) { trace->frames.push_back(mode); record(viewport); }
+    void closePumpFault() { ++trace->faults; }
+    void completePump(uint64_t dropped) {
+        TerminalInputs in; in.coreDropped = dropped; in.queueDropped = queueDropped;
+        trace->terminal = classifyTerminal(in);
+        trace->log = terminalLog(1, trace->terminal, dropped, queueDropped);
+        ++trace->terminalPublishes;
+        trace->exported = text();
+    }
+    std::string text() {
+        itcore_buffer *b = nullptr; CHECK(itcore_export_text(core, 1u << 20, &b) == 0 && b);
+        std::string s;
+        if (b) { s.assign(reinterpret_cast<const char *>(b->data), b->length); itcore_buffer_release(b); }
+        return s;
+    }
+    void finishSession() { driver.requestFinish(*this, sched); }
+    void reconnect() {
+        life.reset(); life = std::make_shared<char>(); events.clear();
+        driver.reset(*this, sched); loop.cancel(id); output.clear();
+        itcore_destroy(core); core = nullptr; makeCore();
+    }
+    void step() {
+        ++trace->steps; trace->insideStep = true;
+        auto budget = driver.phase == DrainPhase::Draining ? PumpBudget::finalSlice() : PumpBudget{};
+        if (yieldAfterSlice) budget.yieldUi = [](void *) { return true; }; // 查询，不执行用户动作
+        driver.step(*this, core, sched, budget);
+        trace->insideStep = false;
+        auto token = std::weak_ptr<char>(life);
+        auto batch = events.take();
+        PendingEvents::flush(token, std::move(batch)); // 最后一步，之后不访问 this
+    }
+};
+
+static void flood_close_destroys_continuation_target() {
+    // 100 个种子，四窗格洪峰；关闭前允许模拟对话框的顶层定时器继续推进。
+    for (unsigned seed = 1; seed <= 100; ++seed) {
+        PumpTestLoop loop;
+        std::vector<std::unique_ptr<PumpTestPane>> panes;
+        for (int i = 0; i < 4; ++i) {
+            panes.push_back(std::make_unique<PumpTestPane>(loop, i));
+            // 首种子覆盖每窗格 8 MiB；其余种子用短流覆盖销毁交错，控制 ASan 时长。
+            int blocks = seed == 1 ? 128 : 8;
+            for (int j = 0; j < blocks; ++j) panes.back()->output.push_back({std::string(65534, 'a') + "\r\n"});
+            panes.back()->output.push_back({"SURVIVOR_TAIL"});
+            panes.back()->step(); panes.back()->finishSession();
+        }
+        auto victim = seed % 4;
+        auto trace = panes[victim]->trace;
+        int before = trace->afterFeeds;
+        loop.input.push_back({int(victim), [&] {
+            CHECK(trace->afterFeeds == before); // 输入优先于续跑，关闭处理不被洪峰饿死
+            loop.modal(seed % 7);
+            panes[victim].reset();
+        }});
+        loop.run();
+        for (int i = 0; i < 4; ++i) if (panes[i]) {
+            CHECK(panes[i]->trace->exported.find("SURVIVOR_TAIL") != std::string::npos);
+            CHECK(panes[i]->trace->faults == 0);
+        }
+        CHECK(std::none_of(loop.timers.begin(), loop.timers.end(), [victim](auto &t) { return t.owner == int(victim); }));
+    }
+}
+static void pump_callback_destroys_owner_safely() {
+    for (int which = 0; which < 3; ++which) {
+        PumpTestLoop loop;
+        auto pane = std::make_unique<PumpTestPane>(loop, 1);
+        auto trace = pane->trace;
+        auto destroy = [&] { CHECK(!trace->insideStep); pane.reset(); };
+        pane->bell = which == 0 ? destroy : std::function<void()>{};
+        pane->title = which == 1 ? destroy : std::function<void()>{};
+        pane->viewport = destroy;
+        pane->output.push_back({"\a\x1b]2;TITLE\x07" + std::string(100000, 'a')});
+        pane->step(); // callback 在 pump_core/driver 返回后，外层处理帧仍在栈上
+        int fed = trace->afterFeeds;
+        CHECK(!pane && trace->callbacks == 1);
+        loop.run();
+        CHECK(trace->afterFeeds == fed && loop.timers.empty());
+    }
+}
+static void pump_and_continuation_reconnect_safely() {
+    for (bool viaTimer : {false, true}) {
+        PumpTestLoop loop;
+        auto pane = std::make_unique<PumpTestPane>(loop, 1);
+        auto trace = pane->trace;
+        pane->output.push_back({std::string(65536, 'x')});
+        pane->output.push_back({"\aOLD_TAIL"});
+        pane->bell = [&] { pane->reconnect(); };
+        int stale = 0;
+        pane->viewport = [&] { ++stale; };
+        if (viaTimer) { pane->step(); CHECK(!loop.timers.empty()); stale = 0; loop.one(); }
+        else { pane->output.pop_front(); pane->step(); }
+        CHECK(pane->driver.phase == DrainPhase::Running && pane->driver.carry.empty());
+        CHECK(stale == 0 && !pane->sched.owned() && loop.timers.empty());
+        pane->bell = {}; pane->viewport = {};
+        pane->output.push_back({"NEW_ATTEMPT"}); pane->step(); loop.run();
+        CHECK(pane->text().find("OLD_TAIL") == std::string::npos);
+        CHECK(pane->text().find("NEW_ATTEMPT") != std::string::npos && trace->faults == 0);
+    }
+}
+static void finish_session_during_draining_is_idempotent() {
+    PumpTestLoop loop; PumpTestPane pane(loop, 1);
+    pane.output.push_back({std::string(5 * 65536, 'x') + "TAIL_END"});
+    pane.finishSession(); CHECK(pane.trace->afterFeeds == 0 && pane.trace->finishedInputs == 0);
+    loop.one(); CHECK(pane.driver.phase == DrainPhase::Draining && pane.trace->finishedInputs == 0);
+    pane.finishSession(); // 重复 Closed
+    loop.input.push_back({1, [&] { pane.finishSession(); loop.modal(2); pane.finishSession(); }}); // tick/关闭结果/模态循环
+    loop.run();
+    pane.finishSession(); pane.step();
+    CHECK(pane.trace->finishedInputs == 1 && pane.trace->terminalPublishes == 1);
+    CHECK(pane.trace->exported.find("TAIL_END") != std::string::npos);
+}
+static void close_timeout_waits_for_reader_and_late_tail() {
+    PumpTestLoop loop; PumpTestPane pane(loop, 1);
+    pane.inputEnded = false;
+    pane.finishSession(); // 模拟 onCloseDone 超时，此时读线程仍可入队
+    loop.one();
+    CHECK(pane.trace->finishedInputs == 0 && pane.trace->terminalPublishes == 0);
+    pane.output.push_back({"LATE_READER_TAIL"});
+    loop.one();
+    CHECK(pane.trace->finishedInputs == 0 && pane.trace->terminalPublishes == 0);
+    pane.inputEnded = true; loop.run();
+    CHECK(pane.trace->finishedInputs == 1 && pane.trace->exported.find("LATE_READER_TAIL") != std::string::npos);
+}
+static void final_tail_complete_without_fault() {
+    PumpTestLoop loop; PumpTestPane pane(loop, 1);
+    for (int i = 0; i < 40; ++i) pane.output.push_back({std::string(65534, 'a') + "\r\n"});
+    std::string queries;
+    for (int i = 0; i < 20000; ++i) queries += "\x1b[c"; // Reply 队列迫使 NEED_DRAIN/部分接收
+    pane.output.push_back({queries + "TAIL_END"});
+    pane.finishSession(); loop.run();
+    CHECK(pane.trace->steps > 2 && pane.trace->finishedInputs == 1);
+    CHECK(pane.trace->exported.find("TAIL_END") != std::string::npos);
+    CHECK(pane.trace->faults == 0 && !pane.trace->terminal.failed && pane.trace->terminal.droppedOutputBytes == 0);
+    CHECK(pane.trace->frames.back() == FrameMode::VSync);
+    CHECK(std::all_of(pane.trace->frames.begin(), pane.trace->frames.end() - 1, [](auto f) { return f == FrameMode::Immediate; }));
+    // SetTimer 失败仍由周期 tick 推进，不允许 Post 续跑。
+    pane.reconnect(); pane.timerWorks = false; pane.output.push_back({"TICK_TAIL"});
+    pane.finishSession(); CHECK(loop.timers.empty()); pane.step();
+    CHECK(pane.trace->exported.find("TICK_TAIL") != std::string::npos);
+}
+static void final_dropped_bytes_reported_in_terminal() {
+    PumpTestLoop loop; PumpTestPane pane(loop, 1);
+    std::string bells(40000, '\a');
+    CHECK(itcore_feed(pane.core, reinterpret_cast<const uint8_t *>(bells.data()), bells.size()).status == ITCORE_NEED_DRAIN);
+    pane.drainEvents = false; pane.queueDropped = 123;
+    pane.output.push_back({"\a\aDROP_BYTES"});
+    const auto n = pane.output.front().bytes.size();
+    pane.finishSession(); loop.run();
+    CHECK(pane.driver.stats.droppedBytes == n && pane.driver.stats.skippedSlices == 1);
+    CHECK(pane.trace->terminal.droppedOutputBytes == n + 123);
+    CHECK(pane.trace->terminal.error.find(std::to_string(n + 123)) != std::string::npos);
+    CHECK(pane.trace->log.find("dropped=" + std::to_string(n + 123)) != std::string::npos);
+}
+static void draining_fatal_counts_remaining_without_fault() {
+    PumpTestLoop loop; PumpTestPane pane(loop, 1);
+    itcore_finish_input(pane.core); // 注入真实 FATAL：下一次 feed 将拒收全部
+    pane.output.push_back({"CARRY"}); pane.output.push_back({"QUEUE"});
+    pane.finishSession(); loop.run();
+    CHECK(pane.trace->faults == 0 && pane.trace->terminalPublishes == 1 && pane.trace->finishedInputs == 0);
+    CHECK(pane.driver.stats.droppedBytes == 10 && pane.driver.carry.empty() && pane.output.empty());
+}
+static void running_fatal_closes_once_then_discards_by_budget() {
+    PumpTestLoop loop; PumpTestPane pane(loop, 1);
+    itcore_finish_input(pane.core);
+    pane.output.push_back({"CARRY"});
+    pane.output.push_back({std::string(200000, 'q')});
+    pane.step(); pane.step();
+    CHECK(pane.trace->faults == 1 && pane.driver.inputFinished);
+    CHECK(pane.driver.stats.droppedBytes == 5 && !pane.output.empty());
+    pane.finishSession(); loop.one();
+    CHECK(pane.trace->terminalPublishes == 0); // 只按一轮预算丢弃，还必须再 pop 空确认
+    loop.run();
+    CHECK(pane.trace->faults == 1 && pane.driver.stats.droppedBytes == 200005);
+    CHECK(pane.trace->finishedInputs == 0 && pane.trace->terminalPublishes == 1);
+}
+static void draining_and_finished_reconnect_reset_attempt() {
+    for (bool finished : {false, true}) {
+        PumpTestLoop loop; PumpTestPane pane(loop, 1);
+        pane.output.push_back({std::string(200000, 'x')});
+        pane.finishSession();
+        if (finished) loop.run(); else loop.one();
+        pane.driver.stats.droppedBytes = 42;
+        pane.reconnect();
+        CHECK(pane.driver.phase == DrainPhase::Running && pane.driver.stats.droppedBytes == 0);
+        CHECK(!pane.driver.inputFinished && pane.driver.carry.empty() && loop.timers.empty());
+        pane.output.push_back({"RECONNECTED"}); pane.step(); loop.run();
+        CHECK(pane.text().find("RECONNECTED") != std::string::npos);
+    }
+}
+static void pump_fsm_decisions_and_frame_modes() {
+    for (auto phase : {DrainPhase::Running, DrainPhase::Draining, DrainPhase::Finished}) {
+        for (auto op : {PaneOp::Input, PaneOp::Close, PaneOp::ResizeTransport, PaneOp::Search, PaneOp::ResizeCore, PaneOp::Reconnect}) {
+            bool restricted = op == PaneOp::Input || op == PaneOp::Close || op == PaneOp::ResizeTransport;
+            CHECK(opAllowed(phase, op) == (!restricted || phase == DrainPhase::Running));
+        }
+        for (bool pending : {false, true}) {
+            CHECK(chooseFrameMode(phase, pending, true) == FrameMode::Force);
+            CHECK(chooseFrameMode(phase, pending) == (phase == DrainPhase::Draining || (phase == DrainPhase::Running && pending) ? FrameMode::Immediate : FrameMode::VSync));
+        }
+        for (auto r : {PumpResult::Idle, PumpResult::Fed, PumpResult::FedMore, PumpResult::Fatal}) for (bool empty : {false, true}) {
+            auto d = decidePumpStep(phase, r, empty);
+            CHECK(d.complete == (phase == DrainPhase::Draining && (r == PumpResult::Fatal || (r != PumpResult::FedMore && empty))));
+            CHECK(d.fault == (phase == DrainPhase::Running && r == PumpResult::Fatal));
+            if (phase == DrainPhase::Finished) CHECK(!d.armTimer && !d.frame);
+        }
+    }
+    TerminalInputs in; in.transportFailed = true; in.closing = true;
+    CHECK(!classifyTerminal(in).failed);
+    in.closing = false; CHECK(classifyTerminal(in).failed);
+    in.timedOut = true; in.timeoutDetail = "timeout"; in.sshFailed = true; in.sshDetail = "ssh";
+    CHECK(classifyTerminal(in).error == "timeout");
+}
+static void osc52_ping_sequence_and_split_output_hex() {
+    struct Sink { std::vector<std::string> replies, logs; } sink;
+    auto reply = [](void *p, const char *b, size_t n) { static_cast<Sink *>(p)->replies.emplace_back(b, n); return 0; };
+    auto log = [](void *p, const char *b) { static_cast<Sink *>(p)->logs.emplace_back(b); };
+    osc52DiagPingSequence(reply, &sink, log, &sink);
+    CHECK((sink.replies == std::vector<std::string>{"PING\r", "\x1b[I", "\x1b]52;c;aGk=\x07"}));
+    CHECK(sink.logs.size() == 3);
+    PumpTestLoop loop; PumpTestPane pane(loop, 1);
+    applyOsc52(pane.core, {false, true, 0});
+    std::string request = "\x1b]52;c;?\x07";
+    CHECK(itcore_feed(pane.core, reinterpret_cast<const uint8_t *>(request.data()), request.size()).accepted == request.size());
+    auto *e = itcore_next_event(pane.core); CHECK(e && itcore_event_type(e) == ITCORE_EV_CLIPBOARD_READ);
+    CHECK(deliverOsc52ReadReply(pane.core, e, "real", 4, reply, &sink, log, &sink, true) == Osc52ReadDeliver::Ok);
+    itcore_event_release(e);
+    CHECK(sink.replies.size() == 4 && sink.replies.back().find("cmVhbA==") != std::string::npos);
+    CHECK(sink.logs.back() == "[pane] osc52 read reply ok len=" + std::to_string(sink.replies.back().size()));
+    Osc52OutputSniffer sniffer;
+    CHECK(sniffer.observe("\x1b]5").empty());
+    auto hits = sniffer.observe("2;c;" + std::string(100, 'a'));
+    CHECK(hits.size() == 1 && hits[0].starts_with("1b 5d 35 32 3b") && hits[0].size() == 64 * 3 - 1);
+    CHECK(sniffer.observe("more").empty());
+    CHECK(sniffer.observe("]52;").size() == 1 && sniffer.observe("tail").empty());
+    CHECK(hexPreview("abc", 2) == "61 62");
+    for (const char *value : std::vector<const char *>{nullptr, "", "0", "true", "01", "1 "}) CHECK(!envFlagOn(value));
+    CHECK(envFlagOn("1"));
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
-    if (w == "churn") churn();
+    if (w == "fsm_close") flood_close_destroys_continuation_target();
+    else if (w == "fsm_destroy") pump_callback_destroys_owner_safely();
+    else if (w == "fsm_reconnect") pump_and_continuation_reconnect_safely();
+    else if (w == "fsm_finish") finish_session_during_draining_is_idempotent();
+    else if (w == "fsm_late_tail") close_timeout_waits_for_reader_and_late_tail();
+    else if (w == "fsm_tail") final_tail_complete_without_fault();
+    else if (w == "fsm_dropped") final_dropped_bytes_reported_in_terminal();
+    else if (w == "fsm_fatal") draining_fatal_counts_remaining_without_fault();
+    else if (w == "fsm_running_fatal") running_fatal_closes_once_then_discards_by_budget();
+    else if (w == "fsm_reset") draining_and_finished_reconnect_reset_attempt();
+    else if (w == "fsm_decisions") pump_fsm_decisions_and_frame_modes();
+    else if (w == "osc52_diag") osc52_ping_sequence_and_split_output_hex();
+    else if (w == "churn") churn();
     else if (w == "viewport") viewport();
     else if (w == "keys") keys();
     else if (w == "sync") syncfocus();
@@ -976,7 +1225,7 @@ int main(int argc, char **argv) {
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
     else if (w == "search") search_driver();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

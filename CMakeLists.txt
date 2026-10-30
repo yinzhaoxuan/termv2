@@ -195,6 +195,18 @@ endif()
 # T08：PaneBackend（uishell 接口实现）；需在 it2w_ssh 之后
 add_subdirectory(app/pane_backend)
 
+# 可移植测试的生命周期回归；传播链接标志，使所有 itcore 使用者都能链接 sanitizer runtime。
+option(IT2W_SANITIZE "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(IT2W_SANITIZE)
+  if(MSVC)
+    message(FATAL_ERROR "IT2W_SANITIZE requires Clang or GCC")
+  endif()
+  foreach(_target itcore it2w_pane_logic)
+    target_compile_options(${_target} PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(${_target} PUBLIC -fsanitize=address,undefined)
+  endforeach()
+endif()
+
 # NDEBUG 按目标决定：全局 *_FLAGS_<CONFIG> 已去掉 -DNDEBUG（见文件头）；
 # 非测试目标在优化配置下定义 NDEBUG，测试目标不定义（assert 在 Release/RelWithDebInfo 真机包里也生效）。
 # 不用 -UNDEBUG：它依赖命令行顺序（-DNDEBUG 在 CMAKE_CXX_FLAGS_<CONFIG> 里，可能排在其后），不可靠。

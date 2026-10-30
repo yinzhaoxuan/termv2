@@ -215,9 +215,11 @@ DWORD WINAPI ConPtyTransport::writerMain(LPVOID p) { static_cast<ConPtyTransport
 void ConPtyTransport::writerLoop() {
     std::string buf;
     while (!writerStop_) {
+        bool isReply = false;
         {
             Lock l(lock_);
             auto v = input_.peekWrite();
+            isReply = input_.currentKind() == InputKind::Reply;
             buf.assign(v.substr(0, kReadChunk));
         }
         if (buf.empty()) { WaitForSingleObject(writerWake_, INFINITE); continue; }
@@ -231,6 +233,10 @@ void ConPtyTransport::writerLoop() {
             fault_ = TransportFault::PipeBroken;
             close(CloseReason::Fault);
             break;
+        }
+        if (isReply && written) { // 锁外诊断：只有协议 Reply 写成功才记录。
+            const std::string msg = "[conpty] reply written=" + std::to_string(written) + "\n";
+            OutputDebugStringA(msg.c_str());
         }
         Lock l(lock_);
         input_.consumed(written, nowMs());

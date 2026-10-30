@@ -7,6 +7,84 @@
 
 namespace it2app {
 
+PumpDecision decidePumpStep(DrainPhase phase, PumpResult r, bool carryEmpty) {
+    if (phase == DrainPhase::Finished) return {};
+    if (r == PumpResult::Fatal) return {phase == DrainPhase::Draining, false, false, phase == DrainPhase::Running};
+    if (phase == DrainPhase::Draining && r != PumpResult::FedMore && carryEmpty) return {true, false, false, false};
+    return {false, r == PumpResult::FedMore || !carryEmpty, r != PumpResult::Idle, false};
+}
+FrameMode chooseFrameMode(DrainPhase phase, bool pending, bool force) {
+    if (force) return FrameMode::Force;
+    return phase == DrainPhase::Draining || (phase == DrainPhase::Running && pending) ? FrameMode::Immediate : FrameMode::VSync;
+}
+bool opAllowed(DrainPhase phase, PaneOp op) {
+    switch (op) {
+    case PaneOp::Input: case PaneOp::Close: case PaneOp::ResizeTransport: return phase == DrainPhase::Running;
+    default: return true;
+    }
+}
+TerminalStatus classifyTerminal(const TerminalInputs &in) {
+    TerminalStatus out;
+    out.exitCode = in.exitCode;
+    out.droppedOutputBytes = in.coreDropped + in.queueDropped;
+    if (in.timedOut) { out.failed = true; out.error = in.timeoutDetail; }
+    else if (in.sshFailed) { out.failed = true; out.error = in.sshDetail; }
+    else if (in.transportFailed && !in.closing) { out.failed = true; out.error = in.transportDetail.empty() ? "会话传输故障" : in.transportDetail; }
+    // ui/ 接口暂不加字段；沿既有终态 errorText 回传计数，纯终态保留数值字段。
+    if (out.droppedOutputBytes) {
+        if (!out.error.empty()) out.error += "; ";
+        out.error += "输出可能不完整，丢弃字节数=" + std::to_string(out.droppedOutputBytes);
+    }
+    return out;
+}
+std::string terminalLog(uint64_t attempt, const TerminalStatus &s, uint64_t coreDropped, uint64_t queueDropped) {
+    return "[pane] session end attempt=" + std::to_string(attempt) + " state=" + (s.failed ? "Failed" : "Exited") +
+           " dropped=" + std::to_string(s.droppedOutputBytes) + " (core=" + std::to_string(coreDropped) +
+           " queue=" + std::to_string(queueDropped) + ")";
+}
+void PendingEvents::flush(std::weak_ptr<char> life, Batch events) {
+    for (auto &event : events) {
+        if (life.expired()) return;
+        event(); // 不持有 owner，也不延长令牌寿命；之后只检查局部 weak_ptr。
+    }
+}
+bool envFlagOn(const char *value) { return value && std::string_view(value) == "1"; }
+void osc52DiagPingSequence(int (*reply)(void *, const char *, size_t), void *ctx,
+                          void (*log)(void *, const char *), void *logCtx) {
+    const std::string_view steps[] = {"PING\r", "\x1b[I", "\x1b]52;c;aGk=\x07"};
+    int i = 0;
+    for (auto step : steps) {
+        int rc = reply(ctx, step.data(), step.size());
+        char msg[96];
+        std::snprintf(msg, sizeof msg, "[pane] osc52 ping step=%d rc=%d len=%zu", ++i, rc, step.size());
+        if (log) log(logCtx, msg);
+    }
+}
+std::string hexPreview(std::string_view bytes, size_t limit) {
+    constexpr char hex[] = "0123456789abcdef";
+    std::string out;
+    for (unsigned char c : bytes.substr(0, limit)) {
+        if (!out.empty()) out += ' ';
+        out += hex[c >> 4]; out += hex[c & 15];
+    }
+    return out;
+}
+std::vector<std::string> Osc52OutputSniffer::observe(std::string_view bytes) {
+    std::string joined = tail_; joined.append(bytes);
+    std::vector<std::string> hits;
+    size_t pos = 0;
+    while ((pos = joined.find("]52;", pos)) != std::string::npos) {
+        // 保留 ESC + 跨块标记；旧块中完整的标记不重复上报。
+        if (pos + 4 > tail_.size()) {
+            size_t start = pos && joined[pos - 1] == '\x1b' ? pos - 1 : pos;
+            hits.push_back(hexPreview(std::string_view(joined).substr(start)));
+        }
+        pos += 4;
+    }
+    tail_ = joined.substr(joined.size() > 4 ? joined.size() - 4 : 0);
+    return hits;
+}
+
 int applyOsc52(itcore_core *core, const Osc52Config &cfg) {
     if (!core) return -1;
     itcore_clipboard_policy p{sizeof(p), cfg.allowWrite ? 1 : 0, cfg.allowRead ? 1 : 0, cfg.maxBytes};

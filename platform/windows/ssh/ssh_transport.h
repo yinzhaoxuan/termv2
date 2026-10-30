@@ -22,6 +22,8 @@ struct SshLaunchOptions {
 };
 
 struct SshCallbacks {
+    // 原始输出 tap（读线程），仅用于诊断；不得派发消息/调用 UI。
+    std::function<void(SessionId, AttemptId, std::string_view)> onOutputTap;
     std::function<void(SessionId, AttemptId, TransportState, std::optional<TransportFault>)> onStateChanged;
     std::function<void(SessionId, AttemptId)> onOutputAvailable;
     // ssh 退出：exit.error 为映射结果（None/RemoteExit 为正常结束）
@@ -45,6 +47,7 @@ public:
     void close(CloseReason r) { pty_->close(r); }
     // 取输出：同时喂入 OutputTail 用于退出时错误识别
     std::optional<OutputChunk> tryPopOutput();
+    uint64_t discardedBytes() const { return pty_->discardedBytes(); }
     TransportState state() const { return pty_->state(); }
     bool waitClosed(DWORD ms) { return pty_->waitClosed(ms); }
     EnqueueResult beginPaste(std::size_t n, bool bracketed) { return pty_->beginPaste(n, bracketed); }

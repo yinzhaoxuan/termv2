@@ -1,5 +1,22 @@
 # iterm2-win 进度汇总
 
+
+## 2026-10-31：NEW-01 / NEW-05 / OSC52-05
+
+- 实现 [ADR-001](ADR-001-pump状态机.md)：pump 不再嵌套派发消息或使用重入守卫；
+  Running → Draining → Finished 通过一次性续跑定时器按预算推进。
+  finish_input 只在队列/carry 空且读线程已结束后执行；回调经独立消息与 attempt 令牌隔离。
+- final 拒收与传输队列丢弃合计进入后端终态数值字段、现有 errorText 与 OutputDebugString 日志；
+  不修改 `ui/`，接口后续需求登记在 `（架构师工作区 ui-needs：SessionStatus 后续加 droppedOutputBytes）`。
+- OSC52 增加读入口、跳过、拒绝、成功（常开）及 Reply 写入诊断；唯一诊断开关
+  `ITERM2WIN_OSC52_PING=1`，默认关闭。启用时同一 Reply 路径发送三段诊断后再发送真实应答，
+  原始输出 tap 对 `]52;` 记录至多 64 字节 hex。
+- macOS（Codex）ASan/UBSan：**93/93**（402 s）；box 复核：ASan **114/114**（372 s，含 PANE-11 洪水关闭 370 s）、
+  Linux **114/114**、TSan **113/113**（跳过 PANE-11）、MinGW 交叉编译 `it2w_shell.exe` 成功。无 sanitizer 报错。
+- 未运行：Windows 真机（第 15 轮计划见 `/workspace/qa/r15-plan-draft.md`）；
+  live SSH 排除；CORE-01/02 外部向量缺失按既有 CMake 行为跳过。
+
+
 更新时间：2026-10-23（Asia/Shanghai）
 
 本文件跟踪从核心/传输到最小 Win32 窗的提交进度，以及**尚未在真实 Windows 机器上验证**的项。

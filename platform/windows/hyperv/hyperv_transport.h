@@ -39,6 +39,7 @@ public:
     void close(CloseReason r);
     std::optional<OutputChunk> tryPopOutput();
     TransportState state() const;
+    uint64_t discardedBytes() const { return sshStarted_ ? ssh_->discardedBytes() : 0; }
     bool waitClosed(DWORD ms);
     uint32_t activeProcessCount();
 

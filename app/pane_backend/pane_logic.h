@@ -171,22 +171,49 @@ private:
     std::atomic<bool> owned_{false}, missed_{false}, pending_{false};
 };
 
-// PERF-03：pump 重入守卫。yieldUi 里 DispatchMessage → MessageBoxW 会开嵌套消息循环，
-// 本窗 kTickTimer（及续跑定时器）仍可能再次进入 pump；外层还在 pump_core / carry_ 时
-// 再次 begin+feed 会双喂。tryEnter 已在内则失败；成功则持有到析构。
-class PumpReentrancyGuard {
+// pump/EOF 的纯决策。平台层只提供定时器、核心和传输原语；不派发消息。
+enum class DrainPhase : uint8_t { Running, Draining, Finished };
+enum class PumpResult { Idle, Fed, FedMore, Fatal };
+enum class FrameMode { VSync, Immediate, Force };
+struct PumpStats { uint64_t droppedBytes = 0; uint32_t skippedSlices = 0; };
+struct PumpDecision { bool complete = false, armTimer = false, frame = false, fault = false; };
+PumpDecision decidePumpStep(DrainPhase phase, PumpResult result, bool carryEmpty);
+FrameMode chooseFrameMode(DrainPhase phase, bool pending, bool force = false);
+enum class PaneOp { Input, Close, ResizeTransport, Search, ResizeCore, Reconnect };
+bool opAllowed(DrainPhase phase, PaneOp op);
+struct TerminalInputs {
+    bool transportFailed = false, closing = false, timedOut = false, sshFailed = false;
+    int exitCode = 0;
+    std::string timeoutDetail, sshDetail, transportDetail;
+    uint64_t coreDropped = 0, queueDropped = 0;
+};
+struct TerminalStatus { bool failed = false; int exitCode = 0; std::string error; uint64_t droppedOutputBytes = 0; };
+TerminalStatus classifyTerminal(const TerminalInputs &in);
+std::string terminalLog(uint64_t attempt, const TerminalStatus &, uint64_t coreDropped, uint64_t queueDropped);
+
+// 所有 PaneEvents 先保存值和回调副本，离开 pump/队列 drain 后由独立通知消息取走。
+// flush 只接触局部副本；每次回调前检查 attempt 令牌。回调销毁/重连 owner 后立即停止。
+class PendingEvents {
 public:
-    explicit PumpReentrancyGuard(bool &flag) : flag_(flag), held_(false) {
-        if (!flag_) { flag_ = true; held_ = true; }
-    }
-    ~PumpReentrancyGuard() { if (held_) flag_ = false; }
-    PumpReentrancyGuard(const PumpReentrancyGuard &) = delete;
-    PumpReentrancyGuard &operator=(const PumpReentrancyGuard &) = delete;
-    bool entered() const { return held_; }
-    explicit operator bool() const { return held_; }
+    using Batch = std::vector<std::function<void()>>;
+    void add(std::function<void()> event) { events_.push_back(std::move(event)); }
+    Batch take() { Batch out; out.swap(events_); return out; }
+    void clear() { events_.clear(); }
+    static void flush(std::weak_ptr<char> life, Batch events);
 private:
-    bool &flag_;
-    bool held_;
+    Batch events_;
+};
+
+// OSC52_PING 仅用于诊断；只有环境变量的值恰好为 "1" 才开启。
+bool envFlagOn(const char *value);
+void osc52DiagPingSequence(int (*reply)(void *, const char *, size_t), void *ctx,
+                          void (*log)(void *, const char *), void *logCtx);
+std::string hexPreview(std::string_view bytes, size_t limit = 64);
+class Osc52OutputSniffer {
+public:
+    std::vector<std::string> observe(std::string_view bytes);
+private:
+    std::string tail_;
 };
 
 // 会话共享状态：窗格与关闭线程 / 传输回调之间唯一共享的东西。不含窗格指针、不含 PaneEvents。

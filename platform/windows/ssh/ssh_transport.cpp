@@ -16,7 +16,10 @@ SshTransport::SshTransport(SshCallbacks cb) : cb_(std::move(cb)) {
     };
     tc.onOutputAvailable = [this](SessionId s, AttemptId a) { if (cb_.onOutputAvailable) cb_.onOutputAvailable(s, a); };
     tc.onExited = [this](SessionId s, AttemptId a, uint32_t code) { handleExit(s, a, code); };
-    tc.onOutputTap = [this](SessionId, AttemptId, std::string_view b) { std::lock_guard<std::mutex> g(tailMu_); tail_.append(b); };
+    tc.onOutputTap = [this](SessionId s, AttemptId a, std::string_view b) {
+        { std::lock_guard<std::mutex> g(tailMu_); tail_.append(b); }
+        if (cb_.onOutputTap) cb_.onOutputTap(s, a, b);
+    };
     tc.onDiagnostic = [this](SessionId s, AttemptId a, const DiagRecord &d) { if (cb_.onDiagnostic) cb_.onDiagnostic(s, a, d); };
     pty_ = std::make_unique<ConPtyTransport>(std::move(tc));
 }

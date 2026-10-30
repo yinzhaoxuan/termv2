@@ -23,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 
@@ -32,6 +33,7 @@ namespace it2app {
 namespace {
 
 constexpr UINT WM_PANE_WAKE = WM_APP + 0x41;
+constexpr UINT WM_PANE_EVENTS = WM_APP + 0x42; // pump 返回后才允许发送 PaneEvents
 constexpr UINT_PTR kTickTimer = 1;
 constexpr UINT_PTR kPumpContTimer = 2;  // 一次性：pump 续跑（FedMore 或 Fed+missed）
 constexpr UINT_PTR kSearchTimer = 3;    // 搜索分批计数 / PENDING 落定：busy 期间每 kSearchMs 续跑一次
@@ -76,6 +78,7 @@ struct Transport {
     virtual bool waitClosed(DWORD) = 0;
     virtual uint32_t processes() = 0;
     virtual bool isSsh() const = 0;
+    virtual uint64_t discardedBytes() const = 0;
 };
 struct LocalT final : Transport {
     std::unique_ptr<ConPtyTransport> t;
@@ -87,6 +90,7 @@ struct LocalT final : Transport {
     void close(CloseReason r) override { t->close(r); }
     std::optional<OutputChunk> pop() override { return t->tryPopOutput(); }
     TransportState state() const override { return t->state(); }
+    uint64_t discardedBytes() const override { return t->discardedBytes(); }
     bool waitClosed(DWORD ms) override { return t->waitClosed(ms); }
     uint32_t processes() override { return t->activeProcessCount(); }
     bool isSsh() const override { return false; }
@@ -101,6 +105,7 @@ struct SshT final : Transport {
     void close(CloseReason r) override { t->close(r); }
     std::optional<OutputChunk> pop() override { return t->tryPopOutput(); }
     TransportState state() const override { return t->state(); }
+    uint64_t discardedBytes() const override { return t->discardedBytes(); }
     bool waitClosed(DWORD ms) override { return t->waitClosed(ms); }
     uint32_t processes() override { return t->activeProcessCount(); }
     bool isSsh() const override { return true; }
@@ -116,6 +121,7 @@ struct HyperVT final : Transport {
     void close(CloseReason r) override { t->close(r); }
     std::optional<OutputChunk> pop() override { return t->tryPopOutput(); }
     TransportState state() const override { return t->state(); }
+    uint64_t discardedBytes() const override { return t->discardedBytes(); }
     bool waitClosed(DWORD ms) override { return t->waitClosed(ms); }
     uint32_t processes() override { return t->activeProcessCount(); }
     bool isSsh() const override { return true; }
@@ -129,7 +135,7 @@ public:
         status_ = {uishell::SessionState::Starting, 0, false, {}, {}};
     }
     // 析构：先断开 PaneEvents，再 teardown（close 队列 → 之后的投递一律丢弃）
-    ~Win32PaneBackend() override { ev_ = {}; teardown(); }
+    ~Win32PaneBackend() override { teardown(); }
 
     bool attach(void *parentHwnd, const uishell::PixelRect &rc, float dpi) override;
     void setBounds(const uishell::PixelRect &rc, float dpi) override;
@@ -159,7 +165,28 @@ private:
     bool startSession();
     void fail(std::string text);
     void pushCellPixelSize();          // GridMetrics → itcore_set_cell_pixel_size
-    void pump(bool drainAll = false);  // UI 线程：取输出 → 喂核心 → 事件 → present；drainAll=收尾按片+yield（pump_core_final）
+    void pump(); // 单轮预算；绝不派发消息/调用 PaneEvents
+    friend class it2app::PumpDriver;
+    bool armPumpTimer() { HWND h = hwnd_; return h && SetTimer(h, kPumpContTimer, kPumpContMs, nullptr); }
+    void cancelPumpTimer() { if (HWND h = hwnd_) KillTimer(h, kPumpContTimer); }
+    std::optional<OutputChunk> popOutput() { return transport_ ? transport_->pop() : std::nullopt; }
+    bool pumpInputEnded() const {
+        if (!transport_) return true;
+        auto state = transport_->state();
+        return state == TransportState::Closed || state == TransportState::Failed;
+    }
+    void afterFeed() { drainCoreEvents(); }
+    void finishPumpInput(itcore_core *core) { itcore_finish_input(core); }
+    void presentPump(FrameMode mode);
+    void closePumpFault() { if (transport_) transport_->close(CloseReason::Fault); }
+    void completePump(uint64_t dropped);
+    template<class Fn, class... Args> void deferEvent(Fn fn, Args... args) {
+        if (!fn) return;
+        pendingEvents_.add([fn = std::move(fn), args...] { fn(args...); });
+        if (!eventsPosted_) if (HWND h = hwnd_)
+            eventsPosted_ = PostMessageW(h, WM_PANE_EVENTS, 0, 0) != 0;
+    }
+    void flushEvents(); // 取局部副本；之后不得再访问 this
     void drainCoreEvents();
     void setClipboardUtf8(std::string_view u8);
     std::string getClipboardUtf8();
@@ -188,17 +215,18 @@ private:
     void revealSearchRow(int32_t viewRow);  // 当前结果不在视口内时滚动，使其位于视口中部
     void endSearch(bool notifyRestarted);   // itcore_destroy 之前调用（句柄归核心所有）
     bool altScreen() const { return core_ && itcore_mode_query(core_, 1049) == ITCORE_MODE_SET; }
-    // PERF-02：片间让出。PeekMessage 抽空时跳过会重入 pump 的消息（WAKE / 续跑·tick·搜索定时器），
-    // 取出暂存，抽空结束后再 Post/SetTimer 回去（收尾 finishing 时丢弃续跑/搜索定时器，WAKE 仍补回）。
-    // 返回 true：调用前已有 QS_INPUT|QS_PAINT（本轮应 FedMore，把消息循环还给关闭点击/绘制）。
-    bool yieldUiMessages(bool finishing);
-    static bool yieldUiThunk(void *ctx);
+    static bool inputPendingThunk(void *) { return HIWORD(GetQueueStatus(QS_INPUT | QS_PAINT)) != 0; }
 
     std::string connId_;
     uishell::PaneEvents ev_;
     std::shared_ptr<const PaneBackendConfig> cfg_;
-    it2app::PumpCarry carry_;           // 一块输出里还没喂完的部分（预算在块中间用尽时）
-    bool inputFinished_ = false;        // 已 itcore_finish_input：之后不得再 feed（否则 FATAL → 误报 Fault）
+    PumpDriver pumpDriver_;
+    TerminalStatus terminal_;
+    std::shared_ptr<char> life_ = std::make_shared<char>(); // 每次 reconnect 换令牌
+    PendingEvents pendingEvents_;
+    bool eventsPosted_ = false;
+    // 仅诊断用：默认关闭，会向远端 stdin 注入 PING/伪应答。只认环境变量值 1。
+    const bool osc52Ping_ = envFlagOn(std::getenv("ITERM2WIN_OSC52_PING"));
     std::optional<std::wstring> localCommand_;  // --command，仅第一个本地窗格；重连（新 attempt）同样带上
     // 与关闭线程 / 传输回调共享的唯一状态（不含 this、不含 PaneEvents）
     std::shared_ptr<SessionShared> shared_ = std::make_shared<SessionShared>();
@@ -243,8 +271,6 @@ private:
     std::optional<uint32_t> localExit_;
     bool focused_ = false, closing_ = false, finished_ = false, skipChar_ = false;
     bool pendingStart_ = false;             // M17：网格仍是 20×5 下限时推迟 startSession（ConPTY 过小会丢启动输出）
-    bool finishingPump_ = false;            // PERF-02：正在 pump_core_final（yield 每片都抽消息，但不提前 FedMore）
-    bool pumping_ = false;                  // PERF-03：pump 重入守卫（嵌套 MessageBox 期间 tick 再入则跳过）
     int downCol_ = -1, downRow_ = -1;
     std::uint64_t attempt_ = 1;          // 当前 attempt；reconnect +1
     std::uint64_t prevAttemptId_ = 0;    // 0 = 无旧归档
@@ -351,6 +377,13 @@ bool Win32PaneBackend::startSession() {
     auto onDiag = [](SessionId, AttemptId, const DiagRecord &d) {
         std::fprintf(stderr, "[pane] diag %s %llums %s\n", d.stage.c_str(), (unsigned long long)d.elapsedMs, d.detail.c_str());
     };
+    std::function<void(SessionId, AttemptId, std::string_view)> outputTap;
+    if (osc52Ping_) {
+        auto sniffer = std::make_shared<Osc52OutputSniffer>();
+        outputTap = [sniffer](SessionId, AttemptId, std::string_view bytes) {
+            for (const auto &hex : sniffer->observe(bytes)) pumpLog(nullptr, ("[pane] osc52 out hex=" + hex).c_str());
+        };
+    }
     if (connId_.empty()) {
         TransportCallbacks cb;
         cb.onStateChanged = onState;
@@ -359,6 +392,7 @@ bool Win32PaneBackend::startSession() {
             if (auto sh = ws.lock()) postTo<P>(*sh->queue, [code](P &p) { p.localExit_ = code; });
         };
         cb.onDiagnostic = onDiag;
+        cb.onOutputTap = outputTap;
         auto lt = std::make_unique<LocalT>();
         lt->t = std::make_unique<ConPtyTransport>(cb);
         LaunchSpec spec;
@@ -393,6 +427,7 @@ bool Win32PaneBackend::startSession() {
                        if (auto sh = ws.lock()) postTo<P>(*sh->queue, [x](P &p) { p.sshExit_ = x; });
                    };
                    cb.onDiagnostic = onDiag;
+                   cb.onOutputTap = outputTap;
                    cb.onResolved = [ws](SessionId, AttemptId, const HvAction &a) {
                        if (auto sh = ws.lock()) postTo<P>(*sh->queue, [a](P &p) {
                            p.hvResult_ = a;
@@ -425,6 +460,7 @@ bool Win32PaneBackend::startSession() {
             if (auto sh = ws.lock()) postTo<P>(*sh->queue, [x](P &p) { p.sshExit_ = x; });
         };
         cb.onDiagnostic = onDiag;
+        cb.onOutputTap = outputTap;
         auto st = std::make_unique<SshT>();
         st->t = std::make_unique<SshTransport>(cb);
         auto *raw = st->t.get();
@@ -441,12 +477,13 @@ bool Win32PaneBackend::startSession() {
 void Win32PaneBackend::fail(std::string text) {
     { std::lock_guard l(statusMu_); status_.state = uishell::SessionState::Failed; status_.errorText = std::move(text); }
     finished_ = true;
+    pumpDriver_.stop(*this, shared_->sched);
     pendingStart_ = false;
     publishStatus();
 }
 
 void Win32PaneBackend::publishStatus() {
-    if (ev_.onStatus) ev_.onStatus(status());
+    deferEvent(ev_.onStatus, status());
 }
 
 void Win32PaneBackend::onTransportState(TransportState s, std::optional<TransportFault>) {
@@ -461,39 +498,44 @@ void Win32PaneBackend::onTransportState(TransportState s, std::optional<Transpor
     }
 }
 
-// T03A §1.4 第 8 步：传输 Closed/Failed 后，UI 线程排空剩余输出、finish_input、发布最终快照与状态
+// 传输已终止后只进入 Draining；所有 feed/finish_input 由后续低优先级定时器推进。
 void Win32PaneBackend::finishSession() {
-    if (finished_) return;
+    if (pumpDriver_.phase != DrainPhase::Running) return;
     finished_ = true;
     pendingStart_ = false;
-    // PERF-02：收尾按片喂完（pump(true)→pump_core_final + yieldUi），片间让确认框/会话树先画；喂完再 finish_input
-    it2app::finish_session_input(core_, inputFinished_, shared_->sched, [&] { pump(true); },
-                                 [&] { if (HWND h = hwnd_) KillTimer(h, kPumpContTimer); });
-    drainCoreEvents();
-    present();
+    pumpDriver_.requestFinish(*this, shared_->sched);
+}
+
+void Win32PaneBackend::completePump(uint64_t dropped) {
+    TerminalInputs in;
+    in.transportFailed = transport_ && transport_->state() == TransportState::Failed;
+    in.closing = closing_;
+    in.timedOut = closeOutcome_ && closeOutcome_->timedOut;
+    if (closeOutcome_) in.timeoutDetail = closeOutcome_->detail;
+    in.sshFailed = sshExit_ && sshExit_->error != SshError::None && sshExit_->error != SshError::RemoteExit;
+    if (in.sshFailed) in.sshDetail = std::string(sshErrorName(sshExit_->error)) + (sshExit_->detail.empty() ? "" : ": " + sshExit_->detail);
+    if (hvResult_ && hvResult_->kind == HvAction::Fail)
+        in.transportDetail = std::string(hvFailureName(hvResult_->failure)) + ": " + hvResult_->text;
+    in.exitCode = sshExit_ ? int(sshExit_->exitCode) : int(localExit_.value_or(0));
+    in.coreDropped = dropped;
+    in.queueDropped = transport_ ? transport_->discardedBytes() : 0;
+    terminal_ = classifyTerminal(in);
     {
         std::lock_guard l(statusMu_);
-        bool failed = transport_ && transport_->state() == TransportState::Failed && !closing_;
-        if (closeOutcome_ && closeOutcome_->timedOut) {
-            status_.state = uishell::SessionState::Failed;
-            status_.errorText = closeOutcome_->detail;
-        } else if (sshExit_ && sshExit_->error != SshError::None && sshExit_->error != SshError::RemoteExit) {
-            status_.state = uishell::SessionState::Failed;
-            status_.errorText = std::string(sshErrorName(sshExit_->error)) + (sshExit_->detail.empty() ? "" : ": " + sshExit_->detail);
-            status_.exitCode = int(sshExit_->exitCode);
-        } else if (failed && hvResult_ && hvResult_->kind == HvAction::Fail) {
-            status_.state = uishell::SessionState::Failed;
-            status_.errorText = std::string(hvFailureName(hvResult_->failure)) + ": " + hvResult_->text;
-        } else if (failed) {
-            status_.state = uishell::SessionState::Failed;
-            status_.errorText = "会话传输故障";
-        } else {
-            status_.state = uishell::SessionState::Exited;
-            status_.exitCode = sshExit_ ? int(sshExit_->exitCode) : int(localExit_.value_or(0));
-        }
+        status_.state = terminal_.failed ? uishell::SessionState::Failed : uishell::SessionState::Exited;
+        status_.errorText = terminal_.error;
+        status_.exitCode = terminal_.exitCode;
         status_.hasForegroundJob = false;
     }
-    publishStatus();
+    pumpLog(nullptr, terminalLog(attempt_, terminal_, dropped, in.queueDropped).c_str());
+    publishStatus(); // phase 已是 Finished；只排队，回调不出现在 pump 栈中。
+}
+
+void Win32PaneBackend::flushEvents() {
+    eventsPosted_ = false;
+    auto life = std::weak_ptr<char>(life_);
+    auto events = pendingEvents_.take();
+    PendingEvents::flush(std::move(life), std::move(events)); // 尾调用：可能销毁或重连本对象
 }
 
 void Win32PaneBackend::releaseSnap() {
@@ -539,7 +581,7 @@ void Win32PaneBackend::drainCoreEvents() {
             if (p && n && transport_) transport_->reply(std::string_view(reinterpret_cast<const char *>(p), n));
             break;
         case ITCORE_EV_BELL:
-            if (bell_.allow(nowMs()) && ev_.onBell) ev_.onBell();
+            if (bell_.allow(nowMs())) deferEvent(ev_.onBell);
             break;
         case ITCORE_EV_TITLE:
             if (auto t = title_.offer(std::string(reinterpret_cast<const char *>(p), p ? n : 0), nowMs())) {
@@ -550,23 +592,29 @@ void Win32PaneBackend::drainCoreEvents() {
         case ITCORE_EV_CLIPBOARD_WRITE:
             setClipboardUtf8(std::string_view(reinterpret_cast<const char *>(p), p ? n : 0));
             break;
+        case ITCORE_EV_CLIPBOARD_REQUEST:
+            // 核心 REQUEST 也包括写拒绝/非法选择器；事件本身无法区分读写。
+            pumpLog(nullptr, "[pane] osc52 read denied");
+            break;
         case ITCORE_EV_CLIPBOARD_READ:
-            // OSC52-04：encode / enqueueReply 失败记日志（OutputDebugString），不阻断 pump。
-            if (transport_) {
+            pumpLog(nullptr, "[pane] osc52 read event");
+            if (!transport_) {
+                pumpLog(nullptr, "[pane] osc52 read skipped (no transport)");
+            } else if (!cfg_->osc52.allowRead) {
+                pumpLog(nullptr, "[pane] osc52 read denied");
+            } else {
                 std::string cur = getClipboardUtf8();
-                struct Ctx { Transport *t; } ctx{transport_.get()};
                 auto replyFn = [](void *p, const char *data, size_t n) -> int {
-                    auto *c = static_cast<Ctx *>(p);
-                    return int(c->t->reply(std::string_view(data, n)));
+                    return int(static_cast<Transport *>(p)->reply(std::string_view(data, n)));
                 };
-                deliverOsc52ReadReply(core_, e, cur.data(), cur.size(), replyFn, &ctx, pumpLog, nullptr);
+                if (osc52Ping_) osc52DiagPingSequence(replyFn, transport_.get(), pumpLog, nullptr);
+                deliverOsc52ReadReply(core_, e, cur.data(), cur.size(), replyFn, transport_.get(), pumpLog, nullptr, true); // OSC52-05：成功日志常开
             }
             break;
         case ITCORE_EV_SEARCH_INVALIDATED:  // resize / 主备屏切换 / ED3 / RIS：下一次 step 得到 RESTARTED
             if (renderer_) renderer_->clear_search_highlight();  // 先清层，避免失效结果继续黄/橙
             armSearchTimer();
-            present();
-            break;
+            break; // 当前 pump 的出帧统一由 PumpDriver 选择模式
         default: break;
         }
         itcore_event_release(e);
@@ -580,87 +628,18 @@ void Win32PaneBackend::flushTitle() {
     }
 }
 
-bool Win32PaneBackend::yieldUiThunk(void *ctx) {
-    auto *self = static_cast<Win32PaneBackend *>(ctx);
-    return self->yieldUiMessages(self->finishingPump_);
+void Win32PaneBackend::pump() {
+    PumpBudget budget = pumpDriver_.phase == DrainPhase::Draining ? PumpBudget::finalSlice() : PumpBudget{};
+    budget.nowMs = budgetNowMs;
+    budget.log = pumpLog;
+    budget.yieldUi = inputPendingThunk; // 只查 GetQueueStatus；绝不 Peek/Dispatch。
+    pumpDriver_.step(*this, core_, shared_->sched, budget);
 }
 
-bool Win32PaneBackend::yieldUiMessages(bool finishing) {
-    HWND h = hwnd_;
-    if (!h) return false;
-    // 非收尾：仅当已有输入/绘制挂起时才抽空并提前让出；收尾：每片都抽，好让确认框/会话树先画出来
-    const bool want = finishing || HIWORD(GetQueueStatus(QS_INPUT | QS_PAINT)) != 0;
-    if (!want) return false;
-    bool wake = false, cont = false, search = false;
-    MSG msg;
-    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-        // 跳过会重入 pump 的消息：取出暂存，抽空后再补（收尾丢弃续跑/搜索定时器）
-        if (msg.hwnd == h && msg.message == WM_PANE_WAKE) { wake = true; continue; }
-        if (msg.hwnd == h && msg.message == WM_TIMER) {
-            if (msg.wParam == kPumpContTimer) { cont = !finishing; continue; }
-            if (msg.wParam == kTickTimer) continue;          // 周期性，丢这一拍；下一拍还会来
-            if (msg.wParam == kSearchTimer) { search = !finishing; continue; }
-        }
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-    if (wake) PostMessageW(h, WM_PANE_WAKE, 0, 0);
-    if (cont) { KillTimer(h, kPumpContTimer); SetTimer(h, kPumpContTimer, kPumpContMs, nullptr); }
-    if (search) { KillTimer(h, kSearchTimer); SetTimer(h, kSearchTimer, kSearchMs, nullptr); }
-    return !finishing;  // 非收尾：告诉 pump_core 提前 FedMore；收尾由 pump_core_final 片间再调
-}
-
-void Win32PaneBackend::pump(bool drainAll) {
-    // PERF-03：嵌套消息循环（MessageBoxW）期间 tick/续跑再入 → 直接跳过，避免双喂
-    it2app::PumpReentrancyGuard guard(pumping_);
-    if (!guard) return;
-    if (!core_ || !transport_ || inputFinished_) return;
-    auto &sched = shared_->sched;
-    sched.begin();   // pump 期间持有：读线程不投递
-    auto pop = [&] { return transport_->pop(); };
-    auto after = [&] { drainCoreEvents(); };
-    it2app::PumpResult r;
-    if (drainAll) {
-        // PERF-02：收尾按片推进 + yieldUi（只在 finishSession；刷屏路径绝不 unlimited）
-        it2app::PumpBudget slice = it2app::PumpBudget::finalSlice();
-        slice.nowMs = budgetNowMs;
-        slice.log = pumpLog;
-        slice.yieldUi = &Win32PaneBackend::yieldUiThunk;
-        slice.yieldCtx = this;
-        finishingPump_ = true;
-        r = it2app::pump_core_final(core_, pop, after, &carry_, slice);
-        finishingPump_ = false;
-    } else {
-        it2app::PumpBudget budget{};
-        budget.nowMs = budgetNowMs;
-        budget.log = pumpLog;
-        budget.yieldUi = &Win32PaneBackend::yieldUiThunk;
-        budget.yieldCtx = this;
-        r = it2app::pump_core(core_, pop, after, budget, &carry_);
-    }
-    if (r == it2app::PumpResult::Fatal) {
-        // 核心已 fatal：之后（含 finishSession）不得再 feed，否则误报第二次 Fault
-        inputFinished_ = true; carry_.clear(); sched.reset();
-        if (HWND h = hwnd_) KillTimer(h, kPumpContTimer);
-        transport_->close(CloseReason::Fault);
-        return;
-    }
-    using Next = it2app::PumpScheduler::Next;
-    // FedMore → Timer；Fed 但 missed → 也是 Timer（PumpScheduler::end，禁止 Post 续跑）
-    Next next = sched.end(it2app::nextAfterPump(r) == it2app::PumpNext::Timer);
-    if (next == Next::Timer) {
-        // 继续持有直到 WM_TIMER（低于 WM_PAINT/输入）；SetTimer 失败则释放，靠 kTickTimer，不 Post
-        if (HWND h = hwnd_; !h || !SetTimer(h, kPumpContTimer, kPumpContMs, nullptr)) next = sched.timerFailed();
-    }
-    // Next::Post 已废弃，不再用于续跑（见 PumpScheduler）；冷启动仍走读线程 Post WM_PANE_WAKE
-    if (next != Next::Timer) if (HWND h = hwnd_) KillTimer(h, kPumpContTimer);  // 已取空：撤掉挂着的续跑
-    if (r == it2app::PumpResult::Fed || r == it2app::PumpResult::FedMore) {
-        syncSelection();       // 输出可能清掉选区（切备用屏 / RIS / ED 3）
-        syncViewport();        // 已上翻时偏移随历史增长，视图停在原处
-        // PERF-01：续跑中不卡 vsync；取空且无续跑则 VSync 稳态
-        const bool cont = (next == Next::Timer);
-        present(false, cont ? itren::PresentMode::Immediate : itren::PresentMode::VSync);
-    }
+void Win32PaneBackend::presentPump(FrameMode mode) {
+    syncSelection();
+    syncViewport();
+    present(mode == FrameMode::Force, mode == FrameMode::Immediate ? itren::PresentMode::Immediate : itren::PresentMode::VSync);
 }
 
 void Win32PaneBackend::syncSearchHighlight() {
@@ -718,7 +697,7 @@ void Win32PaneBackend::applyBounds(const uishell::PixelRect &rc, float dpi) {
     if (auto gen = resize_.update(c, r)) {
         // T03A：先 itcore_resize(gen)，再 transport.resize(gen)；渲染按 expected generation 保持旧布局直到快照对齐
         if (core_) itcore_resize(core_, resize_.dims().cols, resize_.dims().rows, *gen);
-        if (transport_ && !closing_) transport_->resize(GridSize{resize_.dims().cols, resize_.dims().rows}, *gen);
+        if (transport_ && !closing_ && opAllowed(pumpDriver_.phase, PaneOp::ResizeTransport)) transport_->resize(GridSize{resize_.dims().cols, resize_.dims().rows}, *gen);
         renderer_->set_expected_generation(*gen);
         releaseSnap();
     }
@@ -772,12 +751,12 @@ void Win32PaneBackend::reportFocus() {
     // ?1004：焦点变化时向程序发 CSI I / CSI O（不回到底部，不经 LNM）
     const bool on = core_ && itcore_mode_query(core_, 1004) == ITCORE_MODE_SET;
     auto bytes = focusRep_.update(on, focused_);
-    if (bytes.empty() || !transport_ || closing_ || finished_) return;
+    if (bytes.empty() || !transport_ || closing_ || finished_ || !opAllowed(pumpDriver_.phase, PaneOp::Input)) return;
     transport_->input(bytes);
 }
 
 void Win32PaneBackend::sendInput(std::string_view utf8) {
-    if (!transport_ || closing_ || finished_ || utf8.empty()) return;
+    if (!transport_ || closing_ || finished_ || !opAllowed(pumpDriver_.phase, PaneOp::Input) || utf8.empty()) return;
     scrollToBottom();  // 用户一有输入就回到底部
     if (renderer_) renderer_->note_input(nowMs());  // 输入后光标常亮一个周期
     const bool lnm = core_ && itcore_ansi_mode_query(core_, 20) == ITCORE_MODE_SET;
@@ -787,9 +766,9 @@ void Win32PaneBackend::sendInput(std::string_view utf8) {
 }
 
 void Win32PaneBackend::paste(std::string_view utf8) {
-    if (!transport_ || !core_ || closing_ || finished_ || utf8.empty()) return;
+    if (!transport_ || !core_ || closing_ || finished_ || !opAllowed(pumpDriver_.phase, PaneOp::Input) || utf8.empty()) return;
     scrollToBottom();
-    auto rejected = [&] { if (ev_.onPasteRejected) ev_.onPasteRejected(utf8.size(), kPasteLimitBytes); };
+    auto rejected = [&] { deferEvent(ev_.onPasteRejected, utf8.size(), kPasteLimitBytes); };
     if (utf8.size() > kPasteLimitBytes) { rejected(); return; }
     // 唯一来源：核心 encode_paste（实时 ?2004、剥离标记、换行归一、上限）
     itcore_buffer *buf = nullptr;
@@ -808,7 +787,7 @@ void Win32PaneBackend::paste(std::string_view utf8) {
 
 // 特殊键：决策在 planKey（Linux 单测），这里只取 ToUnicode / MapVirtualKey 的结果。
 void Win32PaneBackend::sendKey(unsigned vk, unsigned mods) {
-    if (!transport_ || !core_ || closing_ || finished_) return;
+    if (!transport_ || !core_ || closing_ || finished_ || !opAllowed(pumpDriver_.phase, PaneOp::Input)) return;
     uint32_t translated = 0, base = 0;
     if (vk != VK_PROCESSKEY) {
         BYTE ks[256] = {};
@@ -865,6 +844,11 @@ void Win32PaneBackend::reconnect() {
         }
         prevAttemptId_ = attempt_;
     }
+    life_.reset(); // 使正在 flush 的旧 attempt 局部批次失效
+    life_ = std::make_shared<char>();
+    pendingEvents_.clear();
+    pumpDriver_.reset(*this, shared_->sched);
+    terminal_ = {};
     queue_->close();
     if (transport_ && !closer_.started()) startCloser(CloseReason::User);
     transport_.reset();
@@ -880,8 +864,6 @@ void Win32PaneBackend::reconnect() {
     closing_ = finished_ = false;
     KillTimer(h, kPumpContTimer);   // 旧 attempt 的续跑定时器；新的 shared_ 自带全新的 PumpScheduler
     KillTimer(h, kSearchTimer);
-    carry_.clear();
-    inputFinished_ = false;
     selActive_ = dragSelStarted_ = false;
     drag_.cancel();
     dragEdge_ = 0;
@@ -952,7 +934,7 @@ void Win32PaneBackend::syncViewport(bool force) {
     bool changed = vp_.updateHistory(int(std::min<uint32_t>(itcore_history_rows(core_), INT_MAX)));
     if ((changed || force || !vpNotified_) && ev_.onViewportChanged) {
         vpNotified_ = true;
-        ev_.onViewportChanged(vp_.offset(), vp_.history());
+        deferEvent(ev_.onViewportChanged, vp_.offset(), vp_.history());
     }
 }
 
@@ -1012,7 +994,7 @@ void Win32PaneBackend::endSearch(bool notifyRestarted) {
     if (notifyRestarted && ev_.onSearchUpdated) {
         uishell::SearchResult r;
         r.restarted = true;
-        ev_.onSearchUpdated(r);
+        deferEvent(ev_.onSearchUpdated, r);
     }
 }
 
@@ -1029,7 +1011,7 @@ void Win32PaneBackend::searchTick() {
     if (auto u = search_.tick(kSearchBudgetCells, kSearchBudgetUs)) {
         if (u->moved && u->hasView) revealSearchRow(u->viewRow);
         else present();  // 高亮刷新（含 tick 内 RESTARTED→end 后清层）；reveal 已 present
-        if (ev_.onSearchUpdated) ev_.onSearchUpdated(toUiSearch(*u));
+        deferEvent(ev_.onSearchUpdated, toUiSearch(*u));
     }
     // 计数完成、无挂起移动后停掉快速定时器；之后新输出 / 改写由 50ms tick 发现，失效由事件重新挂上
     if (!search_.busy()) if (HWND h = hwnd_) KillTimer(h, kSearchTimer);
@@ -1053,11 +1035,11 @@ void Win32PaneBackend::revealSearchRow(int32_t viewRow) {
 
 void Win32PaneBackend::onCloseDone(const CloseOutcome &r) {
     closeOutcome_ = r;
-    finishSession();  // UI 线程：排空剩余输出、finish_input、最终快照，onStatus(Exited/Failed)
+    finishSession(); // 只请求 Draining；不在关闭结果回调栈里同步 feed/EOF
 }
 
 void Win32PaneBackend::requestClose() {
-    if (closing_ || finished_) return;
+    if (closing_ || finished_ || !opAllowed(pumpDriver_.phase, PaneOp::Close)) return;
     closing_ = true;
     if (transport_) startCloser(CloseReason::User);  // 立即返回；结果经 UI 队列回到 onStatus
     else finishSession();
@@ -1089,7 +1071,7 @@ void Win32PaneBackend::syncSelection() {
     bool now = core_ && itcore_selection_active(core_);
     if (now == selActive_) return;
     selActive_ = now;
-    if (ev_.onSelectionChanged) ev_.onSelectionChanged(now);
+    deferEvent(ev_.onSelectionChanged, now);
 }
 
 void Win32PaneBackend::handleClick(int px, int py) {
@@ -1104,7 +1086,7 @@ void Win32PaneBackend::handleClick(int px, int py) {
     const char *url = nullptr, *id = nullptr;
     size_t ul = 0, il = 0;
     if (!itcore_snapshot_hyperlink(snap_, row[c].hyperlink_id, &url, &ul, &id, &il) || !url) return;
-    ev_.onLinkActivated(std::string(url, ul));  // 只交出 URL，由 UI 跑 checkLink
+    deferEvent(ev_.onLinkActivated, std::string(url, ul)); // 复制 URL，离开鼠标处理栈后才调用 UI
 }
 
 void Win32PaneBackend::handleMouse(UINT msg, WPARAM wp, LPARAM lp) {
@@ -1265,17 +1247,18 @@ void Win32PaneBackend::handleWheel(WPARAM wp, LPARAM lp) {
 LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     HWND h = hwnd_;
     switch (m) {
+    case WM_PANE_EVENTS: flushEvents(); return 0; // 回调之后不得访问 this
     case WM_PANE_WAKE: drainUi(); return 0;
     case WM_TIMER:
         if (w == kPumpContTimer) {
             KillTimer(h, kPumpContTimer);  // 一次性；持有状态延续到 pump() 内部，期间读线程不投递
-            if (!pumping_) pump();  // PERF-03：嵌套循环里再入则跳过（pump 内亦有守卫）
+            pump();
             return 0;
         }
         if (w == kSearchTimer) { searchTick(); return 0; }
         if (w == kTickTimer) {
             drainUi();
-            if (!pumping_) pump();  // PERF-03：MessageBox 嵌套期间 tick 不重入 pump
+            pump();
             flushTitle(); autoScrollTick();
             if (search_.active()) searchTick();
             if (sync_.holding() || (renderer_ && renderer_->wants_animation())) present();
@@ -1291,9 +1274,9 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
     case WM_ERASEBKGND: return 1;
     case WM_MOUSEACTIVATE:
         // 点击窗格：交给 UI 决定焦点（UI 再调 setFocused）
-        if (parent_) SendMessageW(parent_, m, w, l);
         // 顶层窗口原先未激活：这一下点击只激活，不开始选区（BUG-03）
         activateGate_.onMouseActivate(GetForegroundWindow() != GetAncestor(h, GA_ROOT));
+        if (parent_) SendMessageW(parent_, m, w, l); // 转发可能销毁 this，后面只返回常量
         return MA_ACTIVATE;
     case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
         if (!activateGate_.allowDown()) return 0;
@@ -1308,6 +1291,7 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
         // 先按松开收尾再释放捕获：ReleaseCapture 会同步发 WM_CAPTURECHANGED，顺序反了会把正常结束当成取消
         handleMouse(m, w, l); ReleaseCapture(); return 0;
     case WM_MOUSEMOVE: if ((w & MK_LBUTTON) && activateGate_.allowMove()) handleMouse(m, w, l); return 0;
+    // 转发必须尾调用：父窗口可能同步销毁/重连 backend，返回后不得访问 this。
     // 键盘：接口约定按键由 UI 翻译，子窗口拿到焦点后原样转给父窗口（外壳）处理，再由它调 sendInput
     case WM_KEYDOWN: case WM_KEYUP: case WM_SYSKEYDOWN: case WM_SYSKEYUP: case WM_SYSCHAR:
         if (parent_) return SendMessageW(parent_, m, w, l);
@@ -1421,12 +1405,19 @@ LRESULT Win32PaneBackend::onMessage(UINT m, WPARAM w, LPARAM l) {
 }
 
 void Win32PaneBackend::teardown() {
-    // 不阻塞 UI：先 close 队列（此后 PaneEvents 不再被调用，传输回调的 post 被丢弃），
-    // 再把传输交给关闭线程（若用户关闭尚未开始），本线程只放掉自己的引用，不 join、不等待。
+    life_.reset();
+    ev_ = {};
+    pendingEvents_.clear();
+    pumpDriver_.stop(*this, shared_->sched);
+    // GWLP_USERDATA 清空后 WM_DESTROY 不再进入本对象，因此必须显式撤所有定时器。
+    if (HWND h = hwnd_) {
+        KillTimer(h, kTickTimer); KillTimer(h, kPumpContTimer); KillTimer(h, kSearchTimer);
+    }
     queue_->close();
     if (transport_ && !closer_.started()) startCloser(CloseReason::User);
     transport_.reset();
     if (!closer_.started()) shared_->transport.reset();
+    endSearch(false);
     releaseSnap();
     if (renderer_) { renderer_->shutdown(); renderer_.reset(); }
     if (HWND h = hwnd_.exchange(nullptr)) {
@@ -1434,8 +1425,7 @@ void Win32PaneBackend::teardown() {
         DestroyWindow(h);
     }
     host_.reset();
-    endSearch(false);
-    if (core_) { itcore_destroy(core_); core_ = nullptr; }
+    if (core_) { itcore_destroy(core_); core_ = nullptr; } // 最后一次核心访问
 }
 
 bool shutdownPaneBackends(unsigned timeoutMs) {
