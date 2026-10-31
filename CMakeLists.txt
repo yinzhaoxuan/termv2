@@ -93,6 +93,7 @@ add_test(NAME B4.osc52_clipboard COMMAND itcore_test_abi osc52)
 # ConPTY 传输与 t03a_probe 只在 Windows（含 mingw-w64 交叉编译）构建。
 add_library(it2w_platform_common STATIC
   platform/windows/common/ssh_snapshot.cpp platform/windows/common/io_queues.cpp
+  platform/windows/common/ssh_direct_logic.cpp
   platform/windows/common/ssh_session.cpp platform/windows/common/hyperv_resolve.cpp)
 # hyperv_resolve 解析查询 JSON：用仓库内 nlohmann 头文件
 target_include_directories(it2w_platform_common PRIVATE third_party/nlohmann_json/include)
@@ -104,6 +105,9 @@ if(NOT CMAKE_CROSSCOMPILING)
   add_executable(it2w_test_platform_common tests/platform/test_platform_common.cpp)
   target_link_libraries(it2w_test_platform_common PRIVATE it2w_platform_common)
   add_test(NAME SSH-CFG-01.IO-01.unit COMMAND it2w_test_platform_common)
+  add_executable(it2w_test_ssh_direct_logic tests/platform/test_ssh_direct_logic.cpp)
+  target_link_libraries(it2w_test_ssh_direct_logic PRIVATE it2w_platform_common)
+  add_test(NAME SSH-DIRECT-01.logic COMMAND it2w_test_ssh_direct_logic)
 endif()
 if(WIN32)
   add_library(it2w_conpty STATIC platform/windows/conpty/conpty_transport.cpp)

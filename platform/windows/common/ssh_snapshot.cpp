@@ -44,9 +44,8 @@ std::optional<std::string> quoteConfigPath(const std::string &path, std::string 
     return "\"" + p + "\"";
 }
 
-SnapshotResult buildSshSnapshot(const SshTarget &t) {
-    SnapshotResult r;
-    auto err = [&](const char *f, std::string why) { r.error = SnapshotError{f, std::move(why)}; return r; };
+std::optional<SnapshotError> validateSshTarget(const SshTarget &t) {
+    auto err = [](const char *f, std::string why) { return SnapshotError{f, std::move(why)}; };
     if (!valid_alias(t.alias)) return err("alias", "只允许字母数字 . _ -");
     if (!valid_host(t.hostName)) return err("hostName", "非法主机名");
     if (t.port == 0) return err("port", "端口为 0");
@@ -57,6 +56,17 @@ SnapshotResult buildSshSnapshot(const SshTarget &t) {
     if (!known) return err("appKnownHostsFile", why);
     auto empty = quoteConfigPath(t.emptyKnownHostsFile, &why);
     if (!empty) return err("emptyKnownHostsFile", why);
+    if (t.auth == SshAuthMode::KeyFile && !quoteConfigPath(t.keyFile, &why))
+        return err("keyFile", why);
+    return std::nullopt;
+}
+
+SnapshotResult buildSshSnapshot(const SshTarget &t) {
+    SnapshotResult r;
+    r.error = validateSshTarget(t);
+    if (r.error) return r;
+    auto known = quoteConfigPath(t.appKnownHostsFile);
+    auto empty = quoteConfigPath(t.emptyKnownHostsFile);
 
     std::string s;
     auto kv = [&](const char *k, const std::string &v) { s += "  "; s += k; s += ' '; s += v; s += '\n'; };
@@ -87,8 +97,7 @@ SnapshotResult buildSshSnapshot(const SshTarget &t) {
         kv("IdentitiesOnly", "no");
         break;
     case SshAuthMode::KeyFile: {
-        auto key = quoteConfigPath(t.keyFile, &why);
-        if (!key) return err("keyFile", why);
+        auto key = quoteConfigPath(t.keyFile);
         kv("PreferredAuthentications", "publickey");
         kv("PubkeyAuthentication", "yes");
         kv("PasswordAuthentication", "no");

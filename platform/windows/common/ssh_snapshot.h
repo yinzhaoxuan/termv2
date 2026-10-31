@@ -25,6 +25,9 @@ struct SshTarget {
 
 struct SnapshotError { std::string field, reason; };
 
+// 与快照生成共用的字段校验；保留原有校验顺序与错误文本。
+std::optional<SnapshotError> validateSshTarget(const SshTarget &t);
+
 // 生成快照文本（UTF-8 无 BOM，LF 换行）。任何字段不合法时返回错误，不静默省略。
 // 永不输出 ProxyCommand / ProxyJump / LocalCommand / RemoteCommand；ControlMaster 恒为 no、ControlPath none、CertificateFile none。
 struct SnapshotResult { std::optional<std::string> text; std::optional<SnapshotError> error; };
