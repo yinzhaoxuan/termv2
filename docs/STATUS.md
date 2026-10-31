@@ -159,6 +159,8 @@
 
 第 17 轮（对齐 harness，`cmd.exe /k prompt $e]133;A$e\$P$G`，5 回车 + `dir`）：增量绘制下 7 个 `]133;A` **均同位**（紧跟提示符文字，未提前）；标记与提示符文字偶发分两次 ReadFile（约 14–19 ms），字节流连续。**未测** resize/`cls`/滚出底边整屏重绘。core 尚无 OSC 133（属 T04）；`?9001` win32-input-mode 忽略、`?1004` 焦点已支持。
 
+第 18 轮（部分，gavin）：纯管道 Windows `ssh.exe` 9.5p2（无 ConPTY）。R18-3：首次主机密钥 ask 与 password 提示**不到管道**，stdin 无效，进程挂起 → 交互需 TTY / `SSH_ASKPASS`（或 accept-new + 公钥）。非交互 fail-fast 文本可到管道。R18-1/2（DCS / resize）等 DESKTOP-HOODQAJ 上线后对 Linux lab 再跑。
+
 ## 未实机项（须 Win11 + 真 ConPTY / D3D 验证）
 
 以下在 Linux 上只能做到**编译门闸**或纯逻辑单测，行为以规格为准，**不能**用交叉编译结果代替实机：
