@@ -3,7 +3,7 @@
 - **状态**：Accepted（Gavin 2026-10-31 拍板）
 - **证据提交**：`7a901d4`（第 15 轮真机，机器 gavin）
 - **验证环境（第 16 轮 gavin 实测，2026-10-31）**：Windows build 26300.9711（26H2）；conhost.exe 文件版本 10.0.26100.9949；conpty.dll：System32 下不存在；来源：**系统自带**（`conpty_transport.cpp` 直接调 kernel32 `CreatePseudoConsole`，无 `LoadLibrary("conpty.dll")`；`rb-7a901d4` 安装包递归无 OpenConsole/conpty）
-- **第 16 轮方法**：独立 C# harness 调 `CreatePseudoConsole(120×30, …, flags=0)`（与产品 `conpty_transport.cpp:113` 的 `flags=0` 一致）；子进程用 PowerShell 经 `[Console]::OpenStandardOutput()` 写原始字节（未启 `it2w_shell`）。`rb-7a901d4` 的 out hex 嗅探只认 `]52;`，故序列探针改走该 harness。结果：`/workspace/qa/realmachine-results-r16/`（未入仓）。
+- **第 16 轮方法**：独立 C# harness 调 `CreatePseudoConsole(120×30, …)`（**待补对照**：harness `dwFlags=0` 待写明；产品为 `flags=0`、80×24、`cmd.exe`，本轮子进程为 PowerShell；OSC 52 写阳性 / `52;c;?` 阴性对照待跑——补齐前本轮结论为强指示、非产品路径硬证据）；子进程用 PowerShell 经 `[Console]::OpenStandardOutput()` 写原始字节（未启 `it2w_shell`）。`rb-7a901d4` 的 out hex 嗅探只认 `]52;`，故序列探针改走该 harness。结果：`/workspace/qa/realmachine-results-r16/`（未入仓）。
 
 ## 决策
 
