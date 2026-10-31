@@ -5,54 +5,35 @@
 #ifndef _WIN32
 #error "ssh_transport 仅用于 Windows"
 #endif
-#include "conpty_transport.h"
-#include "ssh_session.h"
-#include "ssh_snapshot.h"
-#include <memory>
+#include "ssh_session_transport.h"
 #include <mutex>
 
 namespace it2w {
 
-struct SshLaunchOptions {
-    SshTarget target;
-    std::wstring sshExe;            // 空：%SystemRoot%\System32\OpenSSH\ssh.exe
-    std::wstring snapshotDir;       // 应用私有目录（已存在）；快照文件名含 session/attempt
-    GridSize initialSize;
-    EnvList environment;            // 空：继承当前进程环境后过滤
-};
-
-struct SshCallbacks {
-    // 原始输出 tap（读线程），仅用于诊断；不得派发消息/调用 UI。
-    std::function<void(SessionId, AttemptId, std::string_view)> onOutputTap;
-    std::function<void(SessionId, AttemptId, TransportState, std::optional<TransportFault>)> onStateChanged;
-    std::function<void(SessionId, AttemptId)> onOutputAvailable;
-    // ssh 退出：exit.error 为映射结果（None/RemoteExit 为正常结束）
-    std::function<void(SessionId, AttemptId, const SshExitInfo &)> onFinished;
-    std::function<void(SessionId, AttemptId, const DiagRecord &)> onDiagnostic;
-};
-
-class SshTransport {
+class SshTransport final : public SshSessionTransport {
 public:
     explicit SshTransport(SshCallbacks cb);
-    ~SshTransport();
+    ~SshTransport() override;
     SshTransport(const SshTransport &) = delete;
     SshTransport &operator=(const SshTransport &) = delete;
 
     // 快照非法 → SnapshotError（不启动）；ssh.exe 缺失/启动失败 → onFinished(SshNotFound)
-    std::optional<SnapshotError> start(SessionId, AttemptId, const SshLaunchOptions &);
+    std::optional<SnapshotError> start(SessionId, AttemptId, const SshLaunchOptions &) override;
 
-    EnqueueResult enqueueUserInput(std::string_view b) { return pty_->enqueueUserInput(b); }
-    EnqueueResult enqueueReply(std::string_view b) { return pty_->enqueueReply(b); }
-    void resize(GridSize s, uint64_t gen) { pty_->resize(s, gen); }
-    void close(CloseReason r) { pty_->close(r); }
+    EnqueueResult enqueueUserInput(std::string_view b) override { return pty_->enqueueUserInput(b); }
+    EnqueueResult enqueueReply(std::string_view b) override { return pty_->enqueueReply(b); }
+    void resize(GridSize s, uint64_t gen) override { pty_->resize(s, gen); }
+    void close(CloseReason r) override { pty_->close(r); }
     // 取输出：同时喂入 OutputTail 用于退出时错误识别
-    std::optional<OutputChunk> tryPopOutput();
-    uint64_t discardedBytes() const { return pty_->discardedBytes(); }
-    TransportState state() const { return pty_->state(); }
-    bool waitClosed(DWORD ms) { return pty_->waitClosed(ms); }
-    EnqueueResult beginPaste(std::size_t n, bool bracketed) { return pty_->beginPaste(n, bracketed); }
-    EnqueueResult appendPaste(std::string_view b) { return pty_->appendPaste(b); }
-    uint32_t activeProcessCount() { return pty_->activeProcessCount(); }
+    std::optional<OutputChunk> tryPopOutput() override;
+    uint64_t discardedBytes() const override { return pty_->discardedBytes(); }
+    TransportState state() const override { return pty_->state(); }
+    bool waitClosed(DWORD ms) override { return pty_->waitClosed(ms); }
+    EnqueueResult beginPaste(std::size_t n, bool bracketed) override { return pty_->beginPaste(n, bracketed); }
+    EnqueueResult appendPaste(std::string_view b) override { return pty_->appendPaste(b); }
+    uint32_t activeProcessCount() override { return pty_->activeProcessCount(); }
+    bool supportsOsc52Read() const override { return false; }
+    SshTransportMode mode() const override { return SshTransportMode::ConPty; }
 
     static std::wstring defaultSshExe();
 

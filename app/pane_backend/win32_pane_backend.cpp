@@ -6,6 +6,7 @@
 #  define WIN32_LEAN_AND_MEAN
 #endif
 #include "win32_pane_backend.h"
+#include "ssh_transport.h"
 #include "pane_logic.h"
 #include "hwnd_swap_host.h"
 #include "renderer.h"
@@ -64,6 +65,12 @@ std::string toUtf8(std::wstring_view w) {
     return s;
 }
 
+SshTransportFactory makeSshFactory() {
+    return [](SshCallbacks cb) -> std::unique_ptr<SshSessionTransport> {
+        return std::make_unique<SshTransport>(std::move(cb));
+    };
+}
+
 // 两种传输的统一薄封装
 struct Transport {
     virtual ~Transport() = default;
@@ -98,7 +105,7 @@ struct LocalT final : Transport {
     bool isSsh() const override { return false; }
 };
 struct SshT final : Transport {
-    std::unique_ptr<SshTransport> t;
+    std::unique_ptr<SshSessionTransport> t;
     EnqueueResult input(std::string_view b) override { return t->enqueueUserInput(b); }
     EnqueueResult reply(std::string_view b) override { return t->enqueueReply(b); }
     EnqueueResult beginPaste(size_t n, bool br) override { return t->beginPaste(n, br); }
@@ -111,6 +118,7 @@ struct SshT final : Transport {
     bool waitClosed(DWORD ms) override { return t->waitClosed(ms); }
     uint32_t processes() override { return t->activeProcessCount(); }
     bool isSsh() const override { return true; }
+    bool supportsOsc52Read() const override { return t->supportsOsc52Read(); }
 };
 
 struct HyperVT final : Transport {
@@ -127,6 +135,7 @@ struct HyperVT final : Transport {
     bool waitClosed(DWORD ms) override { return t->waitClosed(ms); }
     uint32_t processes() override { return t->activeProcessCount(); }
     bool isSsh() const override { return true; }
+    bool supportsOsc52Read() const override { return t->supportsOsc52Read(); }
 };
 
 class Win32PaneBackend final : public uishell::PaneBackend {
@@ -441,7 +450,7 @@ bool Win32PaneBackend::startSession() {
                        });
                    };
                    auto ht = std::make_unique<HyperVT>();
-                   ht->t = std::make_unique<HyperVTransport>(cb);
+                   ht->t = std::make_unique<HyperVTransport>(cb, makeSshFactory());
                    auto *raw = ht->t.get();
                    transport_ = std::move(ht);
                    shared_->transport = transport_;
@@ -464,7 +473,7 @@ bool Win32PaneBackend::startSession() {
         cb.onDiagnostic = onDiag;
         cb.onOutputTap = outputTap;
         auto st = std::make_unique<SshT>();
-        st->t = std::make_unique<SshTransport>(cb);
+        st->t = makeSshFactory()(cb);
         auto *raw = st->t.get();
         transport_ = std::move(st);
         shared_->transport = transport_;

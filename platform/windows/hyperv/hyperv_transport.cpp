@@ -3,9 +3,9 @@
 
 namespace it2w {
 
-HyperVTransport::HyperVTransport(HyperVCallbacks cb) : cb_(std::move(cb)) {
+HyperVTransport::HyperVTransport(HyperVCallbacks cb, SshTransportFactory factory) : cb_(std::move(cb)) {
     cancel_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    ssh_ = std::make_unique<SshTransport>(static_cast<SshCallbacks>(cb_));
+    ssh_ = factory(static_cast<SshCallbacks>(cb_));
 }
 
 HyperVTransport::~HyperVTransport() {
@@ -17,7 +17,7 @@ HyperVTransport::~HyperVTransport() {
 }
 
 void HyperVTransport::start(SessionId s, AttemptId a, HyperVLaunch l) {
-    { std::lock_guard g(mu_); size_ = l.ssh.initialSize; }
+    { std::lock_guard g(mu_); size_ = {l.ssh.initialSize, 0}; }
     state_ = TransportState::Starting;
     if (cb_.onStateChanged) cb_.onStateChanged(s, a, TransportState::Starting, std::nullopt);
     th_ = std::thread([this, s, a, l = std::move(l)]() mutable { worker(s, a, std::move(l)); });
@@ -47,7 +47,12 @@ void HyperVTransport::worker(SessionId s, AttemptId a, HyperVLaunch l) {
         return;
     }
     l.ssh.target.hostName = res.host;
-    { std::lock_guard g(mu_); l.ssh.initialSize = size_; }
+    uint64_t launchGeneration;
+    {
+        std::lock_guard g(mu_);
+        l.ssh.initialSize = size_.grid;
+        launchGeneration = size_.generation;
+    }
     if (auto e = ssh_->start(s, a, l.ssh)) {
         state_ = TransportState::Failed;
         if (cb_.onResolved) { HvAction f; f.kind = HvAction::Fail; f.text = "SSH 配置快照无效：" + e->field + " " + e->reason; cb_.onResolved(s, a, f); }
@@ -55,6 +60,12 @@ void HyperVTransport::worker(SessionId s, AttemptId a, HyperVLaunch l) {
         return;
     }
     sshStarted_ = true;
+    {
+        // Replay a resize received during start(). Serialize with live resize()
+        // so a newer ConPTY size cannot be overwritten by an older replay.
+        std::lock_guard g(mu_);
+        if (size_.generation > launchGeneration) ssh_->resize(size_.grid, size_.generation);
+    }
     if (closing_) ssh_->close(CloseReason::User);   // 解析完成与 close 交错
 }
 
@@ -63,7 +74,8 @@ EnqueueResult HyperVTransport::enqueueReply(std::string_view b) { return sshStar
 EnqueueResult HyperVTransport::beginPaste(std::size_t n, bool br) { return sshStarted_ ? ssh_->beginPaste(n, br) : EnqueueResult::Ok; }
 EnqueueResult HyperVTransport::appendPaste(std::string_view b) { return sshStarted_ ? ssh_->appendPaste(b) : EnqueueResult::Ok; }
 void HyperVTransport::resize(GridSize g, uint64_t gen) {
-    { std::lock_guard l(mu_); size_ = g; }
+    std::lock_guard l(mu_);
+    size_ = {g, gen};
     if (sshStarted_) ssh_->resize(g, gen);
 }
 void HyperVTransport::close(CloseReason r) {

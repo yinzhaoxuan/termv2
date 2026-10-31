@@ -27,6 +27,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(IT2W_SSH_DIRECT "Link in-process libssh2 direct SSH (MinGW only)" OFF)
+
 # 独立 A 探针默认关闭；ONLY 入口不配置 UI，也不构建产品传输。
 option(IT2W_BUILD_SSH_A_PROBE "Build the Windows direct SSH acceptance probe" OFF)
 option(IT2W_SSH_A_PROBE_ONLY "Configure only ssh_a_probe (or its portable self-test)" OFF)
@@ -201,6 +203,17 @@ if(WIN32)
   target_link_libraries(it2w_hyperv PUBLIC it2w_ssh)
   if(MINGW)
     target_compile_options(it2w_hyperv PRIVATE -Wall -Wextra)
+  endif()
+  # Deterministic handoff test: fake the query and SSH transport; no VM or ssh.exe.
+  add_executable(it2w_test_hyperv_transport tests/platform/test_hyperv_transport.cpp
+    platform/windows/hyperv/hyperv_transport.cpp)
+  target_include_directories(it2w_test_hyperv_transport PRIVATE
+    platform/windows/hyperv platform/windows/ssh)
+  # Inherit ConPTY public defs (NTDDI_VERSION for HPCON in ssh_session_transport.h → conpty_transport.h).
+  target_link_libraries(it2w_test_hyperv_transport PRIVATE it2w_conpty Threads::Threads)
+  set_property(TARGET it2w_test_hyperv_transport PROPERTY IT2W_TEST ON)
+  if(NOT CMAKE_CROSSCOMPILING)
+    add_test(NAME HV-02.transport_handoff COMMAND it2w_test_hyperv_transport)
   endif()
 endif()
 

@@ -7,7 +7,7 @@
 #error "win32_pane_backend 仅用于 Windows"
 #endif
 #include "uishell/pane_backend.h"
-#include "ssh_transport.h"
+#include "ssh_session_transport.h"
 #include "hyperv_transport.h"
 #include <optional>
 #include <string>
