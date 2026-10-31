@@ -26,6 +26,18 @@ endfunction()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# 独立 A 探针默认关闭；ONLY 入口不配置 UI，也不构建产品传输。
+option(IT2W_BUILD_SSH_A_PROBE "Build the Windows direct SSH acceptance probe" OFF)
+option(IT2W_SSH_A_PROBE_ONLY "Configure only ssh_a_probe (or its portable self-test)" OFF)
+option(IT2W_SSH_A_PROBE_SELFTEST "Build the portable ssh_a_probe logic self-test" OFF)
+if(IT2W_SSH_A_PROBE_ONLY OR IT2W_BUILD_SSH_A_PROBE OR IT2W_SSH_A_PROBE_SELFTEST)
+  include(cmake/SshAProbe.cmake)
+endif()
+if(IT2W_SSH_A_PROBE_ONLY)
+  return()
+endif()
+
 add_library(itcore STATIC ports/core/src/core.cpp ports/core/src/vt_parser.cpp ports/core/src/screen.cpp ports/core/src/encode.cpp ports/core/src/ucd_width.cpp
             ports/core/src/search.cpp)
 target_include_directories(itcore PUBLIC ports/core/include PRIVATE ports/core/src)

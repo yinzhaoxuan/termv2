@@ -162,7 +162,8 @@
 第 18 轮（DESKTOP-HOODQAJ → UbuntuDev `192.168.77.10:22`，OpenSSH_for_Windows 9.5p2，纯管道无 ConPTY；产物 `/workspace/qa/realmachine-results-r18/`，未入仓）：
 - **R18-1 PASS**：DCS（含无 ST）、Sixel、OSC 52 查询/写入共 79 字节与远端 `printf` **逐字节一致**；无 conhost 改写、无 `?9001` 注入。相对第 16 轮 ConPTY 吞 DCS/Sixel/`52;c;?`，方案 B 对控制序列**透明**。
 - **R18-2 FAIL（尺寸）**：远端 `stty size` 恒 **`0 0`**；`~` 转义无 resize；`COLUMNS`/`LINES` 与真控制台 `mode con` 再重定向均无效 → **方案 B 无法初始化/中途改远端 TTY 尺寸，产品直连须方案 A（进程内 libssh `window-change`）**。
-- **R18-3**（gavin，不变）：首次主机密钥 ask 与 password 提示不到管道 → 默认路径预信任 known_hosts / `accept-new` + 公钥；密码与首次 ask 需 `SSH_ASKPASS`（实现期再定）。
+- **R18-3**（gavin，不变）：首次主机密钥 ask 与 password 提示不到管道 → 默认路径预信任 known_hosts（v0.3 不做 accept-new）+ 公钥；密码与首次 ask 需 `SSH_ASKPASS`（实现期再定）。
+- **Windows A 探针**（进程内 libssh2 1.11.1 + OpenSSL 3.5.9 静态 MinGW）在 **gavin** 上 `--test all` 六项 PASS（agent auth、79B 序列、首条 stty、33×window-change、close-flood、close-auth CancelSynchronousIo）；产物不入仓。立场：产品直连以 A 为主。
 
 ## 未实机项（须 Win11 + 真 ConPTY / D3D 验证）
 

@@ -65,8 +65,10 @@ v0.1 **接受**「经 ConPTY 的会话不支持 OSC 52 剪贴板读取；写入�
 |---|---|---|
 | R18-1 控制序列 | **PASS**（79 B 逐字节） | B 路径 DCS（含无 ST）/ Sixel / OSC 52 读+写均透明；tmux -CC 与 `52;c;?` 在此路径可行 |
 | R18-2 TTY 尺寸 | **FAIL**（`stty size` = `0 0`） | B 无法初始化或中途改远端尺寸 → **产品直连硬需求方案 A** |
-| R18-3 交互提示 | 管道无 ask/password UI | 默认 accept-new + 公钥；ASKPASS 实现期再定 |
+| R18-3 交互提示 | 管道无 ask/password UI | 默认路径预信任 known_hosts（v0.3 不做 accept-new）；密码与首次主机密钥 ask 需 ASKPASS（实现期再定） |
 
+
+**A 探针（2026-11-01，客户端 gavin → UbuntuDev）**：独立 `ssh_a_probe`（进程内 libssh2 + OpenSSL 静态 MinGW）`--test all` 六项 PASS（agent auth、79B、stty、33×window-change、close-flood、close-auth CancelSynchronousIo）。产品直连以方案 A 为主；产物不入仓。
 **当前立场：** v0.1 仍不交付直连 SSH；重评证据齐——序列走 B 可行，可用会话必须叠加 A（libssh `window-change`）。详情见 `/workspace/qa/realmachine-results-r18/manual-r18.md`（未入仓）。
 
 ## 实现要点
