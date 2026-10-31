@@ -53,9 +53,21 @@ v0.1 **接受**「经 ConPTY 的会话不支持 OSC 52 剪贴板读取；写入�
 
 满足任一条件即重新评估绕开 conhost 的直连通道（范围：仅 SSH；Hyper-V 随 SSH 受益；本地不做）：
 
-1. ~~真机 hex 探针证明 ConPTY 也吞掉 **OSC 1337** 或 **tmux -CC（DCS）**~~ → **已触发（第 16 轮：S4 DCS 被吞；S1 OSC 1337 透传）**。直连 SSH 方案另开设计选项，待 Gavin 拍板。
+1. ~~真机 hex 探针证明 ConPTY 也吞掉 **OSC 1337** 或 **tmux -CC（DCS）**~~ → **已触发（第 16 轮：S4 DCS 被吞；S1 OSC 1337 透传）**。
 2. 用户反馈「远程 nvim/tmux 粘贴」进入优先问题。
 3. 路线图本就要做 SSH 层深度集成，可一并摊成本。
+
+### 第 18 轮直连探针结论（2026-10-31，DESKTOP-HOODQAJ → Linux UbuntuDev）
+
+方案对照（Gavin 已批「B 起步」）：B = 纯管道 `ssh.exe -tt`；A = 进程内 libssh + `window-change`。
+
+| 项 | 结果 | 含义 |
+|---|---|---|
+| R18-1 控制序列 | **PASS**（79 B 逐字节） | B 路径 DCS（含无 ST）/ Sixel / OSC 52 读+写均透明；tmux -CC 与 `52;c;?` 在此路径可行 |
+| R18-2 TTY 尺寸 | **FAIL**（`stty size` = `0 0`） | B 无法初始化或中途改远端尺寸 → **产品直连硬需求方案 A** |
+| R18-3 交互提示 | 管道无 ask/password UI | 默认 accept-new + 公钥；ASKPASS 实现期再定 |
+
+**当前立场：** v0.1 仍不交付直连 SSH；重评证据齐——序列走 B 可行，可用会话必须叠加 A（libssh `window-change`）。详情见 `/workspace/qa/realmachine-results-r18/manual-r18.md`（未入仓）。
 
 ## 实现要点
 

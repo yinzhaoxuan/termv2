@@ -159,7 +159,10 @@
 
 第 17 轮（对齐 harness，`cmd.exe /k prompt $e]133;A$e\$P$G`，5 回车 + `dir`）：增量绘制下 7 个 `]133;A` **均同位**（紧跟提示符文字，未提前）；标记与提示符文字偶发分两次 ReadFile（约 14–19 ms），字节流连续。**未测** resize/`cls`/滚出底边整屏重绘。core 尚无 OSC 133（属 T04）；`?9001` win32-input-mode 忽略、`?1004` 焦点已支持。
 
-第 18 轮（部分，gavin）：纯管道 Windows `ssh.exe` 9.5p2（无 ConPTY）。R18-3：首次主机密钥 ask 与 password 提示**不到管道**，stdin 无效，进程挂起 → 交互需 TTY / `SSH_ASKPASS`（或 accept-new + 公钥）。非交互 fail-fast 文本可到管道。R18-1/2（DCS / resize）等 DESKTOP-HOODQAJ 上线后对 Linux lab 再跑。
+第 18 轮（DESKTOP-HOODQAJ → UbuntuDev `192.168.77.10:22`，OpenSSH_for_Windows 9.5p2，纯管道无 ConPTY；产物 `/workspace/qa/realmachine-results-r18/`，未入仓）：
+- **R18-1 PASS**：DCS（含无 ST）、Sixel、OSC 52 查询/写入共 79 字节与远端 `printf` **逐字节一致**；无 conhost 改写、无 `?9001` 注入。相对第 16 轮 ConPTY 吞 DCS/Sixel/`52;c;?`，方案 B 对控制序列**透明**。
+- **R18-2 FAIL（尺寸）**：远端 `stty size` 恒 **`0 0`**；`~` 转义无 resize；`COLUMNS`/`LINES` 与真控制台 `mode con` 再重定向均无效 → **方案 B 无法初始化/中途改远端 TTY 尺寸，产品直连须方案 A（进程内 libssh `window-change`）**。
+- **R18-3**（gavin，不变）：首次主机密钥 ask 与 password 提示不到管道 → 默认路径预信任 known_hosts / `accept-new` + 公钥；密码与首次 ask 需 `SSH_ASKPASS`（实现期再定）。
 
 ## 未实机项（须 Win11 + 真 ConPTY / D3D 验证）
 
