@@ -79,6 +79,8 @@ struct Transport {
     virtual uint32_t processes() = 0;
     virtual bool isSsh() const = 0;
     virtual uint64_t discardedBytes() const = 0;
+    // CAP-01 P06：经 ConPTY 的传输不支持 OSC 52 读；直连传输将来可覆盖为 true。
+    virtual bool supportsOsc52Read() const { return false; }
 };
 struct LocalT final : Transport {
     std::unique_ptr<ConPtyTransport> t;
@@ -600,8 +602,12 @@ void Win32PaneBackend::drainCoreEvents() {
             pumpLog(nullptr, "[pane] osc52 read event");
             if (!transport_) {
                 pumpLog(nullptr, "[pane] osc52 read skipped (no transport)");
-            } else if (!cfg_->osc52.allowRead) {
-                pumpLog(nullptr, "[pane] osc52 read denied");
+            } else if (!osc52ReadEffective(cfg_->osc52.allowRead, transport_->supportsOsc52Read())) {
+                // CAP-01 P06：策略关，或传输（当前均为 ConPTY）不支持读 → 不交付应答。
+                if (!cfg_->osc52.allowRead)
+                    pumpLog(nullptr, "[pane] osc52 read denied");
+                else
+                    pumpLog(nullptr, "[pane] osc52 read unsupported (transport)");
             } else {
                 std::string cur = getClipboardUtf8();
                 auto replyFn = [](void *p, const char *data, size_t n) -> int {

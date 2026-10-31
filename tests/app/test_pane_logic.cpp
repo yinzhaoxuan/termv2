@@ -436,6 +436,12 @@ static void wordchars() {
     CHECK(osc("\x1b]52;c;aGk=\x07") == ITCORE_EV_CLIPBOARD_REQUEST);   // 2 字节 > 上限 1
     CHECK(applyOsc52(nullptr, Osc52Config{}) == -1);
 
+    // CAP-01 P06：能力门 — 读生效 = allowRead ∧ transportSupports
+    CHECK(!osc52ReadEffective(false, false));
+    CHECK(!osc52ReadEffective(false, true));
+    CHECK(!osc52ReadEffective(true, false));   // ConPTY：策略开也不交付
+    CHECK(osc52ReadEffective(true, true));     // 将来直连传输
+
     // OSC52-04：deliverOsc52ReadReply — encode 失败记日志；reply 回调被调用；reply 失败也记日志
     {
         CHECK(applyOsc52(c, Osc52Config{false, true, 0}) == 0);

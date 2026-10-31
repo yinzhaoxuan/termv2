@@ -27,6 +27,12 @@ int applyWordChars(itcore_core *core, const std::optional<std::string> &wordChar
 struct Osc52Config { bool allowWrite = false; bool allowRead = false; uint32_t maxBytes = 0; };
 int applyOsc52(itcore_core *core, const Osc52Config &cfg);
 
+// CAP-01 P06：读是否生效 = 策略 allowRead 且传输声明支持 OSC 52 读（能力门，非强制忽略 settings）。
+// 当前所有 ConPTY 传输（本地/SSH/Hyper-V）均不支持读；将来直连传输可返回 true。
+inline bool osc52ReadEffective(bool allowRead, bool transportSupportsOsc52Read) {
+    return allowRead && transportSupportsOsc52Read;
+}
+
 // OSC52-04：CLIPBOARD_READ → encode → reply。失败只记日志，不阻断 pump；不改 OSC 语义。
 // reply 返回 0=成功，非 0=失败码（与 it2w::EnqueueResult 整型一致：1=QueueFull, 2=TooLarge, 3=InvalidState…）。
 // log 可空；失败必记，成功默认不记（避免刷屏）。传 logSuccess=true 时记一句长度。
