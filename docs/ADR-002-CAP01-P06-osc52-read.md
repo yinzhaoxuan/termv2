@@ -2,7 +2,7 @@
 
 - **状态**：Accepted（Gavin 2026-10-31 拍板）
 - **证据提交**：`7a901d4`（第 15 轮真机，机器 gavin）
-- **验证环境（占位，探针补齐）**：Windows build ＿＿＿；conhost.exe 文件版本 ＿＿＿；conpty.dll（若存在）＿＿＿；来源：系统自带 / 随附 OpenConsole ＿＿＿
+- **验证环境（占位，探针补齐）**：Windows build ＿＿＿；conhost.exe 文件版本 ＿＿＿；conpty.dll（若存在）＿＿＿；来源：**系统自带**（`conpty_transport.cpp` 直接调 kernel32 `CreatePseudoConsole`，无 `LoadLibrary("conpty.dll")`，安装包未随附 OpenConsole）
 
 ## 决策
 
