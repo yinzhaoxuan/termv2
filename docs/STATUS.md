@@ -157,7 +157,7 @@
 
 第 16 轮真机（gavin，build 26300.9711 / conhost 10.0.26100.9949，系统 ConPTY）：S1 OSC 1337 / S2 OSC 133 透传；S3 OSC 8 被改写（加 `id=`、BEL→ST）；**S4 DCS（tmux -CC）与 S5 Sixel 被吞** → **直连 SSH 须重评**（已触发）。
 
-第 17 轮（对齐 harness，`cmd.exe /k prompt $e]133;A$e\\$P$G`，5 回车 + `dir`）：增量绘制下 7 个 `]133;A` **均同位**（紧跟提示符文字，未提前）；标记与提示符文字偶发分两次 ReadFile（约 14–19 ms），字节流连续。**未测** resize/`cls`/滚出底边整屏重绘。core 尚无 OSC 133（属 T04）；`?9001` win32-input-mode 忽略、`?1004` 焦点已支持。
+第 17 轮（对齐 harness，`cmd.exe /k prompt $e]133;A$e\$P$G`，5 回车 + `dir`）：增量绘制下 7 个 `]133;A` **均同位**（紧跟提示符文字，未提前）；标记与提示符文字偶发分两次 ReadFile（约 14–19 ms），字节流连续。**未测** resize/`cls`/滚出底边整屏重绘。core 尚无 OSC 133（属 T04）；`?9001` win32-input-mode 忽略、`?1004` 焦点已支持。
 
 ## 未实机项（须 Win11 + 真 ConPTY / D3D 验证）
 
