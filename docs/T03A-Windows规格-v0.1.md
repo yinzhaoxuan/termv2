@@ -291,7 +291,7 @@ struct TransportCallbacks {   // 每个回调都带 SessionId 和 AttemptId，�
 | P03 | DA1、DA2、DSR 6n、XTVERSION、DECRQM 查询 | 由谁应答（ConPTY 自己应答，还是透传给核心）；是否出现**重复应答** |
 | P04 | 鼠标模式 1000/1002/1006 加 vim 鼠标 | 鼠标序列能否经过 ConPTY 输入端到达远端 |
 | P05 | 备用屏 1049、bracketed paste 2004、焦点 1004 | 是否透传 |
-| P06 | OSC 0/2 标题、OSC 8、OSC 52 | OSC 52 **读**被 conhost 输出侧吞掉（已定，见 ADR-002）；写透传。OSC 8 等仍待探针 |
+| P06 | OSC 0/2 标题、OSC 8、OSC 52、OSC 1337/133、DCS、Sixel | OSC 52 **读**被吞（已定，ADR-002）；写透传。第 16 轮：OSC 1337/133 透传；OSC 8 改写（`id=` + ST）；**DCS（tmux -CC）与 Sixel 被吞 → 直连 SSH 须重评** |
 | P07 | resize 之后 | ConPTY 是否插入重绘序列，以及是否带来光标偏移 |
 | P08 | `PSEUDOCONSOLE_INHERIT_CURSOR` 对比 | 首屏行为差异 |
 

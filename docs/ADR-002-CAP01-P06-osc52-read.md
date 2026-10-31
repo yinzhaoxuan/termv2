@@ -2,7 +2,8 @@
 
 - **状态**：Accepted（Gavin 2026-10-31 拍板）
 - **证据提交**：`7a901d4`（第 15 轮真机，机器 gavin）
-- **验证环境（占位，探针补齐）**：Windows build ＿＿＿；conhost.exe 文件版本 ＿＿＿；conpty.dll（若存在）＿＿＿；来源：**系统自带**（`conpty_transport.cpp` 直接调 kernel32 `CreatePseudoConsole`，无 `LoadLibrary("conpty.dll")`，安装包未随附 OpenConsole）
+- **验证环境（第 16 轮 gavin 实测，2026-10-31）**：Windows build 26300.9711（26H2）；conhost.exe 文件版本 10.0.26100.9949；conpty.dll：System32 下不存在；来源：**系统自带**（`conpty_transport.cpp` 直接调 kernel32 `CreatePseudoConsole`，无 `LoadLibrary("conpty.dll")`；`rb-7a901d4` 安装包递归无 OpenConsole/conpty）
+- **第 16 轮方法**：独立 C# harness 调 `CreatePseudoConsole(120×30, …, flags=0)`（与产品 `conpty_transport.cpp:113` 的 `flags=0` 一致）；子进程用 PowerShell 经 `[Console]::OpenStandardOutput()` 写原始字节（未启 `it2w_shell`）。`rb-7a901d4` 的 out hex 嗅探只认 `]52;`，故序列探针改走该 harness。结果：`/workspace/qa/realmachine-results-r16/`（未入仓）。
 
 ## 决策
 
@@ -35,11 +36,24 @@ v0.1 **接受**「经 ConPTY 的会话不支持 OSC 52 剪贴板读取；写入�
 >
 > **安全说明**：OSC 52 读取会让终端内运行的程序拿到本机剪贴板内容。即使在支持读取的终端里，这项能力通常也是默认关闭或每次都要确认。
 
+## 第 16 轮序列探针（gavin，`rb-7a901d4`）
+
+| ID | 序列 | 判定 |
+|---|---|---|
+| S1 | OSC 1337 SetMark | 完整透传 |
+| S2 | OSC 133;A | 完整透传 |
+| S3 | OSC 8 超链接 | **被改写**（conhost 自加 `id=`，BEL→ST；URL/文本保留） |
+| S4 | DCS `ESC P1000p`（tmux -CC 入口） | **完全消失**；无 ST 时还吞后续整段流 |
+| S4' | `ESC P1000p ESC\` | DCS 本身消失，前后标记在 |
+| S5 | Sixel DCS | **完全消失** |
+
+**结论：条件 1 已触发 →「直连 SSH 须重评」。** 真实 tmux -CC 入口在 `ESC P1000p` 后不发 ST，经 ConPTY 做不了 tmux 控制模式集成。S1 透传说明 harness 能抓到 OSC；第 15 轮已证 OSC 52 写透传、读查询被吞。渲染侧：OSC 8 解析需接受 ST 与 conhost 生成的 `id=`；Sixel 经 ConPTY 不可用。5e（输入侧注入）未做。
+
 ## 何时重评直连 SSH
 
 满足任一条件即重新评估绕开 conhost 的直连通道（范围：仅 SSH；Hyper-V 随 SSH 受益；本地不做）：
 
-1. 真机 hex 探针证明 ConPTY 也吞掉 **OSC 1337** 或 **tmux -CC（DCS）**（亦测 OSC 133、OSC 8、Sixel 作对照）。
+1. ~~真机 hex 探针证明 ConPTY 也吞掉 **OSC 1337** 或 **tmux -CC（DCS）**~~ → **已触发（第 16 轮：S4 DCS 被吞；S1 OSC 1337 透传）**。直连 SSH 方案另开设计选项，待 Gavin 拍板。
 2. 用户反馈「远程 nvim/tmux 粘贴」进入优先问题。
 3. 路线图本就要做 SSH 层深度集成，可一并摊成本。
 

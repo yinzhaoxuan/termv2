@@ -153,7 +153,9 @@
 
 ## CAP-01 P06（已定）
 
-经 ConPTY 的会话**不支持 OSC 52 读**；写正常。能力门与措辞见 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)。Windows build / conpty 版本与 OSC 1337/133/8、DCS、Sixel 透传探针待真机补齐。
+经 ConPTY 的会话**不支持 OSC 52 读**；写正常。能力门与措辞见 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)。
+
+第 16 轮真机（gavin，build 26300.9711 / conhost 10.0.26100.9949，系统 ConPTY）：S1 OSC 1337 / S2 OSC 133 透传；S3 OSC 8 被改写（加 `id=`、BEL→ST）；**S4 DCS（tmux -CC）与 S5 Sixel 被吞** → **直连 SSH 须重评**（已触发）。
 
 ## 未实机项（须 Win11 + 真 ConPTY / D3D 验证）
 
