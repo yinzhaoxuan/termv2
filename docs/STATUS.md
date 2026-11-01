@@ -1,5 +1,14 @@
 # iterm2-win 进度汇总
 
+## 2026-11-01：Direct SSH v0 / S7
+
+- S0–S5 已落地：共享固定依赖、传输接口/纯逻辑、进程内 DirectSshTransport、双开关与产品 API 验收载体。
+  产品 v0 仅 agent、known_hosts 只读预信任，失败不回落；决策见 [ADR-003](ADR-003-ssh-direct.md)。
+- S6：Gavin 的 Windows lab 产品 `ssh_direct_accept.exe` 验收用例 PASS；本条仅记录已有结果。
+- S7：本次变更补齐 `it2w_third_party_notices` 默认构建目标、exe 旁 `licenses/`、
+  [第三方声明](../THIRD-PARTY-NOTICES.md) / 对应源码说明和 [使用文档](ssh-direct.md)。
+- Direct 的 OSC 52 读能力仍与 `osc52.allowRead` 策略门组合；ConPTY 路径不支持读，证据保持见 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)。
+
 
 ## 2026-10-31：NEW-01 / NEW-05 / OSC52-05
 
@@ -159,7 +168,7 @@
 
 第 17 轮（对齐 harness，`cmd.exe /k prompt $e]133;A$e\$P$G`，5 回车 + `dir`）：增量绘制下 7 个 `]133;A` **均同位**（紧跟提示符文字，未提前）；标记与提示符文字偶发分两次 ReadFile（约 14–19 ms），字节流连续。**未测** resize/`cls`/滚出底边整屏重绘。core 尚无 OSC 133（属 T04）；`?9001` win32-input-mode 忽略、`?1004` 焦点已支持。
 
-第 18 轮（DESKTOP-HOODQAJ → UbuntuDev `192.168.77.10:22`，OpenSSH_for_Windows 9.5p2，纯管道无 ConPTY；产物 `/workspace/qa/realmachine-results-r18/`，未入仓）：
+第 18 轮（Windows → Linux SSH，OpenSSH_for_Windows 9.5p2，纯管道无 ConPTY；产物 `/workspace/qa/realmachine-results-r18/`，未入仓）：
 - **R18-1 PASS**：DCS（含无 ST）、Sixel、OSC 52 查询/写入共 79 字节与远端 `printf` **逐字节一致**；无 conhost 改写、无 `?9001` 注入。相对第 16 轮 ConPTY 吞 DCS/Sixel/`52;c;?`，方案 B 对控制序列**透明**。
 - **R18-2 FAIL（尺寸）**：远端 `stty size` 恒 **`0 0`**；`~` 转义无 resize；`COLUMNS`/`LINES` 与真控制台 `mode con` 再重定向均无效 → **方案 B 无法初始化/中途改远端 TTY 尺寸，产品直连须方案 A（进程内 libssh `window-change`）**。
 - **R18-3**（gavin，不变）：首次主机密钥 ask 与 password 提示不到管道 → 默认路径预信任 known_hosts（v0.3 不做 accept-new）+ 公钥；密码与首次 ask 需 `SSH_ASKPASS`（实现期再定）。

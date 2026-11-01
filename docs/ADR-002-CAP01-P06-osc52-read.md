@@ -9,7 +9,11 @@
 
 v0.1 **接受**「经 ConPTY 的会话不支持 OSC 52 剪贴板读取；写入仍可用」。
 
-实际是否允许读 = `osc52.allowRead`（默认关，隐藏字段保留）**且**当前传输声明 `supportsOsc52Read`。本地 / SSH / Hyper-V 均经 ConPTY，一律声明不支持。这是**能力门**，不是强制忽略 settings：将来若有直连传输可声明支持后再与策略组合。v0.1 **不做**逐次确认（查询到不了应用层，确认框无意义）。
+实际是否允许读 = `osc52.allowRead`（默认关，隐藏字段保留）**且**当前传输声明 `supportsOsc52Read`。
+本地、兼容 SSH / Hyper-V 的 ConPTY 路径仍声明 false；构建包含且选中 Direct SSH 时声明
+`supportsOsc52Read=true`，Hyper-V 随内层 SSH 传输。能力门与策略门继续组合，不能绕过 settings。
+Direct 已落地，决策与启用方式见 [ADR-003](ADR-003-ssh-direct.md) / [ssh-direct.md](ssh-direct.md)。
+经 ConPTY 的会话仍**不做**逐次确认（查询到不了应用层，确认框无意义）。
 
 ## 证据摘要
 
@@ -24,11 +28,14 @@ v0.1 **接受**「经 ConPTY 的会话不支持 OSC 52 剪贴板读取；写入�
 | OSC 52 写剪贴板 | ✅ 受 `osc52.allowWrite` 控制，默认关 | ✅ 同左 | ✅ 同左 | conhost 透传写序列（已实测） |
 | OSC 52 读剪贴板 | ❌ 不支持 | ❌ 不支持 | ❌ 不支持 | CAP-01 P06：conhost 输出侧吞掉 `52;c;?` |
 
+Direct SSH（含以 Direct 为内层的 Hyper-V）支持传输 OSC 52 读查询并声明读能力；是否应答仍由
+`osc52.allowRead` 决定。写入仍受 `osc52.allowWrite` 控制。上表仅列 ConPTY 路径。
+
 ## 已知限制原文
 
 > **CAP-01 P06：经 ConPTY 的会话不支持 OSC 52 剪贴板读取**
 >
-> termv2 的本地、SSH 和 Hyper-V 会话都经过 Windows ConPTY。实测表明，conhost 会在输出侧丢弃 OSC 52 读取请求（`ESC ] 52 ; c ; ?`），请求到不了 termv2，所以 termv2 无法应答。OSC 52 写入不受影响，仍由 `osc52.allowWrite` 控制（默认关闭）。
+> termv2 的本地、兼容 SSH 和以内层兼容 SSH 连接的 Hyper-V 会话经过 Windows ConPTY。实测表明，conhost 会在输出侧丢弃 OSC 52 读取请求（`ESC ] 52 ; c ; ?`），请求到不了 termv2，所以 termv2 无法应答。OSC 52 写入不受影响，仍由 `osc52.allowWrite` 控制（默认关闭）。Direct SSH 的能力与策略门另见 ADR-003。
 >
 > **影响**：依赖 OSC 52 读取剪贴板的程序（例如配置了 OSC 52 剪贴板 provider 的 Neovim、vim 插件，以及部分 tmux 配置）在执行“粘贴”时会等不到应答，可能超时或报错。termv2 收不到这类请求，所以不会弹出任何提示。
 >
@@ -57,7 +64,7 @@ v0.1 **接受**「经 ConPTY 的会话不支持 OSC 52 剪贴板读取；写入�
 2. 用户反馈「远程 nvim/tmux 粘贴」进入优先问题。
 3. 路线图本就要做 SSH 层深度集成，可一并摊成本。
 
-### 第 18 轮直连探针结论（2026-10-31，DESKTOP-HOODQAJ → Linux UbuntuDev）
+### 第 18 轮直连探针结论（2026-10-31，Windows → Linux）
 
 方案对照（Gavin 已批「B 起步」）：B = 纯管道 `ssh.exe -tt`；A = 进程内 libssh + `window-change`。
 
@@ -68,12 +75,15 @@ v0.1 **接受**「经 ConPTY 的会话不支持 OSC 52 剪贴板读取；写入�
 | R18-3 交互提示 | 管道无 ask/password UI | 默认路径预信任 known_hosts（v0.3 不做 accept-new）；密码与首次主机密钥 ask 需 ASKPASS（实现期再定） |
 
 
-**A 探针（2026-11-01，客户端 gavin → UbuntuDev）**：独立 `ssh_a_probe`（进程内 libssh2 + OpenSSL 静态 MinGW）`--test all` 六项 PASS（agent auth、79B、stty、33×window-change、close-flood、close-auth CancelSynchronousIo）。产品直连以方案 A 为主；产物不入仓。
-**当前立场：** v0.1 仍不交付直连 SSH；重评证据齐——序列走 B 可行，可用会话必须叠加 A（libssh `window-change`）。详情见 `/workspace/qa/realmachine-results-r18/manual-r18.md`（未入仓）。
+**A 探针（2026-11-01，Gavin 的 Windows lab）**：独立 `ssh_a_probe`（进程内 libssh2 + OpenSSL 静态 MinGW）`--test all` 六项 PASS（agent auth、79B、stty、33×window-change、close-flood、close-auth CancelSynchronousIo）。产品直连以方案 A 为主；产物不入仓。
+**当前立场：** Direct SSH v0 已按 A 为主落地；B 保留为控制序列透明性的对照证据，不采用 A+B 混合。
+决策见 [ADR-003](ADR-003-ssh-direct.md)，使用方式见 [ssh-direct.md](ssh-direct.md)。
+第 18 轮证据见 `/workspace/qa/realmachine-results-r18/manual-r18.md`（未入仓）。
 
 ## 实现要点
 
-- `Transport::supportsOsc52Read()` 默认 `false`（LocalT / SshT / HyperVT 均为 ConPTY）。
+- `Transport::supportsOsc52Read()` 默认 `false`；LocalT 仍为 false，SshT / HyperVT 转发内层能力。
+  构建包含且选中 Direct 时为 true，ConPTY 实现始终为 false；每个 attempt 的能力固定。
 - `ITCORE_EV_CLIPBOARD_READ` 路径：`osc52ReadEffective(allowRead, supportsOsc52Read())` 为假则不交付；策略关记 `read denied`，策略开但传输不支持记 `read unsupported (transport)`。
 - 单元测试：`osc52ReadEffective` 四象限。
 

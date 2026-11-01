@@ -235,7 +235,7 @@ if(WIN32)
   endif()
 endif()
 
-# S3: dev-only direct transport. The pane factory still selects ConPTY.
+# Direct SSH is opt-in at build time and through the pane's runtime gate.
 # SshDirectDeps enforces the pinned MinGW/static dependency configuration.
 if(WIN32 AND IT2W_SSH_DIRECT)
   include(cmake/SshDirectDeps.cmake)
@@ -262,6 +262,17 @@ if(WIN32 AND IT2W_SSH_DIRECT)
     target_compile_options(ssh_direct_accept PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(ssh_direct_accept PRIVATE it2w_ssh_direct it2w_dep_ssh2 Threads::Threads)
     target_link_options(ssh_direct_accept PRIVATE -municode -static -static-libgcc -static-libstdc++)
+  endif()
+  # Defined here after ui/, without changing the shell's own POST_BUILD rules.
+  if(TARGET it2w_shell)
+    include(cmake/SshDirectLicenses.cmake)
+    it2w_ssh_direct_notice_commands(_it2w_ssh_direct_notice_commands
+      "$<TARGET_FILE_DIR:it2w_shell>/licenses")
+    add_custom_target(it2w_third_party_notices ALL
+      ${_it2w_ssh_direct_notice_commands}
+      DEPENDS it2w_shell ssh_a_libssh2 ssh_a_openssl
+      COMMENT "Copying Direct SSH third-party notices"
+      VERBATIM)
   endif()
 endif()
 

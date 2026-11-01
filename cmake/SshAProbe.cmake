@@ -23,12 +23,9 @@ target_compile_definitions(ssh_a_probe PRIVATE
 target_compile_options(ssh_a_probe PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(ssh_a_probe PRIVATE it2w_dep_ssh2 gdi32)
 target_link_options(ssh_a_probe PRIVATE -municode -static -static-libgcc -static-libstdc++)
+include("${CMAKE_CURRENT_LIST_DIR}/SshDirectLicenses.cmake")
+it2w_ssh_direct_notice_commands(_ssh_a_notice_commands
+  "$<TARGET_FILE_DIR:ssh_a_probe>/ssh-a-licenses")
 add_custom_command(TARGET ssh_a_probe POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:ssh_a_probe>/ssh-a-licenses"
-  COMMAND ${CMAKE_COMMAND} -E copy "${_ssh_a_root}/libssh2/src/ssh_a_libssh2/COPYING"
-    "$<TARGET_FILE_DIR:ssh_a_probe>/ssh-a-licenses/libssh2-COPYING.txt"
-  COMMAND ${CMAKE_COMMAND} -E copy "${_ssh_a_root}/libssh2/src/ssh_a_libssh2/src/agent_win.c"
-    "$<TARGET_FILE_DIR:ssh_a_probe>/ssh-a-licenses/libssh2-agent_win.c.txt"
-  COMMAND ${CMAKE_COMMAND} -E copy "${_ssh_a_root}/openssl/src/ssh_a_openssl/LICENSE.txt"
-    "$<TARGET_FILE_DIR:ssh_a_probe>/ssh-a-licenses/OpenSSL-LICENSE.txt"
+  ${_ssh_a_notice_commands}
   VERBATIM)
