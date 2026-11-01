@@ -32,7 +32,7 @@ void DirectSshTransport::Impl::authenticate() {
     SetThreadpoolTimer(authTimer, &time, 0, 0);
     // The timer is disarmed/joined in releaseAgent on both success and failure.
     const char *env = std::getenv("SSH_AUTH_SOCK");
-    const auto path = directAgentPipe(env ? env : "");
+    const auto path = hooks.agentPipe.empty() ? directAgentPipe(env ? env : "") : hooks.agentPipe;
     diag("ssh.direct.agent", 0, 0, path);
     agent = libssh2_agent_init(session);
     if (!agent) fail(DirectFailureKind::Other, LIBSSH2_ERROR_ALLOC);

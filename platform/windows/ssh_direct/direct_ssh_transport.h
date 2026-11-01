@@ -4,9 +4,12 @@
 
 namespace it2w {
 
+// Test harness only. Empty agentPipe preserves SSH_AUTH_SOCK/default selection.
+struct DirectSshTestHooks { std::string agentPipe; };
+
 class DirectSshTransport final : public SshSessionTransport {
 public:
-    explicit DirectSshTransport(SshCallbacks);
+    explicit DirectSshTransport(SshCallbacks, DirectSshTestHooks hooks = {});
     ~DirectSshTransport() override;
     DirectSshTransport(const DirectSshTransport &) = delete;
     DirectSshTransport &operator=(const DirectSshTransport &) = delete;

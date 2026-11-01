@@ -23,9 +23,10 @@ struct Failure { SshExitInfo exit; std::optional<TransportFault> fault; };
 } // namespace direct_ssh
 
 struct DirectSshTransport::Impl {
-    explicit Impl(SshCallbacks);
+    explicit Impl(SshCallbacks, DirectSshTestHooks);
     ~Impl();
     SshCallbacks cb;
+    const DirectSshTestHooks hooks;
     SessionId sid{0};
     AttemptId aid{0};
     SshTarget target;

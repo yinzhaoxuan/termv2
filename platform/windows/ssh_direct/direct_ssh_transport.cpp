@@ -47,7 +47,8 @@ ssize_t disconnectedSend(libssh2_socket_t, const void *, size_t, int, void **) {
 ssize_t disconnectedRecv(libssh2_socket_t, void *, size_t, int, void **) { return -ECONNRESET; }
 } // namespace
 
-DirectSshTransport::Impl::Impl(SshCallbacks callbacks) : cb(std::move(callbacks)) {
+DirectSshTransport::Impl::Impl(SshCallbacks callbacks, DirectSshTestHooks testHooks)
+    : cb(std::move(callbacks)), hooks(std::move(testHooks)) {
     wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     closed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!wake || !closed) {
@@ -61,7 +62,8 @@ DirectSshTransport::Impl::~Impl() {
     if (canceller) WaitForSingleObject(canceller, INFINITE);
     closeHandle(canceller); closeHandle(owner); closeHandle(wake); closeHandle(closed);
 }
-DirectSshTransport::DirectSshTransport(SshCallbacks cb) : impl_(std::make_unique<Impl>(std::move(cb))) {}
+DirectSshTransport::DirectSshTransport(SshCallbacks cb, DirectSshTestHooks hooks)
+    : impl_(std::make_unique<Impl>(std::move(cb), std::move(hooks))) {}
 DirectSshTransport::~DirectSshTransport() = default;
 
 std::optional<SnapshotError> DirectSshTransport::start(SessionId sid, AttemptId aid, const SshLaunchOptions &o) {
