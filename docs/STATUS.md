@@ -1,10 +1,19 @@
 # iterm2-win 进度汇总
 
+## 2026-11-02：Direct SSH S6 产品手测收口（Asia/Shanghai）
+
+- 基线：`fde8e99`（窗格诊断含 `ssh.direct.*` 追加写入 `%APPDATA%\it2w\logs\pane-diag.log`）。
+- `ssh_direct_accept.exe`：此前 gavin PASS（dns-cancel / server-only-ecdsa 等需条件用例 SKIP）。
+- `it2w_shell` Direct 手测（gavin，`ITERM2WIN_SSH_DIRECT=1` → hc-lab）：
+  - round1（lab 关机）：`pane-diag.log` 写有 `ssh.direct.*` PASS；无 `ssh.exe` PASS；connect timeout；exit / resize / vim SKIP。
+  - round2（UbuntuDev 已开）：resize PASS（`tput`/`stty` 104×34→71×24→115×40，diag `window-change`）；vim PASS；exit PASS（退出码 0，`protocol close`）；diag 复核 hostkey ed25519、agent `\\.\pipe\openssh-ssh-agent`、pty/shell/running；CLEAN_OK。
+- 证据留在本机 QA 目录，未入仓。Direct SSH v0 产品手测（含诊断落盘）收口。
+
 ## 2026-11-01：Direct SSH v0 / S7
 
 - S0–S5 已落地：共享固定依赖、传输接口/纯逻辑、进程内 DirectSshTransport、双开关与产品 API 验收载体。
   产品 v0 仅 agent、known_hosts 只读预信任，失败不回落；决策见 [ADR-003](ADR-003-ssh-direct.md)。
-- S6：Gavin 的 Windows lab 产品 `ssh_direct_accept.exe` 验收用例 PASS；本条仅记录已有结果。
+- S6：`ssh_direct_accept.exe` 验收用例此前 PASS；`it2w_shell` 产品手测见上方 **2026-11-02** 收口。
 - S7：本次变更补齐 `it2w_third_party_notices` 默认构建目标、exe 旁 `licenses/`、
   [第三方声明](../THIRD-PARTY-NOTICES.md) / 对应源码说明和 [使用文档](ssh-direct.md)。
 - Direct 的 OSC 52 读能力仍与 `osc52.allowRead` 策略门组合；ConPTY 路径不支持读，证据保持见 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)。

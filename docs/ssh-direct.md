@@ -65,6 +65,7 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
 `--test all` 覆盖认证、首条 stty/Starting 尺寸、79 字节、resize、modes 和洪水/认证中关闭；
 主机密钥类型/未知/变化、exit-255、dns-cancel 和 gate 是独立用例，需要相应测试条件。
 完整环境开关、进程/快照与兼容模式对照仍靠产品手测，不能由 `gate` 子测试替代。
+gavin 上 Direct 产品手测（含 `pane-diag.log`、无 ssh.exe、exit/resize/vim）已于 2026-11-02 完成，见 [STATUS](STATUS.md)。
 
 Linux/macOS 只运行现有纯逻辑测试，不能替代 Windows 实连验收；v0 不增加 POSIX/Linux live harness。
 独立 [A 探针](ssh-a-probe.md) 保留作依赖基线，不替代产品 API 验收。
