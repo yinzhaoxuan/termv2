@@ -210,8 +210,13 @@ private:
     Batch events_;
 };
 
-// OSC52_PING 仅用于诊断；只有环境变量的值恰好为 "1" 才开启。
+// 环境开关只有值恰好为 "1" 才开启。
 bool envFlagOn(const char *value);
+
+// SSH 模式在窗格构造时确定；请求直连但构建未包含时必须报错，不回落到 ConPTY。
+enum class SshTransportChoice { ConPty, Direct, Unavailable };
+SshTransportChoice selectSshTransport(bool wantDirect, bool buildHasDirect, std::string *err = nullptr);
+
 void osc52DiagPingSequence(int (*reply)(void *, const char *, size_t), void *ctx,
                           void (*log)(void *, const char *), void *logCtx);
 std::string hexPreview(std::string_view bytes, size_t limit = 64);

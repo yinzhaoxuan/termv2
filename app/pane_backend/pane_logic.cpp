@@ -49,6 +49,13 @@ void PendingEvents::flush(std::weak_ptr<char> life, Batch events) {
     }
 }
 bool envFlagOn(const char *value) { return value && std::string_view(value) == "1"; }
+SshTransportChoice selectSshTransport(bool wantDirect, bool buildHasDirect, std::string *err) {
+    if (err) err->clear();
+    if (!wantDirect) return SshTransportChoice::ConPty;
+    if (buildHasDirect) return SshTransportChoice::Direct;
+    if (err) *err = "此构建未包含直连 SSH（ITERM2WIN_SSH_DIRECT=1）";
+    return SshTransportChoice::Unavailable;
+}
 void osc52DiagPingSequence(int (*reply)(void *, const char *, size_t), void *ctx,
                           void (*log)(void *, const char *), void *logCtx) {
     const std::string_view steps[] = {"PING\r", "\x1b[I", "\x1b]52;c;aGk=\x07"};

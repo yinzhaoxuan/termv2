@@ -7,6 +7,9 @@
 #endif
 #include "win32_pane_backend.h"
 #include "ssh_transport.h"
+#if defined(IT2W_SSH_DIRECT) && IT2W_SSH_DIRECT
+#include "direct_ssh_transport.h"
+#endif
 #include "pane_logic.h"
 #include "hwnd_swap_host.h"
 #include "renderer.h"
@@ -65,10 +68,29 @@ std::string toUtf8(std::wstring_view w) {
     return s;
 }
 
-SshTransportFactory makeSshFactory() {
-    return [](SshCallbacks cb) -> std::unique_ptr<SshSessionTransport> {
-        return std::make_unique<SshTransport>(std::move(cb));
-    };
+SshTransportFactory makeSshFactory(bool direct, std::string *err) {
+#if defined(IT2W_SSH_DIRECT) && IT2W_SSH_DIRECT
+    constexpr bool buildHasDirect = true;
+#else
+    constexpr bool buildHasDirect = false;
+#endif
+    switch (selectSshTransport(direct, buildHasDirect, err)) {
+    case SshTransportChoice::ConPty:
+        return [](SshCallbacks cb) -> std::unique_ptr<SshSessionTransport> {
+            return std::make_unique<SshTransport>(std::move(cb));
+        };
+    case SshTransportChoice::Direct:
+#if defined(IT2W_SSH_DIRECT) && IT2W_SSH_DIRECT
+        return [](SshCallbacks cb) -> std::unique_ptr<SshSessionTransport> {
+            return std::make_unique<DirectSshTransport>(std::move(cb));
+        };
+#else
+        return {};
+#endif
+    case SshTransportChoice::Unavailable:
+        return {};
+    }
+    return {};
 }
 
 // 两种传输的统一薄封装
@@ -238,6 +260,7 @@ private:
     bool eventsPosted_ = false;
     // 仅诊断用：默认关闭，会向远端 stdin 注入 PING/伪应答。只认环境变量值 1。
     const bool osc52Ping_ = envFlagOn(std::getenv("ITERM2WIN_OSC52_PING"));
+    const bool sshDirect_ = envFlagOn(std::getenv("ITERM2WIN_SSH_DIRECT"));
     std::optional<std::wstring> localCommand_;  // --command，仅第一个本地窗格；重连（新 attempt）同样带上
     // 与关闭线程 / 传输回调共享的唯一状态（不含 this、不含 PaneEvents）
     std::shared_ptr<SessionShared> shared_ = std::make_shared<SessionShared>();
@@ -442,6 +465,10 @@ bool Win32PaneBackend::startSession() {
                    cb.onResolved = [ws](SessionId, AttemptId, const HvAction &a) {
                        if (auto sh = ws.lock()) postTo<P>(*sh->queue, [a](P &p) {
                            p.hvResult_ = a;
+                           // HyperVTransport 已将 SnapshotError 展平成文本；这里仍按窗格固定模式标注。
+                           constexpr std::string_view snapshotPrefix = "SSH 配置快照无效：";
+                           if (p.sshDirect_ && a.kind == HvAction::Fail && a.text.starts_with(snapshotPrefix))
+                               p.hvResult_->text.replace(0, snapshotPrefix.size(), "SSH 配置无效（直连）：");
                            if (a.kind == HvAction::Connect) {
                                std::lock_guard l(p.statusMu_);
                                p.status_.title = (a.fallback ? "手动地址 " : "Hyper-V ") + a.host;
@@ -449,8 +476,10 @@ bool Win32PaneBackend::startSession() {
                            if (a.kind == HvAction::Connect) p.publishStatus();
                        });
                    };
+                   auto factory = makeSshFactory(sshDirect_, &herr);
+                   if (!factory) return true;  // 已识别为 Hyper-V；由外层 fail(herr)，不能继续走 SSH 分支
                    auto ht = std::make_unique<HyperVT>();
-                   ht->t = std::make_unique<HyperVTransport>(cb, makeSshFactory());
+                   ht->t = std::make_unique<HyperVTransport>(cb, std::move(factory));
                    auto *raw = ht->t.get();
                    transport_ = std::move(ht);
                    shared_->transport = transport_;
@@ -472,13 +501,16 @@ bool Win32PaneBackend::startSession() {
         };
         cb.onDiagnostic = onDiag;
         cb.onOutputTap = outputTap;
+        auto factory = makeSshFactory(sshDirect_, &err);
+        if (!factory) { fail(err); return false; }
         auto st = std::make_unique<SshT>();
-        st->t = makeSshFactory()(cb);
+        st->t = factory(cb);
         auto *raw = st->t.get();
         transport_ = std::move(st);
         shared_->transport = transport_;
         if (auto se = raw->start(SessionId{1}, AttemptId{attempt_}, *o)) {
-            fail("SSH 配置快照无效：" + se->field + " " + se->reason);
+            const std::string prefix = raw->mode() == SshTransportMode::Direct ? "SSH 配置无效（直连）：" : "SSH 配置快照无效：";
+            fail(prefix + se->field + " " + se->reason);
             return false;
         }
     }

@@ -1208,6 +1208,26 @@ static void osc52_ping_sequence_and_split_output_hex() {
     CHECK(envFlagOn("1"));
 }
 
+static void ssh_direct_select() {
+    for (bool buildHasDirect : {false, true}) {
+        for (const char *value : std::vector<const char *>{nullptr, "", "0", "true", "on", "yes", "01", " 1", "1 ", "1\n", "11"}) {
+            CHECK(!envFlagOn(value));
+            std::string err = "stale error";
+            CHECK(selectSshTransport(envFlagOn(value), buildHasDirect, &err) == SshTransportChoice::ConPty);
+            CHECK(err.empty());
+        }
+    }
+    CHECK(envFlagOn("1"));
+    std::string err = "stale error";
+    CHECK(selectSshTransport(envFlagOn("1"), true, &err) == SshTransportChoice::Direct);
+    CHECK(err.empty());
+    CHECK(selectSshTransport(envFlagOn("1"), false, &err) == SshTransportChoice::Unavailable);
+    CHECK(err == "此构建未包含直连 SSH（ITERM2WIN_SSH_DIRECT=1）");
+    CHECK(selectSshTransport(false, false, &err) == SshTransportChoice::ConPty);
+    CHECK(err.empty());
+    CHECK(selectSshTransport(true, false) == SshTransportChoice::Unavailable);
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "fsm_close") flood_close_destroys_continuation_target();
@@ -1222,6 +1242,7 @@ int main(int argc, char **argv) {
     else if (w == "fsm_reset") draining_and_finished_reconnect_reset_attempt();
     else if (w == "fsm_decisions") pump_fsm_decisions_and_frame_modes();
     else if (w == "osc52_diag") osc52_ping_sequence_and_split_output_hex();
+    else if (w == "ssh_direct_select") ssh_direct_select();
     else if (w == "churn") churn();
     else if (w == "viewport") viewport();
     else if (w == "keys") keys();
@@ -1231,7 +1252,7 @@ int main(int argc, char **argv) {
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
     else if (w == "search") search_driver();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;
