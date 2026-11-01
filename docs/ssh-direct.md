@@ -29,6 +29,8 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
 未设置时继续使用兼容传输；选了 Direct 而构建未包含它时明确报错。
 连接、主机密钥或认证失败均**不自动回落**。要改用兼容模式，先移除环境变量再重新启动产品。
 
+窗格诊断（含 `ssh.direct.*`）也会追加写入 `%APPDATA%\it2w\logs\pane-diag.log`。
+
 ## 认证与主机信任
 
 - 产品 v0 **仅支持 agent**：先将服务端授权的密钥用 `ssh-add` 加入 Windows OpenSSH agent。

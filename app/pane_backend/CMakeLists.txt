@@ -39,7 +39,7 @@ if(WIN32)
   target_include_directories(it2w_pane_backend PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/ui/include ${PROJECT_SOURCE_DIR}/app/win32_term)
   target_compile_definitions(it2w_pane_backend PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_link_libraries(it2w_pane_backend PUBLIC it2w_pane_logic it2w_hyperv it2w_ssh it2w_conpty itcore itrender_d2d itrender_layout imm32 user32 gdi32)
+  target_link_libraries(it2w_pane_backend PUBLIC it2w_pane_logic it2w_hyperv it2w_ssh it2w_conpty itcore itrender_d2d itrender_layout imm32 user32 gdi32 shell32)
   if(TARGET it2w_ssh_direct)
     target_link_libraries(it2w_pane_backend PUBLIC it2w_ssh_direct)
     target_compile_definitions(it2w_pane_backend PRIVATE IT2W_SSH_DIRECT=1)

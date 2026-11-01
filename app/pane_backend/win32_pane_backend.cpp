@@ -24,12 +24,15 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <imm.h>
+#include <shlobj.h>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <string>
 
 using namespace it2w;
 
@@ -58,6 +61,23 @@ uint64_t budgetNowMs(void *) {
 void pumpLog(void *, const char *msg) {
     OutputDebugStringA(msg);
     OutputDebugStringA("\n");
+}
+
+void appendPaneDiag(const char *line) {
+    // Shared by all panes and transport/UI threads; no persistent file handle.
+    static std::mutex mutex;
+    std::lock_guard lock(mutex);
+    wchar_t appData[MAX_PATH];
+    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA | CSIDL_FLAG_CREATE, nullptr,
+                                SHGFP_TYPE_CURRENT, appData))) return;
+    const auto dir = std::filesystem::path(appData) / L"it2w" / L"logs";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) return;
+    if (FILE *file = _wfopen((dir / L"pane-diag.log").c_str(), L"a")) {
+        std::fprintf(file, "%s\n", line);
+        std::fclose(file);
+    }
 }
 
 std::string toUtf8(std::wstring_view w) {
@@ -409,7 +429,12 @@ bool Win32PaneBackend::startSession() {
             postTo<P>(*sh->queue, [](P &p) { if (p.shared_->sched.postedShouldRun()) p.pump(); });
     };
     auto onDiag = [](SessionId, AttemptId, const DiagRecord &d) {
-        std::fprintf(stderr, "[pane] diag %s %llums %s\n", d.stage.c_str(), (unsigned long long)d.elapsedMs, d.detail.c_str());
+        // Keep the space after "ms" even when detail is empty, as on stderr.
+        const std::string line = "[pane] diag " + std::string(d.stage.c_str()) + " " +
+                                 std::to_string(d.elapsedMs) + "ms " + d.detail.c_str();
+        std::fprintf(stderr, "%s\n", line.c_str());
+        pumpLog(nullptr, line.c_str());
+        appendPaneDiag(line.c_str());
     };
     std::function<void(SessionId, AttemptId, std::string_view)> outputTap;
     if (osc52Ping_) {
