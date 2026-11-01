@@ -221,6 +221,28 @@ if(WIN32)
   endif()
 endif()
 
+# S3: dev-only direct transport. The pane factory still selects ConPTY.
+# SshDirectDeps enforces the pinned MinGW/static dependency configuration.
+if(WIN32 AND IT2W_SSH_DIRECT)
+  include(cmake/SshDirectDeps.cmake)
+  add_library(it2w_ssh_direct STATIC
+    platform/windows/ssh_direct/direct_ssh_transport.cpp
+    platform/windows/ssh_direct/direct_ssh_hostkey.cpp
+    platform/windows/ssh_direct/direct_ssh_auth.cpp)
+  target_include_directories(it2w_ssh_direct PUBLIC platform/windows/ssh_direct)
+  target_link_libraries(it2w_ssh_direct PUBLIC it2w_ssh it2w_platform_common
+    PRIVATE it2w_dep_ssh2 ws2_32)
+  target_compile_options(it2w_ssh_direct PRIVATE -Wall -Wextra)
+  # Propagate to every final consumer, including the link-check and unit test.
+  target_link_options(it2w_ssh_direct INTERFACE -static -static-libgcc -static-libstdc++)
+  add_executable(it2w_test_ssh_direct_transport tests/platform/test_ssh_direct_transport.cpp)
+  target_link_libraries(it2w_test_ssh_direct_transport PRIVATE it2w_ssh_direct it2w_dep_ssh2 Threads::Threads)
+  set_property(TARGET it2w_test_ssh_direct_transport PROPERTY IT2W_TEST ON)
+  if(NOT CMAKE_CROSSCOMPILING)
+    add_test(NAME SSH-DIRECT-02.transport COMMAND it2w_test_ssh_direct_transport)
+  endif()
+endif()
+
 # T08：PaneBackend（uishell 接口实现）；需在 it2w_ssh 之后
 add_subdirectory(app/pane_backend)
 
