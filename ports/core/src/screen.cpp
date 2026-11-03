@@ -25,6 +25,136 @@ void set_param_if_default(Token &t, size_t i, int def) {
     else if (!t.params[i][0]) t.params[i][0] = def;
 }
 
+// 身份与版本见 docs/identity-14.3.md。仓库没有 project(VERSION)，沿用设计系列 0.1。
+constexpr const char kTermName[] = "termv2";
+constexpr const char kTermVersion[] = "0.1";
+
+void set_underline_style(uint16_t &flags, int style) {
+    flags = uint16_t(flags & ~(ITCORE_CELL_UNDERLINE | ITCORE_CELL_UL_STYLE_MASK));
+    if (style >= ITCORE_UL_SINGLE && style <= ITCORE_UL_DASHED)
+        flags = uint16_t(flags | ITCORE_CELL_UNDERLINE | (uint16_t(style) << ITCORE_CELL_UL_STYLE_SHIFT));
+}
+
+// 冒号形式。subs[0] 是 38/48/58 本身；其后的子参数含 null（解析器保留空字段）。
+// 对齐 iTerm2 VT100TerminalColorValueFromCSI：子参数 ≥5 时下标 2 是色彩空间（可空），
+// RGB 在 3..5；恰好 4 个则没有色彩空间，RGB 在 2..4。任一缺失则不改颜色。
+bool color_from_colon(const std::vector<std::optional<int32_t>> &subs, uint32_t *out) {
+    if (subs.size() < 2 || !subs[1]) return false;
+    const int nsub = int(subs.size()) - 1;
+    const int mode = *subs[1];
+    auto at = [&](size_t idx) -> const std::optional<int32_t> * {
+        return idx < subs.size() ? &subs[idx] : nullptr;
+    };
+    if (mode == 5) {
+        const auto *v = at(2);
+        if (!v || !*v) return false;
+        *out = kColorIndexed(uint8_t(**v));
+        return true;
+    }
+    if (mode != 2 || nsub < 4) return false;
+    const size_t base = nsub >= 5 ? 3 : 2;
+    const auto *r = at(base), *g = at(base + 1), *b = at(base + 2);
+    if (!r || !*r || !g || !*g || !b || !*b) return false;
+    *out = kColorRgb(uint8_t(**r), uint8_t(**g), uint8_t(**b));
+    return true;
+}
+
+// 分号形式 38/48/58。返回需要再跳过的参数个数（for 循环还会 ++i）；0 表示不按颜色消费。
+// 模式 2/5 即使分量不够也吃掉已有分量，避免 2/0 漏进后面的 SGR（GAP-14）。
+// 未知模式不消费，与 iTerm2 一致。
+int semicolon_color_span(const Token &t, size_t i, uint32_t *out, bool *wrote) {
+    *wrote = false;
+    if (i + 1 >= t.params.size()) return 0;
+    const auto &mode_p = t.params[i + 1];
+    if (mode_p.size() != 1 || !mode_p[0]) return 0;
+    const int mode = *mode_p[0];
+    auto at = [&](size_t j) -> const std::optional<int32_t> * {
+        if (j >= t.params.size() || t.params[j].size() != 1) return nullptr;
+        return &t.params[j][0];
+    };
+    if (mode == 5) {
+        if (const auto *v = at(i + 2); v && *v) {
+            *out = kColorIndexed(uint8_t(**v));
+            *wrote = true;
+            return 2;
+        }
+        return 1;
+    }
+    if (mode == 2) {
+        int avail = 0;
+        for (; avail < 3; ++avail)
+            if (!at(i + 2 + size_t(avail))) break;
+        if (avail >= 3) {
+            const auto *r = at(i + 2), *g = at(i + 3), *b = at(i + 4);
+            if (r && *r && g && *g && b && *b) {
+                *out = kColorRgb(uint8_t(**r), uint8_t(**g), uint8_t(**b));
+                *wrote = true;
+            }
+            return 4;
+        }
+        return 1 + avail;
+    }
+    return 0;
+}
+
+int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+std::string hex_encode(std::string_view s) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string o;
+    o.reserve(s.size() * 2);
+    for (unsigned char c : s) { o += kHex[c >> 4]; o += kHex[c & 0xF]; }
+    return o;
+}
+bool hex_decode(std::string_view h, std::string *out) {
+    if (h.empty() || (h.size() % 2) != 0) return false;
+    out->clear();
+    out->reserve(h.size() / 2);
+    for (size_t i = 0; i < h.size(); i += 2) {
+        int a = hex_nibble(h[i]), b = hex_nibble(h[i + 1]);
+        if (a < 0 || b < 0) return false;
+        *out += char((a << 4) | b);
+    }
+    return true;
+}
+
+const char *xtcap_value(std::string_view name) {
+    if (name == "TN" || name == "name") return kTermName;
+    if (name == "Co" || name == "colors") return "256";
+    if (name == "RGB") return "8";  // 真彩色每通道 8 位；不是开关位
+    return nullptr;
+}
+
+void append_sgr_color(std::string *o, uint32_t c, int which) {
+    const uint32_t tt = c >> 24;
+    if (tt == 0) return;
+    *o += ';';
+    if (tt == 1) {
+        const int idx = int(c & 0xFF);
+        if (which == 2) {
+            *o += "58:5:" + std::to_string(idx);
+            return;
+        }
+        if (idx < 8) { *o += std::to_string((which ? 40 : 30) + idx); return; }
+        if (idx < 16) { *o += std::to_string((which ? 100 : 90) + (idx - 8)); return; }
+        *o += which ? "48:5:" : "38:5:";
+        *o += std::to_string(idx);
+        return;
+    }
+    if (tt == 2) {
+        *o += which == 2 ? "58:2:" : which == 1 ? "48:2:" : "38:2:";
+        *o += std::to_string((c >> 16) & 0xFF);
+        *o += ':';
+        *o += std::to_string((c >> 8) & 0xFF);
+        *o += ':';
+        *o += std::to_string(c & 0xFF);
+    }
+}
+
 }  // namespace
 
 int cell_width(uint32_t cp) { return ucd::width(cp); }
@@ -531,6 +661,8 @@ std::string apply_csi_defaults(Token &t) {
     if (priv == '?' && f == 'p' && inter == "$") { set_param_if_default(t, 0, 0); return "DECRQM"; }
     if (priv == 0 && f == 'p' && inter == "$") { set_param_if_default(t, 0, 0); return "DECRQM_ANSI"; }
     if (priv == '>' && f == 'c' && no_inter) { set_param_if_default(t, 0, 0); return "DA2"; }
+    if (priv == '=' && f == 'c' && no_inter) { set_param_if_default(t, 0, 0); return "DA3"; }
+    if (priv == '>' && f == 'q' && no_inter) { set_param_if_default(t, 0, 0); return "XTVERSION"; }
     if (priv != 0) return "";  // 其它私有：消费但不填默认
 
     if (!no_inter) {
@@ -879,13 +1011,13 @@ void Screen::back_tab() {
 }
 void Screen::save_cursor() {
     auto &s = modes_.alt ? saved_alt_ : saved_main_;
-    s.cur = grid().cursor(); s.fg = pen_.fg; s.bg = pen_.bg; s.flags = pen_.flags;
+    s.cur = grid().cursor(); s.fg = pen_.fg; s.bg = pen_.bg; s.underline_color = pen_.underline_color; s.flags = pen_.flags;
     s.g[0] = charset_[0]; s.g[1] = charset_[1]; s.gl = gl_; s.valid = true;
 }
 void Screen::restore_cursor() {
     auto &s = modes_.alt ? saved_alt_ : saved_main_;
     if (!s.valid) { grid().cursor() = {0, 0}; pen_ = Pen{}; charset_[0] = charset_[1] = 'B'; gl_ = 0; return; }
-    grid().cursor() = s.cur; pen_.fg = s.fg; pen_.bg = s.bg; pen_.flags = s.flags;
+    grid().cursor() = s.cur; pen_.fg = s.fg; pen_.bg = s.bg; pen_.underline_color = s.underline_color; pen_.flags = s.flags;
     charset_[0] = s.g[0]; charset_[1] = s.g[1]; gl_ = s.gl;
     grid().set_wrap_pending(false);
     grid().clamp_cursor(false);
@@ -951,65 +1083,75 @@ void Screen::do_sgr(const Token &t) {
         case 0: pen_ = Pen{}; break;
         case 1: pen_.flags |= ITCORE_CELL_BOLD; break;
         case 3: pen_.flags |= ITCORE_CELL_ITALIC; break;
-        case 4: pen_.flags |= ITCORE_CELL_UNDERLINE; break;
+        case 4: {
+            // 无子参数 → 单线。0 关；1..5 单/双/波浪/点/虚。未知子参数只置下划线，样式保留。
+            if (subs.size() <= 1 || !subs[1]) set_underline_style(pen_.flags, ITCORE_UL_SINGLE);
+            else if (*subs[1] == 0) set_underline_style(pen_.flags, 0);
+            else if (*subs[1] >= 1 && *subs[1] <= 5) set_underline_style(pen_.flags, *subs[1]);
+            else pen_.flags = uint16_t(pen_.flags | ITCORE_CELL_UNDERLINE);
+            break;
+        }
         case 7: pen_.flags |= ITCORE_CELL_INVERSE; break;
         case 2: pen_.flags |= ITCORE_CELL_DIM; break;
         case 5: case 6: pen_.flags |= ITCORE_CELL_BLINK; break;   // 6 快闪按 5 处理（上游同）
         case 8: pen_.flags |= ITCORE_CELL_HIDDEN; break;
         case 9: pen_.flags |= ITCORE_CELL_STRIKE; break;
+        case 21: set_underline_style(pen_.flags, ITCORE_UL_DOUBLE); break;  // 双下划线（ECMA-48 / iTerm2）
         case 25: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_BLINK); break;
         case 28: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_HIDDEN); break;
         case 29: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_STRIKE); break;
         case 22: pen_.flags = static_cast<uint16_t>(pen_.flags & ~(ITCORE_CELL_BOLD | ITCORE_CELL_DIM)); break;
         case 23: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_ITALIC); break;
-        case 24: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_UNDERLINE); break;
+        case 24:
+            pen_.flags = static_cast<uint16_t>(pen_.flags & ~(ITCORE_CELL_UNDERLINE | ITCORE_CELL_UL_STYLE_MASK));
+            break;
         case 27: pen_.flags = static_cast<uint16_t>(pen_.flags & ~ITCORE_CELL_INVERSE); break;
+        // 上划线：固定的 iTerm2 提交里 executeSGR 没有 53/55，按 ECMA-48 与 GAP-14 实现。颜色跟前景。
+        case 53: pen_.flags = uint16_t(pen_.flags | ITCORE_CELL_OVERLINE); break;
+        case 55: pen_.flags = uint16_t(pen_.flags & ~ITCORE_CELL_OVERLINE); break;
         case 30: case 31: case 32: case 33: case 34: case 35: case 36: case 37:
             pen_.fg = kColorIndexed(static_cast<uint8_t>(p - 30)); break;
         case 39: pen_.fg = kColorDefault; break;
         case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47:
             pen_.bg = kColorIndexed(static_cast<uint8_t>(p - 40)); break;
         case 49: pen_.bg = kColorDefault; break;
+        case 59: pen_.underline_color = kColorDefault; break;
         case 90: case 91: case 92: case 93: case 94: case 95: case 96: case 97:
             pen_.fg = kColorIndexed(static_cast<uint8_t>(p - 90 + 8)); break;
         case 100: case 101: case 102: case 103: case 104: case 105: case 106: case 107:
             pen_.bg = kColorIndexed(static_cast<uint8_t>(p - 100 + 8)); break;
-        case 38: case 48: {
-            uint32_t *dest = (p == 38) ? &pen_.fg : &pen_.bg;
-            // 分号式：38;5;N 或 38;2;R;G;B —— 参数在后续 params；冒号子参数在 subs
-            if (subs.size() >= 2 && subs[1]) {
-                int mode = *subs[1];
-                if (mode == 5 && subs.size() >= 3 && subs[2])
-                    *dest = kColorIndexed(static_cast<uint8_t>(*subs[2] & 0xFF));
-                else if (mode == 2 && subs.size() >= 5 && subs[2] && subs[3] && subs[4])
-                    *dest = kColorRgb((uint8_t)*subs[2], (uint8_t)*subs[3], (uint8_t)*subs[4]);
+        case 38: case 48: case 58: {
+            if (subs.size() > 1) {
+                uint32_t col = 0;
+                if (color_from_colon(subs, &col)) {
+                    if (p == 38) pen_.fg = col;
+                    else if (p == 48) pen_.bg = col;
+                    else pen_.underline_color = col;
+                }
             }
             break;
         }
         default: break;
         }
     };
-    // 分号形式的 38;5;N：跨多个 params
     for (size_t i = 0; i < t.params.size(); ++i) {
-        int p = t.params[i].empty() || !t.params[i][0] ? 0 : *t.params[i][0];
-        if ((p == 38 || p == 48) && t.params[i].size() == 1) {
-            // 看后续 ;5;N
-            if (i + 2 < t.params.size()) {
-                int mode = param_or(t, i + 1, -1);
-                if (mode == 5) {
-                    int idx = param_or(t, i + 2, 0);
-                    *(p == 38 ? &pen_.fg : &pen_.bg) = kColorIndexed(static_cast<uint8_t>(idx & 0xFF));
-                    i += 2; continue;
+        const auto &subs = t.params[i];
+        int p = subs.empty() || !subs[0] ? 0 : *subs[0];
+        if ((p == 38 || p == 48 || p == 58) && subs.size() == 1) {
+            uint32_t col = 0;
+            bool wrote = false;
+            int follow = semicolon_color_span(t, i, &col, &wrote);
+            if (follow > 0) {
+                if (wrote) {
+                    if (p == 38) pen_.fg = col;
+                    else if (p == 48) pen_.bg = col;
+                    else pen_.underline_color = col;
                 }
-                if (mode == 2 && i + 4 < t.params.size()) {
-                    *(p == 38 ? &pen_.fg : &pen_.bg) = kColorRgb(
-                        (uint8_t)param_or(t, i + 2, 0), (uint8_t)param_or(t, i + 3, 0),
-                        (uint8_t)param_or(t, i + 4, 0));
-                    i += 4; continue;
-                }
+                i += size_t(follow);
+                continue;
             }
         }
-        apply_one(p, t.params[i]);
+        apply_one(p, subs);
     }
 }
 
@@ -1068,7 +1210,8 @@ void Screen::enter_alt(bool clear) {
         sel_clear();
         ++search_serial_;
         saved_main_.cur = main_.cursor();
-        saved_main_.fg = pen_.fg; saved_main_.bg = pen_.bg; saved_main_.flags = pen_.flags;
+        saved_main_.fg = pen_.fg; saved_main_.bg = pen_.bg; saved_main_.underline_color = pen_.underline_color;
+        saved_main_.flags = pen_.flags;
         saved_main_.valid = true;
         modes_.alt = true;
     }
@@ -1083,11 +1226,78 @@ void Screen::leave_alt(bool clear) {
         if (clear) alt_.clear_all(Cell::blank());
         if (saved_main_.valid) {
             main_.cursor() = saved_main_.cur;
-            pen_.fg = saved_main_.fg; pen_.bg = saved_main_.bg; pen_.flags = saved_main_.flags;
+            pen_.fg = saved_main_.fg; pen_.bg = saved_main_.bg; pen_.underline_color = saved_main_.underline_color;
+            pen_.flags = saved_main_.flags;
             main_.clamp_cursor(false);
         }
     }
     bump();
+}
+
+std::string Screen::sgr_decrqss() const {
+    // 报告笔状态本身，不因 INVERSE 交换颜色（格内颜色尚未交换，再送一遍能还原）。
+    std::string o = "0";
+    auto add = [&](const char *s) { o += ';'; o += s; };
+    const uint16_t f = pen_.flags;
+    if (f & ITCORE_CELL_BOLD) add("1");
+    if (f & ITCORE_CELL_DIM) add("2");
+    if (f & ITCORE_CELL_ITALIC) add("3");
+    if (f & ITCORE_CELL_UNDERLINE) {
+        const int st = (f & ITCORE_CELL_UL_STYLE_MASK) >> ITCORE_CELL_UL_STYLE_SHIFT;
+        if (st == ITCORE_UL_DOUBLE) add("21");
+        else if (st == ITCORE_UL_WAVY) add("4:3");
+        else if (st == ITCORE_UL_DOTTED) add("4:4");
+        else if (st == ITCORE_UL_DASHED) add("4:5");
+        else add("4");
+    }
+    if (f & ITCORE_CELL_BLINK) add("5");
+    if (f & ITCORE_CELL_INVERSE) add("7");
+    if (f & ITCORE_CELL_HIDDEN) add("8");
+    if (f & ITCORE_CELL_STRIKE) add("9");
+    if (f & ITCORE_CELL_OVERLINE) add("53");
+    append_sgr_color(&o, pen_.fg, 0);
+    append_sgr_color(&o, pen_.bg, 1);
+    append_sgr_color(&o, pen_.underline_color, 2);
+    return o;
+}
+
+void Screen::reply_dcs(const Token &t, std::string *reply) const {
+    if (!reply) return;
+    const std::string &s = t.text;
+    if (s.size() >= 2 && s[0] == '+' && s[1] == 'q') {
+        if (t.trunc) { *reply += "\x1bP0+r\x1b\\"; return; }
+        const std::string_view body(s.data() + 2, s.size() - 2);
+        if (body.empty()) { *reply += "\x1bP0+r\x1b\\"; return; }
+        size_t i = 0;
+        while (i <= body.size()) {
+            const size_t semi = body.find(';', i);
+            const std::string_view hex = body.substr(i, semi == std::string_view::npos ? std::string_view::npos : semi - i);
+            std::string name;
+            const char *val = nullptr;
+            if (hex_decode(hex, &name)) val = xtcap_value(name);
+            if (val)
+                *reply += "\x1bP1+r" + hex_encode(name) + "=" + hex_encode(val) + "\x1b\\";
+            else
+                *reply += "\x1bP0+r\x1b\\";  // 未知或不合法：不带回名字，避免沉默
+            if (semi == std::string_view::npos) break;
+            i = semi + 1;
+            if (i == body.size()) { *reply += "\x1bP0+r\x1b\\"; break; }
+        }
+        return;
+    }
+    if (s.size() >= 2 && s[0] == '$' && s[1] == 'q') {
+        if (t.trunc) { *reply += "\x1bP0$r\x1b\\"; return; }
+        const std::string pt = s.substr(2);
+        auto ok = [&](const std::string &payload) {
+            *reply += "\x1bP1$r" + payload + pt + "\x1b\\";
+        };
+        if (pt == "m") ok(sgr_decrqss());
+        else if (pt == "r") {
+            ok(std::to_string(grid().scroll_top() + 1) + ";" + std::to_string(grid().scroll_bottom() + 1));
+        } else if (pt == " q") ok(std::to_string(modes_.cursor_style));
+        else if (pt == "\"q") ok("0");  // DECSCA：未实现字符保护，全部可擦
+        else *reply += "\x1bP0$r\x1b\\";
+    }
 }
 
 void Screen::apply(const Token &t, std::string *reply) {
@@ -1267,9 +1477,13 @@ void Screen::apply_one(const Token &t, std::string *reply) {
             }
         }
         else if (cmd == "DA2" && reply && param_or(t2, 0, 0) == 0)
-            *reply += "\x1b[>64;2500;0c";  // 上游默认 VT500 级（64）+ xtermVersion 2500（VT100Output.m reportSecondaryDeviceAttribute）
+            *reply += "\x1b[>1;0;0c";  // VT220 次级标识，补丁号 0（docs/identity-14.3.md）
         else if (cmd == "DA" && reply && param_or(t2, 0, 0) == 0)
-            *reply += "\x1b[?1;2c";  // VT100+AVO 拟定身份（设计 14.3）；未冻结
+            *reply += "\x1b[?62;22c";  // VT220 + ANSI 颜色；不宣告未实现的特性
+        else if (cmd == "DA3" && reply && param_or(t2, 0, 0) == 0)
+            *reply += "\x1bP!|" + hex_encode(kTermName) + "\x1b\\";  // 稳定单元号，不抬高 VT 级别
+        else if (cmd == "XTVERSION" && reply && param_or(t2, 0, 0) == 0)
+            *reply += std::string("\x1bP>|") + kTermName + " " + kTermVersion + "\x1b\\";
         else if (cmd == "REP" && has_last_) {
             int n = param_or(t2, 0, 1);
             size_t len = 0; const char *s = pool_.get(last_printed_.grapheme_id, &len);
@@ -1285,6 +1499,9 @@ void Screen::apply_one(const Token &t, std::string *reply) {
         bump();
         break;
     }
+    case TokenType::Dcs:
+        reply_dcs(t, reply);
+        break;
     default: break;
     }
 }

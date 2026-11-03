@@ -1,6 +1,7 @@
 #undef NDEBUG  // assert 在任何构建类型下都必须执行
 #include "cell_style.h"
 #include "itcore_mock.h"
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -98,6 +99,29 @@ int main() {
     GridMetrics g1; g1.cell_w_dip = 8; g1.cell_h_dip = 16;
     auto ur = underline_rect(g1, 1, 0, 2); assert(ur.x == 12 && ur.w == 16 && ur.h == 2 && ur.y == 4 + 16 - 2 - 1);
     g1.dpi_scale = 2.f; ur = underline_rect(g1, 0, 0); assert(ur.h == 4 && ur.y == 8 + 32 - 4 - 2);
+    g1.dpi_scale = 1.f;
+    itcore_cell us{}; us.flags = ITCORE_CELL_UNDERLINE;
+    assert(cell_underline_style(us) == ITCORE_UL_SINGLE);
+    us.flags = ITCORE_CELL_UNDERLINE | (6u << ITCORE_CELL_UL_STYLE_SHIFT);
+    assert(cell_underline_style(us) == ITCORE_UL_SINGLE);  // 未知样式按单线
+    auto single = underline_style_rects(g1, 1, 0, 1, ITCORE_UL_SINGLE);
+    assert(single.size() == 1 && single[0].x == 12 && single[0].y == 17 && single[0].w == 8 && single[0].h == 2);
+    auto dbl = underline_style_rects(g1, 1, 0, 1, ITCORE_UL_DOUBLE);
+    assert(dbl.size() == 2 && dbl[0].y == 17 && dbl[1].y == 13 && dbl[1].h == 2 && dbl[1].y < dbl[0].y);
+    auto dots = underline_style_rects(g1, 1, 0, 1, ITCORE_UL_DOTTED);
+    assert(dots.size() >= 2 && dots[0].w == 2 && dots[0].h == 2 && dots[1].x == dots[0].x + 4);
+    auto dashes = underline_style_rects(g1, 1, 0, 2, ITCORE_UL_DASHED);
+    assert(dashes.size() >= 2 && dashes[0].w > dots[0].w && dashes[0].y == 17);
+    auto wavy = underline_style_rects(g1, 1, 0, 2, ITCORE_UL_WAVY);
+    assert(wavy.size() >= 4);
+    int ymin = wavy[0].y, ymax = wavy[0].y;
+    for (auto &q : wavy) { ymin = std::min(ymin, q.y); ymax = std::max(ymax, q.y); assert(q.y >= 4 && q.y + q.h <= 20); }
+    assert(ymin < ymax);
+    auto ov = overline_rect(g1, 1, 0, 1);
+    assert(ov.x == 12 && ov.y == 5 && ov.w == 8 && ov.h == 2);
+    us.flags = ITCORE_CELL_OVERLINE | ITREN_CELL_BLINK;
+    assert(overline_visible(us, 0) && !overline_visible(us, 1000));
+    us.flags = ITCORE_CELL_OVERLINE; assert(overline_visible(us, 1000));
   }
   itcore_snapshot_release(s);
   std::puts("cell_style ok");

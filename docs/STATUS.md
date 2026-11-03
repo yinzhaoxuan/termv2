@@ -1,5 +1,11 @@
 # iterm2-win 进度汇总
 
+## 2026-11-03：REVIEW A′ GAP-14 / GAP-16
+
+- GAP-14：SGR 38/48/58 的冒号形式在子参数不少于 5 个时跳过色彩空间（`38:2::R:G:B` 与 `38:2:0:R:G:B` 都是红，不再读成绿或丢掉）。分号形式的 58 与 38 一样消费 `;5;N` 和 `;2;R;G;B`；分量被截断时吃掉已有数字，不再漏成 SGR 2/0。59 清下划线色。`4:0..5`、21、53/55 写入样式位与上划线位；D2D 按这些位画双线、波浪、点线、虚线和上划线。`ITCORE_ABI_VERSION` 仍是 0（`flags` 里原本空着的位，结构没变）。
+- GAP-16：DA1/DA2 统一为 VT220（`CSI ? 62 ; 22 c`、`CSI > 1 ; 0 ; 0 c`），不再宣告 VT520 / xterm 2500。XTVERSION 是 `termv2 0.1`。DA3 回固定单元号，不抬高级别。DECRQSS（`m` / `r` / `"q` / `SP q`）和 XTGETTCAP 未知项都有应答，不再沉默。选择记在 [identity-14.3.md](identity-14.3.md)。
+- Linux：CORE-22、CORE-23。实机 `vim -u NONE` 的 `v:termresponse` 还没跑。DECSLRM / ?1007（A′4）没做。
+
 ## 2026-11-03：REVIEW 增补二 D-2 / GAP-01
 
 - pane-diag 按 DS-11 滚动：`pane-diag.log` 约 5 MiB，另保留 `.1` 与 `.2`（共 3 个文件）。进程内只保持一个写句柄，滚动或更换目录时才重新打开。

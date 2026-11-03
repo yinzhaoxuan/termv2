@@ -550,10 +550,15 @@ bool D2DRenderer::present_frame(PresentMode mode) {
                     I.d2d->PopAxisAlignedClip();
                 }
             }
-            if (underline_visible(c, now)) {  // 闪烁隐藏相位不画下划线（BLINK-02）；位置/粗细按度量与 DPI
-                auto ur = underline_rect(metrics_, col, y, cw);
+            if (underline_visible(c, now)) {  // 闪烁隐藏相位不画下划线（BLINK-02）；样式见 underline_style_rects
                 I.brush_fg->SetColor(rgb_f(rcol.underline));
-                I.d2d->FillRectangle(D2D1::RectF(float(ur.x), float(ur.y), float(ur.x + ur.w), float(ur.y + ur.h)), I.brush_fg);
+                for (auto &ur : underline_style_rects(metrics_, col, y, cw, cell_underline_style(c)))
+                    I.d2d->FillRectangle(D2D1::RectF(float(ur.x), float(ur.y), float(ur.x + ur.w), float(ur.y + ur.h)), I.brush_fg);
+            }
+            if (overline_visible(c, now)) {  // SGR 53；颜色跟前景，闪烁相位与下划线相同
+                auto ov = overline_rect(metrics_, col, y, cw);
+                I.brush_fg->SetColor(rgb_f(rcol.fg));
+                I.d2d->FillRectangle(D2D1::RectF(float(ov.x), float(ov.y), float(ov.x + ov.w), float(ov.y + ov.h)), I.brush_fg);
             }
             if ((c.flags & ITREN_CELL_STRIKE) && text_on) {
                 auto sr = strike_rect(metrics_, col, y, cw);

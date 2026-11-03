@@ -171,6 +171,11 @@ add_test(NAME CORE-18.decaln_decstr_decdsr COMMAND itcore_test_p0 misc)
 add_test(NAME CORE-19.export_text COMMAND itcore_test_p0 export)
 add_test(NAME CORE-20.da2_winops_title_stack COMMAND itcore_test_p0 winops)
 add_test(NAME CORE-21.osc_colors COMMAND itcore_test_p0 colors)
+# GAP-14 / GAP-16（REVIEW A′）：SGR 子参数、DA / DECRQSS / XTVERSION / XTGETTCAP
+add_executable(itcore_test_gap tests/core/test_gap1416.cpp)
+target_link_libraries(itcore_test_gap PRIVATE itcore)
+add_test(NAME CORE-22.sgr_subparams COMMAND itcore_test_gap core22)
+add_test(NAME CORE-23.da_decrqss_xt COMMAND itcore_test_gap core23)
 # SRCH-01：滚动历史纯文本搜索（草案 /workspace/qa/itcore_search-草案-v0.2.md §5；正则用例 v0.1 跳过）
 add_executable(itcore_test_search tests/core/test_search.cpp)
 target_include_directories(itcore_test_search PRIVATE ports/core/src)

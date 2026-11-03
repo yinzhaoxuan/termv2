@@ -39,7 +39,7 @@ inline uint32_t resolve(const Theme &t, uint32_t c, bool is_fg) {
   }
 }
 
-// SGR 2/5/8/9 标志：itcore.h 尚未定义（缺口，待架构师在 itcore_cell.flags 补位），先用本地占位位值
+// SGR 2/5/8/9 与下划线样式位在 itcore.h。没有该宏时用同一组占位位，便于旧头编译。
 #ifndef ITCORE_HAS_SGR_EXT_FLAGS
 constexpr uint16_t ITREN_CELL_DIM = 1u << 6, ITREN_CELL_BLINK = 1u << 7, ITREN_CELL_HIDDEN = 1u << 8, ITREN_CELL_STRIKE = 1u << 9;
 #else
@@ -103,6 +103,77 @@ inline GridMetrics::Rect underline_rect(const GridMetrics &m, uint16_t col, uint
 // 下划线是否画：随文本一起受闪烁隐藏（BLINK-02）
 inline bool underline_visible(const itcore_cell &c, uint64_t blink_phase_ms) {
   return (c.flags & ITCORE_CELL_UNDERLINE) && text_visible(c, blink_phase_ms);
+}
+
+// 0 不画。样式位 0 或超出 1..5 时按单线（旧单元格 / 未知 3-bit 值）。
+inline int cell_underline_style(const itcore_cell &c) {
+  if (!(c.flags & ITCORE_CELL_UNDERLINE)) return 0;
+#ifndef ITCORE_CELL_UL_STYLE_MASK
+  return 1;
+#else
+  int st = (c.flags & ITCORE_CELL_UL_STYLE_MASK) >> ITCORE_CELL_UL_STYLE_SHIFT;
+  if (st < ITCORE_UL_SINGLE || st > ITCORE_UL_DASHED) return ITCORE_UL_SINGLE;
+  return st;
+#endif
+}
+
+inline bool overline_visible(const itcore_cell &c, uint64_t blink_phase_ms) {
+  return (c.flags & ITCORE_CELL_OVERLINE) && text_visible(c, blink_phase_ms);
+}
+
+// 线宽 max(1, round(2*dpi))，离边约 1 逻辑像素，与 underline_rect 相同。
+inline void ul_metrics(const GridMetrics &m, const GridMetrics::Rect &a, int *t, int *gap) {
+  *t = std::min(std::max(1, int(std::lround(2.0f * m.dpi_scale))), a.h);
+  *gap = std::min(std::max(0, int(std::lround(m.dpi_scale))), std::max(0, a.h - *t));
+}
+
+// SGR 4:1..5 / 21。单线与 underline_rect 重合。双线在其上一笔宽的空白再画一条。
+// 点线：边长 t、间隔 t。虚线：段长 max(3t,1)、间隔 t。波浪：周期 max(4t,4)、振幅 t、步长 t，y 钳在格内。
+inline std::vector<GridMetrics::Rect> underline_style_rects(const GridMetrics &m, uint16_t col, uint16_t row,
+                                                            uint16_t ncells, int style) {
+  auto a = m.cell_rect(col, row);
+  const int w = a.w * std::max<uint16_t>(ncells, 1);
+  int t = 1, gap = 0;
+  ul_metrics(m, a, &t, &gap);
+  int y1 = a.y + a.h - t - gap;
+  if (y1 < a.y) y1 = a.y;
+  std::vector<GridMetrics::Rect> out;
+  auto push_bar = [&](int x, int y, int bw, int bh) {
+    if (bw <= 0 || bh <= 0) return;
+    if (y < a.y) { bh -= a.y - y; y = a.y; }
+    if (y + bh > a.y + a.h) bh = a.y + a.h - y;
+    if (bh > 0) out.push_back({x, y, bw, bh});
+  };
+  if (style == ITCORE_UL_DOUBLE) {
+    push_bar(a.x, y1, w, t);
+    push_bar(a.x, y1 - t - t, w, t);
+  } else if (style == ITCORE_UL_DOTTED) {
+    const int step = t + t;
+    for (int x = 0; x < w; x += step) push_bar(a.x + x, y1, std::min(t, w - x), t);
+  } else if (style == ITCORE_UL_DASHED) {
+    const int seg = std::max(t * 3, 1);
+    const int g = std::max(t, 1);
+    for (int x = 0; x < w; x += seg + g) push_bar(a.x + x, y1, std::min(seg, w - x), t);
+  } else if (style == ITCORE_UL_WAVY) {
+    const int period = std::max(4 * t, 4);
+    const int step = std::max(t, 1);
+    for (int x = 0; x < w; x += step) {
+      const double phase = (2.0 * 3.14159265358979323846 * x) / period;
+      const int yy = y1 + int(std::lround(std::sin(phase) * t));
+      push_bar(a.x + x, yy, std::min(step, w - x), t);
+    }
+  } else {
+    push_bar(a.x, y1, w, t);  // single，以及未知样式
+  }
+  return out;
+}
+
+// SGR 53：格顶，粗细与下划线相同。颜色由调用方用前景。
+inline GridMetrics::Rect overline_rect(const GridMetrics &m, uint16_t col, uint16_t row, uint16_t ncells = 1) {
+  auto a = m.cell_rect(col, row);
+  int t = 1, gap = 0;
+  ul_metrics(m, a, &t, &gap);
+  return {a.x, a.y + gap, a.w * std::max<uint16_t>(ncells, 1), t};
 }
 
 // SGR 5 闪烁的行级跟踪：重画某行时记录它是否含闪烁格；相位翻转只需重画这些行；全部消失后停止动画

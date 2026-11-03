@@ -18,14 +18,24 @@ typedef struct { uint32_t struct_size; size_t accepted; itcore_status status; } 
 typedef struct { uint32_t abi_version, struct_size; uint16_t columns, rows;
                  uint32_t scrollback_lines; uint64_t memory_limit_bytes; } itcore_options;
 
-/* 字符格：颜色统一为 0xTTRRGGBB，TT=0 默认/1 调色板索引(RR 为下标)/2 真彩色 */
+/* 字符格：颜色统一为 0xTTRRGGBB，TT=0 默认/1 调色板索引/2 真彩色。
+   索引色的下标在最低字节（0x01xxxxxx 的 BB），与 kColorIndexed 一致。 */
 enum { ITCORE_CELL_CONTINUATION = 1u << 0, ITCORE_CELL_BOLD = 1u << 1, ITCORE_CELL_ITALIC = 1u << 2,
        ITCORE_CELL_UNDERLINE = 1u << 3, ITCORE_CELL_INVERSE = 1u << 4,
        /* 快照里选区内的格：同时已翻转 INVERSE，渲染器无需额外处理 */
        ITCORE_CELL_SELECTED = 1u << 5,
        /* SGR 2/5(6)/8/9；22 同时清 BOLD 与 DIM，25/28/29 各自清除。渲染负责混色、闪烁相位、隐藏与删除线 */
        ITCORE_CELL_DIM = 1u << 6, ITCORE_CELL_BLINK = 1u << 7,
-       ITCORE_CELL_HIDDEN = 1u << 8, ITCORE_CELL_STRIKE = 1u << 9 };
+       ITCORE_CELL_HIDDEN = 1u << 8, ITCORE_CELL_STRIKE = 1u << 9,
+       /* SGR 53 上划线；55 与 SGR 0 清除。下划线样式在 bit 10–12，不占本标志。 */
+       ITCORE_CELL_OVERLINE = 1u << 13 };
+/* SGR 4:0..5 与 21。bit 10–12：1 单线、2 双线、3 波浪、4 点线、5 虚线。
+   ITCORE_CELL_UNDERLINE 仍表示“要画下划线”；样式为 0 且该位置位时按单线画（旧单元格）。
+   4:0 / 24 / SGR 0 同时清 UNDERLINE 与样式位。结构布局不变，故 ITCORE_ABI_VERSION 仍为 0
+   （只在 itcore_cell / itcore_options / 事件负载的字段布局变化时递增）。 */
+#define ITCORE_CELL_UL_STYLE_SHIFT 10
+#define ITCORE_CELL_UL_STYLE_MASK (7u << ITCORE_CELL_UL_STYLE_SHIFT)
+enum { ITCORE_UL_SINGLE = 1, ITCORE_UL_DOUBLE = 2, ITCORE_UL_WAVY = 3, ITCORE_UL_DOTTED = 4, ITCORE_UL_DASHED = 5 };
 #define ITCORE_HAS_SGR_EXT_FLAGS 1
 typedef struct { uint32_t grapheme_id; uint8_t width; uint8_t reserved; uint16_t flags;
                  uint32_t fg, bg, underline_color; uint32_t hyperlink_id; } itcore_cell;
