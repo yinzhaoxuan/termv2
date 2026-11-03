@@ -180,8 +180,10 @@ DWORD WINAPI DirectSshTransport::Impl::ownerMain(void *p) {
     SetEvent(self.closed);
     return 0;
 }
-void DirectSshTransport::Impl::diag(const char *name, uint64_t ms, uint64_t bytes, std::string detail) {
-    if (cb.onDiagnostic) cb.onDiagnostic(sid, aid, DiagRecord{name, ms, bytes, std::move(detail)});
+void DirectSshTransport::Impl::diag(const char *name, uint64_t ms, uint64_t bytes, std::string detail,
+                                    std::optional<int64_t> errorCode) const {
+    if (cb.onDiagnostic)
+        cb.onDiagnostic(sid, aid, DiagRecord{name, ms, bytes, std::move(detail), std::move(errorCode)});
 }
 void DirectSshTransport::Impl::setState(TransportState next, std::optional<TransportFault> fault) {
     state = next;
@@ -194,6 +196,7 @@ void DirectSshTransport::Impl::setPhase(DirectStage next, const char *name) {
 }
 [[noreturn]] void DirectSshTransport::Impl::fail(DirectFailureKind kind, int code, std::string detail,
                                                std::optional<TransportFault> fault) const {
+    if (code != 0) diag("ssh.direct.fail", 0, 0, detail, static_cast<int64_t>(code));
     auto exit = mapDirectFailure({phase, kind, code});
     if (!detail.empty()) exit.detail += "; " + detail;
     throw Failure{std::move(exit), fault};
@@ -564,7 +567,7 @@ void DirectSshTransport::Impl::cleanup() {
             rc = libssh2_session_free(session);
             if (rc == LIBSSH2_ERROR_EAGAIN) WaitForSingleObject(wake, 1);
         } while (rc == LIBSSH2_ERROR_EAGAIN && now() < closeAt + 2900);
-        if (rc) diag("ssh.direct.free", now() - closeAt, 0, "session_free error=" + std::to_string(rc));
+        if (rc) diag("ssh.direct.free", now() - closeAt, 0, "session_free error=" + std::to_string(rc), rc);
         session = nullptr; channel = nullptr;
     }
     if (socketEvent != WSA_INVALID_EVENT) { WSACloseEvent(socketEvent); socketEvent = WSA_INVALID_EVENT; }

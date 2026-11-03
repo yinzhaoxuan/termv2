@@ -72,12 +72,14 @@ void ConPtyTransport::setState(TransportState s, std::optional<TransportFault> f
     state_ = s;
     if (cb_.onStateChanged) cb_.onStateChanged(sid_, aid_, s, f);
 }
-void ConPtyTransport::diag(const char *stage, uint64_t ms, uint64_t bytes, std::string detail) {
-    if (cb_.onDiagnostic) cb_.onDiagnostic(sid_, aid_, DiagRecord{stage, ms, bytes, std::move(detail)});
+void ConPtyTransport::diag(const char *stage, uint64_t ms, uint64_t bytes, std::string detail,
+                           std::optional<int64_t> errorCode) {
+    if (cb_.onDiagnostic)
+        cb_.onDiagnostic(sid_, aid_, DiagRecord{stage, ms, bytes, std::move(detail), std::move(errorCode)});
 }
 
 void ConPtyTransport::failStart(TransportFault f, const char *stage, DWORD err) {
-    diag(stage, 0, 0, "Win32 错误 " + std::to_string(err));
+    diag(stage, 0, 0, "Win32 错误 " + std::to_string(err), static_cast<int64_t>(err));
     fault_ = f;
     // 逆序释放：线程先停，再关句柄
     writerStop_ = true;
@@ -229,7 +231,7 @@ void ConPtyTransport::writerLoop() {
         if (!ok) {
             DWORD e = GetLastError();
             if (writerStop_ || e == ERROR_OPERATION_ABORTED) break;
-            diag("WriteFile", 0, 0, "Win32 错误 " + std::to_string(e));
+            diag("WriteFile", 0, 0, "Win32 错误 " + std::to_string(e), static_cast<int64_t>(e));
             fault_ = TransportFault::PipeBroken;
             close(CloseReason::Fault);
             break;
@@ -310,7 +312,8 @@ void ConPtyTransport::resize(GridSize g, uint64_t generation) {
         hr = ResizePseudoConsole(hpc_, c);
     }
     if (FAILED(hr)) {
-        diag("ResizePseudoConsole", 0, generation, "HRESULT " + std::to_string(unsigned(hr)));
+        diag("ResizePseudoConsole", 0, generation, "HRESULT " + std::to_string(unsigned(hr)),
+             static_cast<int64_t>(hr));
         if (++resizeFailures_ >= kResizeFailLimit) { fault_ = TransportFault::ResizeFailed; close(CloseReason::Fault); }
     } else resizeFailures_ = 0;
 }

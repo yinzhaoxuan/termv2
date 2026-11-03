@@ -14,7 +14,7 @@ namespace it2w {
 struct SshLaunchOptions {
     SshTarget target;
     std::wstring sshExe;            // 空：%SystemRoot%\System32\OpenSSH\ssh.exe
-    std::wstring snapshotDir;       // 应用私有目录（已存在）；快照文件名含 session/attempt
+    std::wstring snapshotDir;       // 应用私有目录（已存在）；文件名 ssh-<pid>-<sid>-<aid>.conf
     GridSize initialSize;
     EnvList environment;            // 空：继承当前进程环境后过滤
 };

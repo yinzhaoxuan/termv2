@@ -82,7 +82,8 @@ struct DirectSshTransport::Impl {
     void cleanup();
     void setState(TransportState, std::optional<TransportFault> = std::nullopt);
     void setPhase(DirectStage, const char *);
-    void diag(const char *, uint64_t ms = 0, uint64_t bytes = 0, std::string detail = {});
+    void diag(const char *, uint64_t ms = 0, uint64_t bytes = 0, std::string detail = {},
+              std::optional<int64_t> errorCode = std::nullopt) const;
     void checkpoint(uint64_t until = 0) const;
     [[noreturn]] void fail(DirectFailureKind, int code = 0, std::string detail = {},
                            std::optional<TransportFault> = std::nullopt) const;

@@ -4,6 +4,10 @@
 #include <condition_variable>
 #include <algorithm>
 #include <cstdio>
+#include <utility>
+#if defined(_WIN32)
+#include <wchar.h>
+#endif
 
 namespace it2app {
 
@@ -41,6 +45,160 @@ std::string terminalLog(uint64_t attempt, const TerminalStatus &s, uint64_t core
     return "[pane] session end attempt=" + std::to_string(attempt) + " state=" + (s.failed ? "Failed" : "Exited") +
            " dropped=" + std::to_string(s.droppedOutputBytes) + " (core=" + std::to_string(coreDropped) +
            " queue=" + std::to_string(queueDropped) + ")";
+}
+
+namespace {
+
+std::string sanitizePhase(std::string_view phase) {
+    std::string out;
+    out.reserve(phase.size());
+    for (unsigned char c : phase) {
+        if (c <= ' ' || c == '=') out.push_back('_');
+        else out.push_back(static_cast<char>(c));
+    }
+    if (out.empty()) out = "-";
+    return out;
+}
+
+std::string sanitizeMessage(std::string_view message) {
+    std::string out;
+    out.reserve(message.size());
+    for (unsigned char c : message) {
+        if (c == '\n' || c == '\r' || c == '\0') out.push_back(' ');
+        else out.push_back(static_cast<char>(c));
+    }
+    return out;
+}
+
+std::FILE *openAppend(const std::filesystem::path &path) {
+#if defined(_WIN32)
+    return _wfopen(path.c_str(), L"ab");
+#else
+    return std::fopen(path.c_str(), "ab");
+#endif
+}
+
+}  // namespace
+
+std::string formatPaneDiagLine(uint64_t sessionId, uint64_t attemptId, std::string_view phase,
+                               uint64_t elapsedMs, std::optional<int64_t> errorCode,
+                               uint64_t bytes, std::string_view message) {
+    std::string line;
+    line.reserve(80 + phase.size() + message.size());
+    line += "v=1 sid=";
+    line += std::to_string(sessionId);
+    line += " attempt=";
+    line += std::to_string(attemptId);
+    line += " phase=";
+    line += sanitizePhase(phase);
+    line += " elapsed_ms=";
+    line += std::to_string(elapsedMs);
+    line += " err=";
+    line += errorCode ? std::to_string(*errorCode) : "-";
+    line += " bytes=";
+    line += std::to_string(bytes);
+    line += " msg=";
+    line += sanitizeMessage(message);
+    return line;
+}
+
+std::filesystem::path paneDiagDirectory(const std::filesystem::path &configDir,
+                                        const std::filesystem::path &fallbackConfigDir) {
+    if (!configDir.empty()) return configDir / "logs";
+    if (!fallbackConfigDir.empty()) return fallbackConfigDir / "logs";
+    return {};
+}
+
+uint64_t allocateSessionId() {
+    static std::atomic<uint64_t> next{1};
+    uint64_t id = next.fetch_add(1, std::memory_order_relaxed);
+    if (id == 0) id = next.fetch_add(1, std::memory_order_relaxed);
+    return id;
+}
+
+PaneDiagLog::~PaneDiagLog() {
+    std::lock_guard lock(mu_);
+    closeUnlocked();
+}
+
+void PaneDiagLog::setDirectory(std::filesystem::path logsDir) {
+    std::lock_guard lock(mu_);
+    if (logsDir == dir_) return;
+    closeUnlocked();
+    dir_ = std::move(logsDir);
+    size_ = 0;
+}
+
+void PaneDiagLog::setMaxBytes(uint64_t bytes) {
+    std::lock_guard lock(mu_);
+    maxBytes_ = bytes == 0 ? 1 : bytes;
+}
+
+int PaneDiagLog::openCount() const {
+    std::lock_guard lock(mu_);
+    return opens_;
+}
+
+void PaneDiagLog::closeUnlocked() {
+    if (!fp_) return;
+    std::fclose(fp_);
+    fp_ = nullptr;
+}
+
+void PaneDiagLog::rotateUnlocked() {
+    closeUnlocked();
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path base = dir_ / "pane-diag.log";
+    auto gen = [&](int n) {
+        fs::path p = base;
+        if (n) p += "." + std::to_string(n);
+        return p;
+    };
+    // 当前 + .1 + .2，共 3 个。最老的 .2 丢掉。
+    fs::remove(gen(2), ec);
+    fs::rename(gen(1), gen(2), ec);
+    fs::rename(gen(0), gen(1), ec);
+    size_ = 0;
+    openUnlocked(false);
+}
+
+void PaneDiagLog::openUnlocked(bool allowRotate) {
+    if (fp_ || dir_.empty()) return;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(dir_, ec);
+    if (ec) return;
+    const fs::path cur = dir_ / "pane-diag.log";
+    size_ = 0;
+    if (fs::exists(cur, ec) && !ec) {
+        const auto sz = fs::file_size(cur, ec);
+        if (!ec) size_ = sz;
+        if (allowRotate && size_ > 0 && size_ >= maxBytes_) {
+            rotateUnlocked();
+            return;
+        }
+    }
+    fp_ = openAppend(cur);
+    if (fp_) ++opens_;
+    else size_ = 0;
+}
+
+void PaneDiagLog::append(std::string_view line) {
+    std::lock_guard lock(mu_);
+    if (dir_.empty()) return;
+    const uint64_t add = static_cast<uint64_t>(line.size()) + 1;
+    if (!fp_) openUnlocked(true);
+    if (!fp_) return;
+    // 空文件允许一行超过上限，避免单条超长记录把滚动打成死循环。下一条再滚。
+    if (size_ > 0 && size_ + add > maxBytes_) {
+        rotateUnlocked();
+        if (!fp_) return;
+    }
+    const auto n = std::fwrite(line.data(), 1, line.size(), fp_);
+    if (n != line.size() || std::fputc('\n', fp_) == EOF) return;
+    std::fflush(fp_);
+    size_ += static_cast<uint64_t>(n) + 1;
 }
 void PendingEvents::flush(std::weak_ptr<char> life, Batch events) {
     for (auto &event : events) {

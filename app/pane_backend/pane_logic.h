@@ -6,7 +6,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -196,6 +198,46 @@ struct TerminalInputs {
 struct TerminalStatus { bool failed = false; int exitCode = 0; std::string error; uint64_t droppedOutputBytes = 0; };
 TerminalStatus classifyTerminal(const TerminalInputs &in);
 std::string terminalLog(uint64_t attempt, const TerminalStatus &, uint64_t coreDropped, uint64_t queueDropped);
+
+// DS-11 / D-2：pane-diag 一行。phase 压成单个字段；没有错误码时 err=-。msg 里的换行换成空格。
+// v 是日志格式版本，不是产品版本。
+std::string formatPaneDiagLine(uint64_t sessionId, uint64_t attemptId, std::string_view phase,
+                               uint64_t elapsedMs, std::optional<int64_t> errorCode,
+                               uint64_t bytes, std::string_view message);
+// 非空 configDir → <configDir>/logs。否则用 fallbackConfigDir/logs（调用方传入的 APPDATA\it2w）。
+// 两者都空则返回空路径，调用方不写。
+std::filesystem::path paneDiagDirectory(const std::filesystem::path &configDir,
+                                        const std::filesystem::path &fallbackConfigDir);
+
+// GAP-01：进程内单调 SessionId，从 1 起，不复用。重连不重新分配。
+uint64_t allocateSessionId();
+
+// 5 MiB × 3：pane-diag.log + .1 + .2。句柄一直开着，只有滚动或换目录时重新打开。
+class PaneDiagLog {
+public:
+    static constexpr uint64_t kMaxBytes = 5ull * 1024ull * 1024ull;
+    PaneDiagLog() = default;
+    ~PaneDiagLog();
+    PaneDiagLog(const PaneDiagLog &) = delete;
+    PaneDiagLog &operator=(const PaneDiagLog &) = delete;
+
+    void setDirectory(std::filesystem::path logsDir);
+    void setMaxBytes(uint64_t bytes);
+    void append(std::string_view line);
+    int openCount() const;
+
+private:
+    void closeUnlocked();
+    void openUnlocked(bool allowRotate);
+    void rotateUnlocked();
+
+    mutable std::mutex mu_;
+    std::filesystem::path dir_;
+    uint64_t maxBytes_ = kMaxBytes;
+    std::FILE *fp_ = nullptr;
+    uint64_t size_ = 0;
+    int opens_ = 0;
+};
 
 // 所有 PaneEvents 先保存值和回调副本，离开 pump/队列 drain 后由独立通知消息取走。
 // flush 只接触局部副本；每次回调前检查 attempt 令牌。回调销毁/重连 owner 后立即停止。

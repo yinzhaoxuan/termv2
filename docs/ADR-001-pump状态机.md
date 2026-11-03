@@ -281,7 +281,7 @@ Draining 期间 `status_.state` 仍然是 Running（终态还没发布），所�
 
 ## 5. OSC52-05 诊断
 
-日志暂时都走 `pumpLog`（`OutputDebugStringA`，`win32:52-55`），等 DS-11 定下来后再迁到落盘日志。
+传输 `onDiagnostic` 已按 DS-11 落入 `configDir/logs/pane-diag.log`（约 5 MiB × 3，带 sid/attempt/阶段/耗时/错误码）。本节 OSC 52 诊断仍走 `pumpLog`（`OutputDebugStringA`），尚未迁到该文件。
 
 **D1 读事件入口（常开）**
 - 日志：`[pane] osc52 read event attempt=%llu sel=%.*s`

@@ -1,5 +1,14 @@
 # iterm2-win 进度汇总
 
+## 2026-11-03：REVIEW 增补二 D-2 / GAP-01
+
+- pane-diag 按 DS-11 滚动：`pane-diag.log` 约 5 MiB，另保留 `.1` 与 `.2`（共 3 个文件）。进程内只保持一个写句柄，滚动或更换目录时才重新打开。
+- 每行字段：`v`（格式版本）、`sid`、`attempt`、`phase`、`elapsed_ms`、`err`（没有错误码时为 `-`）、`bytes`、`msg`。
+- 目录是 `<configDir>/logs`。`PaneBackendConfig::configDir` 非空时用它。shell 尚未传入该字段（本轮不改 `ui/`），因此使用与 shell 相同的默认配置目录 `%APPDATA%\it2w`：先 `SHGetFolderPath(CSIDL_APPDATA)`，失败再读 `APPDATA`。两者都失败则不写。
+- 每个窗格分配进程内单调 SessionId（从 1 起）。重连保持同一个 sid，attempt 加一。兼容模式快照名为 `ssh-<pid>-<sid>-<aid>.conf`，避免多窗格互撞，也避免上次崩溃留下的 `ssh-1-1.conf` 挡住新会话。启动时按目录锁清理过期快照仍在 `ui/`，本轮未做。
+- 诊断行可能含主机名、主机密钥指纹和 agent 管道路径，导出前需自行脱敏。
+- Linux 单测 PANE-24 覆盖滚动、字段和 SessionId。Windows 落盘路径未在本环境运行。
+
 ## 2026-11-03：REVIEW 增补二 D-1
 
 - Direct SSH `DirectSshTransport::supportsOsc52Read()` 改为 `false`，与 ConPTY 相同。

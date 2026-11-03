@@ -22,6 +22,10 @@ struct PaneBackendConfig {
     // 再走 resolveSsh。policy.vmId 须为 GUID；ssh.target.hostName 留空，由后台解析填入。
     std::function<std::optional<it2w::HyperVLaunch>(const std::string &connectionId, std::string *error)> resolveHyperV;
     std::wstring localShell;            // 空：%ComSpec%，再退回 System32\cmd.exe
+    // D-2：非空时诊断写到 <configDir>\logs。空则用 %APPDATA%\it2w（与 shell 默认 configDir 相同：
+    // 先 SHGetFolderPath(CSIDL_APPDATA)，失败再读 APPDATA）。两者都失败则不写文件。
+    // shell 目前不填这个字段。
+    std::wstring configDir;
     // --command：只交给工厂创建的第一个本地窗格（之后新开的本地标签是普通 shell）；拼法见 planLocalShellCommand。
     // 空或 nullopt：不加参数。含换行：该窗格 Failed。
     std::optional<std::wstring> localCommand;
