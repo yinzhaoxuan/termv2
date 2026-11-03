@@ -28,7 +28,7 @@ struct Osc52Config { bool allowWrite = false; bool allowRead = false; uint32_t m
 int applyOsc52(itcore_core *core, const Osc52Config &cfg);
 
 // CAP-01 P06：读是否生效 = 策略 allowRead 且传输声明支持 OSC 52 读（能力门，非强制忽略 settings）。
-// 当前所有 ConPTY 传输（本地/SSH/Hyper-V）均不支持读；将来直连传输可返回 true。
+// ConPTY 与 Direct 目前都返回 false（D-1，待逐次确认 UI）；将来确认后直连可返回 true。
 inline bool osc52ReadEffective(bool allowRead, bool transportSupportsOsc52Read) {
     return allowRead && transportSupportsOsc52Read;
 }

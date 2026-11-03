@@ -18,7 +18,7 @@
 | OSC 133、OSC 1337 | 透传；OSC 133;A 位置正确 | 透传 | STATUS 第 16、17 轮 |
 | OSC 8 | 被改写（加 `id=`，BEL 改成 ST） | 透传 | 第 16 轮 |
 | DCS（tmux -CC、XTGETTCAP、DECRQSS）、Sixel | **被吞** | 透传 | 第 16、18 轮 |
-| OSC 52 读 | 不支持 | 支持（受 allowRead 策略门控制，见 REVIEW 增补二 D-1） | ADR-002 |
+| OSC 52 读 | 不支持 | 通道透明，但 `supportsOsc52Read=false`（D-1，待逐次确认 UI） | ADR-002 |
 
 结论：依赖 DCS 或 Sixel 的功能只能在 `D` 上提供。本地 cmd 和 PowerShell 永远拿不到这些功能，界面必须明确提示「当前连接不支持」，不能静默失效。
 

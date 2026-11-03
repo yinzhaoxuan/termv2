@@ -45,8 +45,9 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
 
 ## 能力与限制
 
-- Direct 声明 `supportsOsc52Read=true`；实际读剪贴板仍须 `osc52.allowRead=true`（默认关闭）。
-  Hyper-V 随内层传输；本地和兼容 SSH/Hyper-V 的 ConPTY 路径仍为 false。
+- Direct 暂声明 `supportsOsc52Read=false`（REVIEW 增补二 D-1：逐次读确认 UI 之前不开放）。
+  通道对 OSC 52 读查询透明，但应用层不应答，即使 `osc52.allowRead=true`。
+  Hyper-V 随内层传输；本地和兼容 SSH/Hyper-V 的 ConPTY 路径同样为 false。
   写剪贴板仍受 `osc52.allowWrite` 控制，见 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)。
 - PTY 使用 `xterm-256color`，网格至少 20×5；Starting 期间合并尺寸，并在 shell 启动前补齐最新尺寸。
   v0 的 PTY / window-change **像素尺寸填 0**。

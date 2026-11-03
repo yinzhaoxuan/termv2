@@ -28,7 +28,10 @@ public:
     // Callbacks must return promptly and must not destroy this object.
     bool waitClosed(DWORD ms) override;
     uint32_t activeProcessCount() override { return 0; }
-    bool supportsOsc52Read() const override { return true; }
+    // REVIEW 增补二 D-1: false until a per-read confirmation UI exists.
+    // Direct is byte-transparent, so true would answer clipboard reads whenever
+    // osc52.allowRead is set. Same default as ConPTY; Hyper-V forwards this.
+    bool supportsOsc52Read() const override { return false; }
     SshTransportMode mode() const override { return SshTransportMode::Direct; }
 
 private:

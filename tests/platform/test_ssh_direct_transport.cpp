@@ -70,7 +70,8 @@ int main() {
     cb.onDiagnostic = [&](SessionId, AttemptId, const DiagRecord &) { ++callbacks; };
     {
         DirectSshTransport t(cb);
-        assert(t.mode() == SshTransportMode::Direct && t.supportsOsc52Read());
+        // D-1: do not advertise OSC 52 read until a confirmation UI exists.
+        assert(t.mode() == SshTransportMode::Direct && !t.supportsOsc52Read());
         assert(t.activeProcessCount() == 0 && !t.waitClosed(0));
         assert(t.enqueueUserInput("x") == EnqueueResult::InvalidState);
         // The invalid/unresolvable target and missing files are never accessed:
