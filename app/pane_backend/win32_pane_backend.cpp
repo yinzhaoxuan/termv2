@@ -1312,7 +1312,7 @@ void Win32PaneBackend::autoScrollTick() {
     if (itcore_selection_extend(core_, vp_.firstRow(), uint16_t(dragCol_), row)) selectionChanged();
 }
 
-// 滚轮：鼠标模式转发给程序（Shift 强制本地）；备用屏无鼠标模式发上/下方向键；否则滚动视口。每格 3 行。
+// 滚轮：鼠标模式转发给程序（Shift 强制本地）；备用屏且 ?1007 置位时发上/下方向键；否则滚动视口。每格 3 行。
 void Win32PaneBackend::handleWheel(WPARAM wp, LPARAM lp) {
     if (!core_) return;
     wheelAccum_ += GET_WHEEL_DELTA_WPARAM(wp);
@@ -1321,7 +1321,8 @@ void Win32PaneBackend::handleWheel(WPARAM wp, LPARAM lp) {
     wheelAccum_ -= notches * WHEEL_DELTA;
     UINT keys = GET_KEYSTATE_WPARAM(wp);
     bool mouseMode = snap_ && itcore_snapshot_mouse_mode(snap_) != 0 && !(keys & MK_SHIFT);
-    switch (routeWheel(mouseMode, altScreen())) {
+    bool alternateScroll = itcore_mode_query(core_, 1007) == ITCORE_MODE_SET;
+    switch (routeWheel(mouseMode, altScreen(), alternateScroll)) {
     case WheelRoute::Forward: {
         POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         ScreenToClient(hwnd_, &pt);

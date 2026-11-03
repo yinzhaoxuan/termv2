@@ -403,11 +403,13 @@ private:
     int offset_ = 0, history_ = 0;
 };
 
-// 滚轮路由：鼠标模式 → 转发给程序；备用屏无鼠标模式 → 上下方向键；否则滚动视口
+// 滚轮路由：鼠标模式 → 转发给程序（优先于 ?1007，与 iTerm2 鼠标报告说明一致）；
+// 备用屏且 ?1007 置位 → 上下方向键；否则滚动视口。
 enum class WheelRoute { Forward, Arrows, Scroll };
-inline WheelRoute routeWheel(bool mouseMode, bool altScreen) {
+inline WheelRoute routeWheel(bool mouseMode, bool altScreen, bool alternateScroll) {
     if (mouseMode) return WheelRoute::Forward;
-    return altScreen ? WheelRoute::Arrows : WheelRoute::Scroll;
+    if (altScreen && alternateScroll) return WheelRoute::Arrows;
+    return WheelRoute::Scroll;
 }
 
 // LNM（ANSI 20）：UI 已把 Enter 翻成 "\r"（或 Alt+Enter "\x1b\r"）后经 sendInput 送来；

@@ -33,3 +33,4 @@ Pv=0 同时满足：不宣称 xterm 补丁，Vim 仍保留下划线色，Emacs �
 - **DECRQSS** 成功是 `DCS 1 $ r <数据><Pt> ST`，失败是 `DCS 0 $ r ST`（空数据，不回显 Pt）。已实现：`m`（笔状态，反显不交换颜色）、`r`（滚动区，1 基）、`SP q`（当前 DECSCUSR，含 0）、`"q`（DECSCA 固定 `0`，字符保护未实现）。截断的 DCS 走失败形式。
 - **XTGETTCAP**（`DCS + q`）已知名区分大小写：`TN` / `name` = `termv2`，`Co` / `colors` = `256`，`RGB` = `8`（每通道 8 位）。成功 `DCS 1 + r <十六进制名>=<十六进制值> ST`。未知、奇数长度或非法十六进制：`DCS 0 + r ST`，不附名字。多个名字用 `;` 分开，每个名字一条 DCS。
 - **DECRQM ?69**（DECSLRM）仍是 0（不认识）。左右边距实现之前不要改 DA 级别。
+- **DECRQM ?1007**（Alternate Scroll）认识。初始复位（Pm=2），与 xterm `alternateScroll` 默认 false、iTerm2 `alternateScrollMode` 初始 NO 一致。DECSET/DECRST 可改；DECSTR 与 RIS 回到复位。备用屏滚轮是否合成方向键由该位决定，鼠标报告优先。不改变 DA 级别。

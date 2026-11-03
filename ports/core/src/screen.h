@@ -234,6 +234,9 @@ struct ScreenModes {
     bool reverse_screen = false;  // DECSCNM (?5)
     bool focus_events = false;    // ?1004
     bool sync_output = false;     // ?2026（后端据此暂停取快照）
+    // ?1007 Alternate Scroll。初始复位：xterm alternateScroll 默认 false，
+    // iTerm2 alternateScrollMode 在 commonReset/softReset 里是 NO。
+    bool alternate_scroll = false;
     int cursor_style = 0;         // DECSCUSR Ps（0..6）
 };
 

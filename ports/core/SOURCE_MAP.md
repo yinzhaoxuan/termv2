@@ -56,7 +56,7 @@
 |---|---|
 | `screen.cpp` `write_char` 组合 + `wrap_pending` | 组合字符在 wrap_pending 时回写**本行**最后一个非 CONTINUATION 格，不触发软换行。 |
 | `Grid::clear_for_write` / `repair_wide_orphans` | 写格前清宽字孤儿（CONTINUATION→基字清空；窄盖宽清多余尾格）；ICH/DCH 后行内修复。 |
-| `ScreenModes` + `set_mode` | DECCKM (?1)、鼠标 9/1000/1002/1003/1006、DECKPAM/DECKPNM（ESC =/>）。 |
+| `ScreenModes` + `set_mode` | DECCKM (?1)、鼠标 9/1000/1002/1003/1006、?1007 Alternate Scroll（初始复位，DECSTR/RIS 清回）、DECKPAM/DECKPNM（ESC =/>）。 |
 | `Screen::dec_mode_state` + DECRQM | 上游 `VT100Terminal` DECRQM 应答（`CSI ? Ps ; Pm $ y`）；ABI `itcore_mode_query`。 |
 | `Screen::sel_*` | 对应上游 `iTermSelection` 的字符粒度子集：端点用 (逻辑行 id, 字符序号) 代替绝对坐标，跟随历史重排；复制规则同上游默认（软换行拼接、去行尾空白）。 |
 | `itcore_snapshot_generation` | 快照携带最近成功 `resize_gen`。 |
