@@ -219,10 +219,12 @@ public:
 private:
     void trim();
     struct DisplayGroup { size_t lines = 0, rows = 0; bool dirty = false; };
-    size_t group_display_rows(size_t first, size_t count, std::deque<DisplayGroup> &groups) const;
+    enum class GroupEnd { Front, Back };
+    // 按 hard 边界拆分范围（保留开放尾组），追加到 groups 并返回显示行总数。
+    size_t split_and_count_groups(size_t first, size_t count, std::deque<DisplayGroup> &groups) const;
     void append_display_group(bool extend);
     void trim_display_group();
-    void recount_display_group(bool front) const;
+    void recount_display_group(GroupEnd end) const;
     void rebuild_display_groups(uint16_t cols) const;
     // 有效时 groups 按顺序划分 lines_；干净组为 soft 连到下一个 hard，或开放尾组。
     // push/淘汰只改首尾段数并置脏；脏尾范围合并查询前追加的组，查询时按 hard 拆回。

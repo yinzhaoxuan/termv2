@@ -116,6 +116,7 @@ std::optional<PaneSearch::State> PaneSearch::tick(uint32_t budgetCells, uint32_t
 std::vector<itcore_search_range> PaneSearch::ranges(int32_t firstViewRow, uint32_t rows) const {
     std::vector<itcore_search_range> out;
     if (!h_ || !core_ || !rows) return out;
+    // first_abs 与 ranges 必须取自同一时刻，中间不可 feed / resize。
     const int64_t first = int64_t(itcore_scrollback_overflow(core_)) + int64_t(itcore_history_rows(core_)) + firstViewRow;
     out.resize(64);
     int n = itcore_search_ranges_in_view(h_, first, rows, out.data(), uint32_t(out.size()));

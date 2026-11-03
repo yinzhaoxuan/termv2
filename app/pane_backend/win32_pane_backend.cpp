@@ -827,6 +827,7 @@ void Win32PaneBackend::syncSearchHighlight() {
     if (!renderer_) return;
     if (!core_ || !search_.active()) { renderer_->clear_search_highlight(); return; }
     const uint16_t rows = resize_.dims().rows, cols = resize_.dims().cols;
+    // first_abs 与 ranges 必须取自同一时刻，中间不可 feed / resize。
     const auto rr = search_.ranges(vp_.firstRow(), rows);
     std::vector<itren::SearchRange> v;
     v.reserve(rr.size());

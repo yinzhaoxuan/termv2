@@ -728,6 +728,104 @@ static void test_ranges() {
     }
 }
 
+// NEW-03：满历史、三倍宽长行；当前命中跨软换行，连续淘汰后高亮仍须逐格对应文本。
+static void test_eviction_highlight() {
+    const uint16_t cols = 10, rows = 3;
+    const uint32_t history = 24;
+    const std::string needle = "needle";
+    for (uint16_t initial_cols : {cols, uint16_t(3 * cols)}) {
+        auto *c = make(initial_cols, rows, history);
+        for (int i = 0; i < 40; ++i) {
+            std::string line(3 * cols, 'a');
+            if (i == 36) line.replace(cols - 2, needle.size(), needle);
+            feed(c, line + "\r\n");
+        }
+        CHECK(itcore_scrollback_overflow(c) > 0 && itcore_history_rows(c) == history);
+        // 宽屏写入的段缩窄后各占三行；必须先 resize 再 begin，搜索期间只 feed。
+        const bool reflowed = initial_cols != cols;
+        if (reflowed) {
+            CHECK(itcore_resize(c, cols, rows, 1) == 0);
+            drain(c);
+            CHECK(itcore_history_rows(c) == 3 * history);
+        }
+        auto *h = begin(c, needle, ITCORE_SEARCH_CASE_SENSITIVE, ITCORE_SEARCH_F_WRAP);
+        CHECK(run(h).total == 1);
+        itcore_search_match m{};
+        int64_t index = -1;
+        CHECK(itcore_search_next(h, &m, &index) == ITCORE_SEARCH_DONE && index == 0);
+        CHECK(m.end_abs_row < grid_abs(c, 0));  // 当前命中确实在历史中
+        const auto anchor = m;
+
+        auto check_highlight = [&](bool alive) {
+            const auto hist = itcore_history_rows(c);
+            const int32_t first_view = -int32_t(hist);
+            const int64_t first_abs = grid_abs(c, first_view);
+            const uint16_t count = uint16_t(hist + rows);
+            // first_abs、ranges 和快照取同一时刻；用快照文字独立核对高亮覆盖的每一格。
+            const auto v = ranges(h, first_abs, count);
+            if (!alive) { CHECK(v.empty()); return; }
+            CHECK(v.size() == 2);
+            auto *snap = itcore_acquire_snapshot(c, first_view, count);
+            CHECK(snap && itcore_snapshot_columns(snap) == cols && itcore_snapshot_rows(snap) == rows);
+            if (!snap) return;
+            std::string text;
+            for (size_t i = 0; i < v.size(); ++i) {
+                const auto &r = v[i];
+                CHECK(r.is_current == 1 && r.row == m.start_abs_row + int64_t(i));
+                CHECK(r.start_col == (i == 0 ? cols - 2 : 0));
+                CHECK(r.end_col == (i == 0 ? cols : needle.size() - 2));
+                const int64_t y = r.row - first_abs;
+                CHECK(y >= 0 && y < count && r.start_col < r.end_col && r.end_col <= cols);
+                if (y < 0 || y >= count || r.start_col >= r.end_col || r.end_col > cols) continue;
+                itcore_wrap wrap;
+                const auto *cells = itcore_snapshot_row(snap, uint16_t(y), &wrap, nullptr);
+                CHECK(cells);
+                if (!cells) continue;
+                if (i == 0) CHECK(wrap == ITCORE_WRAP_SOFT);
+                for (uint16_t x = r.start_col; x < r.end_col; ++x) {
+                    size_t len = 0;
+                    const char *s = itcore_snapshot_grapheme(snap, cells[x].grapheme_id, &len);
+                    CHECK(s && len == 1 && cells[x].width == 1);
+                    if (s) text.append(s, len);
+                }
+            }
+            CHECK(text == needle);
+            CHECK(m.end_abs_row == m.start_abs_row + 1 && m.start_col == cols - 2 && m.end_col == needle.size() - 2);
+            itcore_snapshot_release(snap);
+        };
+        check_highlight(true);
+        int live_rounds = 0, gone_rounds = 0;
+        for (int round = 0; round < 10; ++round) {
+            const auto ev = itcore_scrollback_overflow(c);
+            const int64_t old_abs = m.start_abs_row;
+            feed(c, std::string(3 * cols, 'b') + "\r\n");
+            CHECK(itcore_scrollback_overflow(c) == ev + 3);
+            const auto p = run(h);
+            CHECK(p.status == ITCORE_SEARCH_DONE);
+            if (p.total == 1) {
+                ++live_rounds;
+                CHECK(gone_rounds == 0 && p.current == 0 && p.dropped == 0);
+                CHECK(itcore_search_next(h, &m, &index) == ITCORE_SEARCH_DONE && index == 0);
+                CHECK(m.start_seg == anchor.start_seg && m.start_off == anchor.start_off);
+                CHECK(m.end_seg == anchor.end_seg && m.end_off == anchor.end_off);
+                // 陷阱：淘汰三段各减三显示行，overflow 只加三；同一锚的 abs_row 减六，不能跨 feed 缓存。
+                CHECK(m.start_abs_row == old_abs - (reflowed ? 6 : 0));
+                if (reflowed) CHECK(m.start_abs_row != anchor.start_abs_row);
+                check_highlight(true);
+            } else {
+                CHECK(p.total == 0 && p.current == -1 && p.dropped == (gone_rounds == 0 ? 1u : 0u));
+                ++gone_rounds;
+                CHECK(itcore_search_next(h, nullptr, nullptr) == ITCORE_SEARCH_NOT_FOUND);
+                CHECK(itcore_search_match_to_view(c, &anchor, nullptr, nullptr, nullptr, nullptr) == -1);
+                check_highlight(false);
+            }
+        }
+        CHECK(live_rounds >= 3 && gone_rounds >= 2);
+        itcore_search_end(h);
+        itcore_destroy(c);
+    }
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "all" || w == "basic") test_basic();
@@ -738,6 +836,7 @@ int main(int argc, char **argv) {
     if (w == "all" || w == "compact") test_compact();
     if (w == "all" || w == "lifecycle") test_lifecycle();
     if (w == "all" || w == "ranges") test_ranges();
+    if (w == "all" || w == "eviction_highlight") test_eviction_highlight();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("ok\n");
     return 0;

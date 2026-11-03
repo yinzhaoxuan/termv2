@@ -243,6 +243,7 @@ int  itcore_export_text(const itcore_core *c, size_t max_bytes, itcore_buffer **
    去掉尾部空白格。匹配以字素簇为单位（起止都须落在簇边界），空格子当空格。不做变音符 / 全半角折叠、不做规范化。
    坐标：abs_row = itcore_scrollback_overflow + 当前列宽下从最老历史行起的显示行序号；视口行 = abs_row - overflow -
    itcore_history_rows（即选区 API 的 first_row 约定）。列按格计，宽字符占 2 格；起点闭区间，end_col 开区间。
+   abs_row 仅在同一时刻有效（中间不可 itcore_feed / resize）：overflow 计淘汰段数，不计显示行数；跨 feed 保存须用 (seg, off) 锚。
    稳定锚 (seg, off) 与选区端点同源（段身份 + 字符下标，不计宽字符尾格），跨淘汰 / 重排不变；end_off 是闭区间末字符。
    线程：与 itcore_feed / 选区调用同一线程（UI 线程），核心不加锁。itcore_destroy 释放未 end 的句柄。 */
 typedef struct itcore_search itcore_search;

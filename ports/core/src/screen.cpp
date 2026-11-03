@@ -608,7 +608,7 @@ static void reflow_line(const LogicalLine &ll, uint16_t cols, std::vector<Row> &
     }
 }
 
-size_t Scrollback::group_display_rows(size_t first, size_t count, std::deque<DisplayGroup> &groups) const {
+size_t Scrollback::split_and_count_groups(size_t first, size_t count, std::deque<DisplayGroup> &groups) const {
     ++debug_hist_rows_group_recompute_count;
     LogicalLine merged;
     std::vector<Row> rows;
@@ -644,11 +644,12 @@ void Scrollback::trim_display_group() {
         group.dirty = true;
     }
 }
-void Scrollback::recount_display_group(bool front) const {
+void Scrollback::recount_display_group(GroupEnd end) const {
+    const bool front = end == GroupEnd::Front;
     const auto group = front ? display_groups_.front() : display_groups_.back();
     std::deque<DisplayGroup> groups;
     const size_t first = front ? 0 : lines_.size() - group.lines;
-    const size_t rows = group_display_rows(first, group.lines, groups);
+    const size_t rows = split_and_count_groups(first, group.lines, groups);
     display_rows_total_ -= group.rows;
     display_rows_total_ += rows;
     if (front) {
@@ -662,14 +663,14 @@ void Scrollback::recount_display_group(bool front) const {
 void Scrollback::rebuild_display_groups(uint16_t cols) const {
     display_groups_.clear();
     display_rows_cols_ = cols;
-    display_rows_total_ = group_display_rows(0, lines_.size(), display_groups_);
+    display_rows_total_ = split_and_count_groups(0, lines_.size(), display_groups_);
     display_rows_valid_ = true;
 }
 size_t Scrollback::merged_display_rows(uint16_t cols, bool *recomputed) const {
     const bool rebuild = !display_rows_valid_ || display_rows_cols_ != cols;
     if (rebuild) rebuild_display_groups(cols);
-    if (!display_groups_.empty() && display_groups_.front().dirty) recount_display_group(true);
-    if (!display_groups_.empty() && display_groups_.back().dirty) recount_display_group(false);
+    if (!display_groups_.empty() && display_groups_.front().dirty) recount_display_group(GroupEnd::Front);
+    if (!display_groups_.empty() && display_groups_.back().dirty) recount_display_group(GroupEnd::Back);
     if (recomputed) *recomputed = rebuild;
     return display_rows_total_;
 }

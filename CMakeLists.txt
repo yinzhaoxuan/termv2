@@ -195,6 +195,7 @@ add_test(NAME SRCH-23-26_36.invalidation COMMAND itcore_test_search inval)
 add_test(NAME SRCH-27.pool_compaction COMMAND itcore_test_search compact)
 add_test(NAME SRCH-29-30.lifecycle_args COMMAND itcore_test_search lifecycle)
 add_test(NAME SRCH-31-35.ranges_in_view COMMAND itcore_test_search ranges)
+add_test(NAME NEW-03.search_highlight_after_eviction COMMAND itcore_test_search eviction_highlight)
 
 find_package(Threads REQUIRED)
 add_executable(itcore_test_unicode tests/core/test_unicode.cpp)
