@@ -89,6 +89,11 @@ void bindPaneDiagConfigDir(const std::wstring &configDir) {
 
 void appendPaneDiag(std::string_view line) { sharedPaneDiag().append(line); }
 
+std::string hvFailDetail(const HvAction &a) {
+    const char *cat = a.failure == HvFailure::None ? "" : hvFailureName(a.failure);
+    return formatTransportFailure(cat, a.text);
+}
+
 std::string toUtf8(std::wstring_view w) {
     if (w.empty()) return {};
     int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), nullptr, 0, nullptr, nullptr);
@@ -482,7 +487,11 @@ bool Win32PaneBackend::startSession() {
         auto *raw = lt->t.get();
         transport_ = std::move(lt);
         shared_->transport = transport_;
-        if (!raw->start(SessionId{sessionId_}, AttemptId{attempt_}, spec)) { fail("本地 shell 启动失败"); return false; }
+        if (!raw->start(SessionId{sessionId_}, AttemptId{attempt_}, spec)) {
+            auto outcome = settleSyncStart(SyncStart::PreStartFailed, formatLocalShellStartError(toUtf8(spec.executable)));
+            if (outcome.failed) fail(std::move(outcome.error));
+            return !outcome.failed;
+        }
     } else if (std::string herr; cfg_->resolveHyperV && [&] {
                    auto h = cfg_->resolveHyperV(connId_, &herr);
                    if (!h) return !herr.empty();   // 有错误文本：是 Hyper-V 连接但配置无效
@@ -545,9 +554,11 @@ bool Win32PaneBackend::startSession() {
         transport_ = std::move(st);
         shared_->transport = transport_;
         if (auto se = raw->start(SessionId{sessionId_}, AttemptId{attempt_}, *o)) {
-            const std::string prefix = raw->mode() == SshTransportMode::Direct ? "SSH 配置无效（直连）：" : "SSH 配置快照无效：";
-            fail(prefix + se->field + " " + se->reason);
-            return false;
+            const bool direct = raw->mode() == SshTransportMode::Direct;
+            auto outcome = settleSyncStart(SyncStart::PreStartFailed,
+                                            formatSshPreStartError(direct, se->kind, se->field, se->reason));
+            if (outcome.failed) fail(std::move(outcome.error));
+            return !outcome.failed;
         }
     }
     return true;
@@ -566,6 +577,14 @@ void Win32PaneBackend::publishStatus() {
 }
 
 void Win32PaneBackend::onTransportState(TransportState s, std::optional<TransportFault>) {
+    bool starting = false;
+    {
+        std::lock_guard l(statusMu_);
+        // fail() 已经发布 Failed。迟到的 Running/Closed 不能把它拉回 Starting 或再走一遍排空。
+        if (status_.state == uishell::SessionState::Failed || status_.state == uishell::SessionState::Exited)
+            return;
+        starting = status_.state == uishell::SessionState::Starting;
+    }
     if (s == TransportState::Running) {
         { std::lock_guard l(statusMu_); if (status_.state == uishell::SessionState::Starting) status_.state = uishell::SessionState::Running; }
         publishStatus();
@@ -573,6 +592,15 @@ void Win32PaneBackend::onTransportState(TransportState s, std::optional<Transpor
         // 回调排在 onExited/onFinished 之后（同一 closer 线程先后 post），退出信息此时已到。
         // 用户关闭中：由关闭线程的结果（onCloseDone）收尾，以便上报超时。
         if (closer_.started() && !closeOutcome_) return;
+        const bool hvFail = hvResult_ && hvResult_->kind == HvAction::Fail;
+        if (auto now = immediatePreStartFailure(starting, s == TransportState::Failed, hvFail,
+                                                hvFail ? hvFailDetail(*hvResult_) : std::string{})) {
+            const std::string line = formatPaneDiagLine(sessionId_, attempt_, "session.prestart", 0, std::nullopt, 0, *now);
+            pumpLog(nullptr, line.c_str());
+            appendPaneDiag(line);
+            fail(std::move(*now));
+            return;
+        }
         finishSession();
     }
 }
@@ -594,7 +622,7 @@ void Win32PaneBackend::completePump(uint64_t dropped) {
     in.sshFailed = sshExit_ && sshExit_->error != SshError::None && sshExit_->error != SshError::RemoteExit;
     if (in.sshFailed) in.sshDetail = std::string(sshErrorName(sshExit_->error)) + (sshExit_->detail.empty() ? "" : ": " + sshExit_->detail);
     if (hvResult_ && hvResult_->kind == HvAction::Fail)
-        in.transportDetail = std::string(hvFailureName(hvResult_->failure)) + ": " + hvResult_->text;
+        in.transportDetail = hvFailDetail(*hvResult_);
     in.exitCode = sshExit_ ? int(sshExit_->exitCode) : int(localExit_.value_or(0));
     in.coreDropped = dropped;
     in.queueDropped = transport_ ? transport_->discardedBytes() : 0;

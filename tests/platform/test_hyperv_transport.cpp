@@ -29,13 +29,14 @@ struct FakeSsh final : SshSessionTransport {
     std::promise<void> started;
     bool osc52Read = false;
     bool closed = false;
+    std::optional<SnapshotError> startError;
 
     std::optional<SnapshotError> start(SessionId, AttemptId, const SshLaunchOptions &o) override {
         initial = o.initialSize;
         startedTarget = o.target;
         if (duringStart) duringStart();
         started.set_value();
-        return std::nullopt;
+        return startError;
     }
     EnqueueResult enqueueUserInput(std::string_view) override { return EnqueueResult::Ok; }
     EnqueueResult enqueueReply(std::string_view) override { return EnqueueResult::Ok; }
@@ -96,11 +97,47 @@ void handoff(bool pendingResize, bool liveResize) {
         assert(ssh->sizes.empty());  // No redundant replay when start saw the latest size.
     }
 }
+
+void preStartErrorFails(SnapshotError err, bool direct) {
+    auto fake = std::make_unique<FakeSsh>();
+    auto *ssh = fake.get();
+    ssh->osc52Read = direct;
+    ssh->startError = err;
+    std::promise<HvAction> resolved;
+    auto resolvedFut = resolved.get_future();
+    std::promise<TransportState> failed;
+    auto failedFut = failed.get_future();
+    HyperVCallbacks cb;
+    cb.onResolved = [&](SessionId, AttemptId, const HvAction &action) {
+        if (action.kind == HvAction::Fail) resolved.set_value(action);
+    };
+    cb.onStateChanged = [&](SessionId, AttemptId, TransportState state, std::optional<TransportFault>) {
+        if (state == TransportState::Failed) {
+            try { failed.set_value(state); } catch (const std::future_error &) {}
+        }
+    };
+    HyperVTransport hv(std::move(cb), [&](SshCallbacks) { return std::move(fake); });
+    HyperVLaunch launch;
+    launch.policy.vmId = "01234567-89ab-cdef-0123-456789abcdef";
+    hv.start(SessionId{1}, AttemptId{1}, std::move(launch));
+    assert(resolvedFut.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+    const HvAction action = resolvedFut.get();
+    assert(action.kind == HvAction::Fail);
+    assert(action.text == formatSshPreStartError(direct, err.kind, err.field, err.reason));
+    assert(action.text.find("未找到 ssh.exe") != std::string::npos || err.kind != SnapshotError::Kind::ClientMissing);
+    assert(failedFut.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+    assert(failedFut.get() == TransportState::Failed);
+    assert(hv.state() == TransportState::Failed);
+    assert(!ssh->closed);
+    hv.close(CloseReason::User);
+}
 }  // namespace
 
 int main() {
     handoff(false, false);
     handoff(true, false);
     handoff(true, true);
+    preStartErrorFails(SnapshotError{"sshExe", "C:/missing/ssh.exe", SnapshotError::Kind::ClientMissing}, false);
+    preStartErrorFails(SnapshotError{"auth", "直连 v0 仅支持 agent"}, true);
     std::puts("HV-02 transport handoff ok");
 }

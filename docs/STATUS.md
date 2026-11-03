@@ -1,5 +1,14 @@
 # iterm2-win 进度汇总
 
+## 2026-11-03：REVIEW A3 / GAP-15 启动前失败
+
+- 兼容模式 `ssh.exe` 不存在时，`SshTransport::start` 只回调 `onFinished(SshNotFound)` 并返回 `nullopt`。窗格把 `nullopt` 当成已启动，而 `finishSession` 只认 Closed/Failed，于是一直停在 Starting。
+- 现在启动前失败都同步返回 `SnapshotError`：客户端不存在（`ClientMissing`）、快照文件写失败、ConPTY 没拉起（`Launch`）。调用方在 `start` 返回前 `fail()`，状态已是 Failed，重连仍可用。直连不查找 `ssh.exe`，配置错误仍是 `Kind::Snapshot`，前缀不变（「SSH 配置无效（直连）：」）。
+- 文案示例：`未找到 ssh.exe：<路径>。请在 Windows「可选功能」中安装 OpenSSH 客户端，或在连接设置中填写 ssh.exe 的完整路径。` 本地 shell 拉起失败会带上程序路径。
+- Hyper-V 内层 `start` 失败同样返回错误并发 Failed；窗格若仍在 Starting 且已有 `HvAction::Fail`，在这一轮回调里发布 Failed，不再等排空定时器。没有这条 Fail 的失败（含直连在 Running 之前失败）仍走原来的 `finishSession`。`HvFailure::None` 不再编成 `None: ` 前缀。
+- 这种失败没有拉起进程，ConPTY 停在 Idle。重连的关闭线程会 `close` + `waitClosed`；`close(Idle)` 现在直接标 Closed 并置位 `closedEvent_`，不再先等 5 秒再无限等。已经跑起来的关闭路径不变。
+- 见 [ADR-001](ADR-001-pump状态机.md) §11。Linux 单测 PANE-26 与 `SSH-CFG-01` 的文案；HV-02 增加缺客户端 / 直连快照前缀，需 Windows 运行。
+
 ## 2026-11-03：REVIEW 增补二 D-4
 
 - closer 上报 `timedOut`（「关闭超时，已强制结束」）后，传输仍可能停在 Closing。

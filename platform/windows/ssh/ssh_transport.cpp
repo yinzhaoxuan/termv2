@@ -6,6 +6,11 @@ namespace it2w {
 SshTransport::SshTransport(SshCallbacks cb) : cb_(std::move(cb)) {
     TransportCallbacks tc;
     tc.onStateChanged = [this](SessionId s, AttemptId a, TransportState st, std::optional<TransportFault> f) {
+        // start() 还没返回时的 Failed 只记在返回值里。转发它会让窗格以为会话已启动，再等一次不会来的收尾。
+        if (muteStartFailure_ && st == TransportState::Failed) {
+            finished_ = true;
+            return;
+        }
         if (cb_.onStateChanged) cb_.onStateChanged(s, a, st, f);
         if (st == TransportState::Failed && f == TransportFault::StartFailed && !finished_) {
             finished_ = true;
@@ -39,12 +44,9 @@ std::optional<SnapshotError> SshTransport::start(SessionId sid, AttemptId aid, c
     finished_ = false;
 
     std::wstring exe = o.sshExe.empty() ? defaultSshExe() : o.sshExe;
-    if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        finished_ = true;
-        SshExitInfo e; e.error = SshError::SshNotFound; e.detail = narrow(exe);
-        if (cb_.onFinished) cb_.onFinished(sid, aid, e);
-        return std::nullopt;
-    }
+    const DWORD attr = GetFileAttributesW(exe.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY))
+        return SnapshotError{"sshExe", narrow(exe), SnapshotError::Kind::ClientMissing};
 
     // 快照落盘：UTF-8 无 BOM；CREATE_NEW 防止覆盖；仅当前用户可读由目录 ACL 保证（T03A §3.3）
     // GAP-01：叶子名含 pid 与本窗格 SessionId。不覆盖已有文件，也不在这里清残留。
@@ -52,12 +54,16 @@ std::optional<SnapshotError> SshTransport::start(SessionId sid, AttemptId aid, c
     if (path.empty() || (path.back() != L'\\' && path.back() != L'/')) path.push_back(L'\\');
     path += widen(sshSnapshotLeafName(GetCurrentProcessId(), sid.value, aid.value));
     HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return SnapshotError{"snapshotDir", "无法创建快照文件"};
+    if (h == INVALID_HANDLE_VALUE)
+        return SnapshotError{"snapshotDir", "无法创建快照文件", SnapshotError::Kind::Launch};
     DWORD wr = 0;
     BOOL ok = WriteFile(h, snap.text->data(), DWORD(snap.text->size()), &wr, nullptr) && wr == snap.text->size();
     FlushFileBuffers(h);
     CloseHandle(h);
-    if (!ok) { DeleteFileW(path.c_str()); return SnapshotError{"snapshotDir", "写入快照失败"}; }
+    if (!ok) {
+        DeleteFileW(path.c_str());
+        return SnapshotError{"snapshotDir", "写入快照失败", SnapshotError::Kind::Launch};
+    }
 
     LaunchSpec ls;
     ls.executable = exe;
@@ -82,7 +88,14 @@ std::optional<SnapshotError> SshTransport::start(SessionId sid, AttemptId aid, c
         std::lock_guard<std::mutex> g(tailMu_);
         tail_ = OutputTail();
     }
-    pty_->start(sid, aid, ls);  // 失败经 onStateChanged(Failed, StartFailed) → onFinished(SshNotFound)
+    struct MuteFailure {
+        bool &flag;
+        explicit MuteFailure(bool &f) : flag(f) { flag = true; }
+        ~MuteFailure() { flag = false; }
+    } mute(muteStartFailure_);
+    const bool started = pty_->start(sid, aid, ls);
+    if (!started || finished_)
+        return SnapshotError{"sshExe", narrow(exe), SnapshotError::Kind::Launch};
     return std::nullopt;
 }
 

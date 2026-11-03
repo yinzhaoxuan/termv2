@@ -34,6 +34,10 @@ enum class SshTransportMode { ConPty, Direct };
 class SshSessionTransport {
 public:
     virtual ~SshSessionTransport() = default;
+    // 启动前失败同步返回 SnapshotError（快照非法、ssh.exe 不存在、快照写失败、进程没拉起）。
+    // nullopt 才表示会话已经启动；之后的失败仍异步 onStateChanged(Failed) 与 onFinished。
+    // 调用方必须把返回值当成 Failed，不能把 nullopt 的缺席当成成功以外的信号。
+    // 直连不查找 ssh.exe：配置/线程错误保持 Kind::Snapshot，文案与原来的前缀一致。
     virtual std::optional<SnapshotError> start(SessionId, AttemptId, const SshLaunchOptions &) = 0;
     virtual EnqueueResult enqueueUserInput(std::string_view) = 0;
     virtual EnqueueResult enqueueReply(std::string_view) = 0;
