@@ -14,11 +14,17 @@ namespace it2app {
 
 // Fed：本次喂过数据且已取空；FedMore：预算用尽、可能还有数据，须安排续跑。
 
+// 同一未读片上 NEED_DRAIN 且 accepted==0：先 afterFeed 排空事件，再重喂这一片，偏移不前进。
+// 这样的重试最多 kNeedDrainZeroProgressRetries 次（不含第一次 feed）。全部仍是 accepted==0
+// 才把该片计入 droppedBytes 并跳过，避免核心一直拒收时靠续跑定时器忙等。
+// Running 与 Draining 共用此上限。accepted>0 的 NEED_DRAIN 只前进已接收字节，不占重试次数。
+inline constexpr int kNeedDrainZeroProgressRetries = 8;
+
 // 每次 pump 的预算：喂满 maxBytes 或用时达到 maxMs 就停，让出 UI 线程给 WM_PAINT / 输入 / 模态对话框。
 // 每次 itcore_feed 至多 sliceBytes，切片之间检查预算；给了 PumpCarry 时一块可以在中间停下，剩余部分下次接着喂
 // （不给 carry 则一块总是喂完再检查，保持旧语义）。nowMs 可注入（测试用假时钟）；为空则只按字节限。
-// final 收尾预算：NEED_DRAIN 零进展有界重试，仍拒收则计数跳过；下一轮仍可继续排空。
-// log 接 OutputDebugString，stats 累计所有故障丢弃字节。
+// 零进展重试见 kNeedDrainZeroProgressRetries / finalRetries。仍拒收则计数跳过；下一轮继续排空其它字节。
+// log 接 OutputDebugString，stats 累计所有故障丢弃字节。终态把该计数写成「输出可能不完整，丢弃字节数=N」。
 struct PumpBudget {
     size_t maxBytes = 64u * 1024u;
     uint64_t maxMs = 8;
@@ -26,7 +32,9 @@ struct PumpBudget {
     uint64_t (*nowMs)(void *) = nullptr;
     void *clockCtx = nullptr;
     bool final = false;
-    int finalRetries = 8;
+    // 连续 accepted==0 的重试次数（不含第一次 feed）。Running 与 Draining 都用它。
+    // 默认 kNeedDrainZeroProgressRetries。小于 1 时按 1 处理，保证至少排空后再试一次。
+    int finalRetries = kNeedDrainZeroProgressRetries;
     void (*log)(void *ctx, const char *msg) = nullptr;
     void *logCtx = nullptr;
     // 片间让出 UI（可注入）。返回 true → 提前结束本轮（当作预算用尽，返回 FedMore），以便消息循环处理输入/绘制。
@@ -36,7 +44,8 @@ struct PumpBudget {
     PumpStats *stats = nullptr;
     // 单次不限预算仅供底层测试；正式收尾每次只运行 finalSlice。
     static PumpBudget unlimited() { PumpBudget b; b.maxBytes = SIZE_MAX; b.nowMs = nullptr; b.final = true; return b; }
-    // 收尾用的单片预算：final=true（NEED_DRAIN 重试），但仍按字节/时间切片，便于片间 yieldUi
+    // 收尾用的单片预算：final=true，但仍按字节/时间切片，便于片间 yieldUi。
+    // NEED_DRAIN 零进展重试次数与 Running 相同（finalRetries）。
     static PumpBudget finalSlice() {
         PumpBudget b;
         b.final = true;
@@ -55,8 +64,9 @@ struct PumpCarry {
 
 // 把 pop() 取到的输出喂给核心，直到取空或预算用尽；每次 itcore_feed 后调用 afterFeed()（排空核心事件）。
 // pop() 返回可判真、可 -> 取 bytes（std::string / vector<char>）的对象，如 std::optional<Chunk>。
-// 核心事件队列满（NEED_DRAIN 且 accepted==0）时先 afterFeed 排空再重试（收尾 finalRetries 次，否则一次）；
-// 仍收不下：非收尾且有 carry → 整片留在 carry、返回 FedMore；收尾或无 carry → 跳过这一片并记日志（防死循环）。
+// NEED_DRAIN 且 accepted==0：不把未读字节当成已消费。afterFeed 之后重喂同一片，最多 finalRetries 次。
+// 仍是 accepted==0：该片计入 stats->droppedBytes（会话终态「输出可能不完整，丢弃字节数=N」）并跳过。
+// accepted>0 只前进已接收的部分，剩余留在 carry 里下次再喂。
 template <class PopFn, class AfterFeed>
 PumpResult pump_core(itcore_core *core, PopFn &&pop, AfterFeed &&afterFeed, const PumpBudget &budget = {},
                      PumpCarry *carry = nullptr) {
@@ -83,29 +93,29 @@ PumpResult pump_core(itcore_core *core, PopFn &&pop, AfterFeed &&afterFeed, cons
         any = true;
         const size_t n = std::min(cur.bytes.size() - cur.off, slice);
         const auto *p = reinterpret_cast<const uint8_t *>(cur.bytes.data() + cur.off);
+        // 至少一次：第一次 accepted==0 之后必须先排空再重试，不能把这一片直接记成已消费。
+        const int retries = std::max(1, budget.finalRetries);
         auto fr = itcore_feed(core, p, n);
         afterFeed();
         if (fr.status == ITCORE_FATAL) { cur.off += fr.accepted; return PumpResult::Fatal; }
         if (fr.accepted == 0) {
-            const int retries = budget.final ? std::max(1, budget.finalRetries) : 1;
-            for (int i = 0; i < retries && fr.accepted == 0; ++i) {  // 每次重试前都已 afterFeed 排空
+            for (int i = 0; i < retries && fr.accepted == 0; ++i) {  // 每次重试前都已 afterFeed
                 fr = itcore_feed(core, p, n);
                 afterFeed();
                 if (fr.status == ITCORE_FATAL) { cur.off += fr.accepted; return PumpResult::Fatal; }
             }
-            if (fr.accepted == 0) {
-                // 非收尾：不丢这一片，留在 carry 里交给下一次 pump
-                if (carry && !budget.final) return PumpResult::FedMore;
-                if (budget.stats) { budget.stats->droppedBytes += n; ++budget.stats->skippedSlices; }
-                if (budget.log) {
-                    char msg[128];
-                    std::snprintf(msg, sizeof msg, "[pump] core refused %zu bytes after %d drain retries, skipped%s", n, retries,
-                                  budget.final ? " (final drain)" : "");
-                    budget.log(budget.logCtx, msg);
-                }
+        }
+        size_t adv = fr.accepted;
+        if (fr.accepted == 0) {
+            adv = n;
+            if (budget.stats) { budget.stats->droppedBytes += n; ++budget.stats->skippedSlices; }
+            if (budget.log) {
+                char msg[160];
+                std::snprintf(msg, sizeof msg, "[pump] core refused %zu bytes after %d drain retries, skipped%s", n, retries,
+                              budget.final ? " (final drain)" : "");
+                budget.log(budget.logCtx, msg);
             }
         }
-        const size_t adv = fr.accepted ? fr.accepted : n;
         cur.off += adv;
         fed += adv;
         // 切片之间：若 UI 有输入/绘制待处理，提前让出（收尾同样返回 FedMore，下一轮定时器继续）

@@ -554,58 +554,180 @@ static void pump_budget() {
         CHECK(itcore_export_text(c, 1u << 20, &b) == 0 && b);
         if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("NEEDDRAIN_OK") != std::string::npos); itcore_buffer_release(b); }
     }
-    // PUMP-04：afterFeed 不排空（核心一直 NEED_DRAIN 拒收）——非收尾整片留在 carry；收尾重试 N 次后跳过并记日志、继续喂
+    // PUMP-04 / A4：NEED_DRAIN 且 accepted==0 先排空再重试同一片。Running 与 Draining 共用
+    // kNeedDrainZeroProgressRetries；超过上限仍拒收才丢弃，并走「输出可能不完整」计数。
     {
-        itcore_core *f = nullptr;
-        CHECK(itcore_create(&o, &f) == 0 && f);
-        std::string bells(4000, '\a');
-        auto fr = itcore_feed(f, reinterpret_cast<const uint8_t *>(bells.data()), bells.size());
-        CHECK(fr.status == ITCORE_NEED_DRAIN && fr.accepted < bells.size());
+        auto exported = [](itcore_core *core) {
+            itcore_buffer *b = nullptr;
+            CHECK(itcore_export_text(core, 1u << 20, &b) == 0 && b);
+            std::string s;
+            if (b) { s.assign(reinterpret_cast<char *>(b->data), b->length); itcore_buffer_release(b); }
+            return s;
+        };
+        auto makeFull = [&](itcore_core *&out, uint32_t scrollback = 100) {
+            itcore_options opt = o;
+            opt.scrollback_lines = scrollback;
+            CHECK(itcore_create(&opt, &out) == 0 && out);
+            std::string bells(4000, '\a');
+            auto fr = itcore_feed(out, reinterpret_cast<const uint8_t *>(bells.data()), bells.size());
+            CHECK(fr.status == ITCORE_NEED_DRAIN && fr.accepted > 0 && fr.accepted < bells.size());
+            uint8_t z = 'Z';
+            auto zf = itcore_feed(out, &z, 1);
+            CHECK(zf.status == ITCORE_NEED_DRAIN && zf.accepted == 0);
+        };
         struct LogSink { int n = 0; std::string last; } sink;
         auto logFn = [](void *ctx, const char *m) { auto *k = static_cast<LogSink *>(ctx); ++k->n; k->last = m; };
-        int feeds = 0;
-        auto noDrain = [&] { ++feeds; };
-        std::deque<Chunk> fq;
-        auto fpop = [&]() -> std::optional<Chunk> { if (fq.empty()) return std::nullopt; Chunk k = std::move(fq.front()); fq.pop_front(); return k; };
-        it2app::PumpCarry carry;
-        fq.push_back({std::string(10, '\a')});
-        fq.push_back({"TAIL_OK"});
-        it2app::PumpBudget nb; nb.log = logFn; nb.logCtx = &sink;
-        CHECK(it2app::pump_core(f, fpop, noDrain, nb, &carry) == PumpResult::FedMore);   // 非收尾：不丢
-        CHECK(carry.bytes == std::string(10, '\a') && carry.off == 0 && fq.size() == 1);
-        CHECK(feeds == 2 && sink.n == 0);                                                 // 首喂 + 重试一次
-        it2app::PumpBudget fb = it2app::PumpBudget::unlimited(); fb.log = logFn; fb.logCtx = &sink;
-        CHECK(fb.final && fb.finalRetries == 8);
-        feeds = 0;
-        // 收尾：不返回 FedMore；这一片（首喂 + 8 次重试，afterFeed 都不排空）跳过并记日志，剩余积压照喂
-        // （之后 afterFeed 恢复排空，"TAIL_OK" 那片能收下，证明跳片后继续）
-        auto drainLater = [&] { if (++feeds > 9) while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
-        CHECK(it2app::pump_core(f, fpop, drainLater, fb, &carry) == PumpResult::Fed);
-        CHECK(carry.empty() && fq.empty() && sink.n == 1);
-        CHECK(sink.last.find("refused 10 bytes after 8") != std::string::npos && sink.last.find("final") != std::string::npos);
-        CHECK(feeds >= 1 + 8 + 1);
-        itcore_buffer *b = nullptr;
-        CHECK(itcore_export_text(f, 1u << 20, &b) == 0 && b);
-        if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("TAIL_OK") != std::string::npos); itcore_buffer_release(b); }
-        // 收尾时重试中途排空成功：不跳片、不记日志
-        auto drainF = [&] { while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
-        drainF();
-        fr = itcore_feed(f, reinterpret_cast<const uint8_t *>(bells.data()), bells.size());
-        CHECK(fr.status == ITCORE_NEED_DRAIN);
-        fq.push_back({"\a\aRETRY_OK"});
-        int calls = 0;
-        auto lateDrain = [&] { if (++calls == 3) drainF(); };   // 第 3 次 afterFeed 才排空
-        sink.n = 0;
-        CHECK(it2app::pump_core(f, fpop, lateDrain, fb, &carry) == PumpResult::Fed);
-        CHECK(sink.n == 0 && carry.empty());
-        drainF();
-        CHECK(itcore_export_text(f, 1u << 20, &b) == 0 && b);
-        if (b) { CHECK(std::string(reinterpret_cast<char *>(b->data), b->length).find("RETRY_OK") != std::string::npos); itcore_buffer_release(b); }
-        // 无日志回调：静默跳过（不崩）
-        fr = itcore_feed(f, reinterpret_cast<const uint8_t *>(bells.data()), bells.size());
-        fq.push_back({std::string(5, '\a')});
-        CHECK(it2app::pump_core(f, fpop, [] {}, it2app::PumpBudget::unlimited(), &carry) == PumpResult::Fed && carry.empty());
-        itcore_destroy(f);
+        CHECK(PumpBudget{}.finalRetries == kNeedDrainZeroProgressRetries);
+        // 第一次 accepted==0 不丢：afterFeed 排空后重喂同一片，标记完整。Running 与 Draining 相同。
+        for (bool fin : {false, true}) {
+            itcore_core *f = nullptr;
+            makeFull(f);
+            int calls = 0;
+            auto drainAfterFirst = [&] {
+                if (++calls >= 1) while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e);
+            };
+            std::deque<Chunk> fq;
+            fq.push_back({"HEAD_MARK_tail"});
+            auto fpop = [&]() -> std::optional<Chunk> {
+                if (fq.empty()) return std::nullopt;
+                Chunk k = std::move(fq.front()); fq.pop_front(); return k;
+            };
+            PumpCarry carry;
+            PumpStats stats;
+            PumpBudget nb;
+            nb.final = fin;
+            nb.stats = &stats;
+            nb.log = logFn;
+            nb.logCtx = &sink;
+            sink = {};
+            CHECK(pump_core(f, fpop, drainAfterFirst, nb, &carry) == PumpResult::Fed);
+            CHECK(calls == 3 && stats.droppedBytes == 0 && stats.skippedSlices == 0 && sink.n == 0);
+            CHECK(carry.empty() && fq.empty());
+            CHECK(exported(f).find("HEAD_MARK_tail") != std::string::npos);
+            itcore_destroy(f);
+        }
+        // 首片被拒后重试成功，块尾（超过一片）也在：未读剩余没有被整段跳过。
+        {
+            itcore_core *f = nullptr;
+            makeFull(f, 4000);
+            auto drainAll = [&] { while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
+            std::deque<Chunk> fq;
+            fq.push_back({"HEAD_MARK" + std::string(20 * 1024, 'a') + "TAIL_MARK"});
+            auto fpop = [&]() -> std::optional<Chunk> {
+                if (fq.empty()) return std::nullopt;
+                Chunk k = std::move(fq.front()); fq.pop_front(); return k;
+            };
+            PumpCarry carry;
+            PumpStats stats;
+            PumpBudget nb;
+            nb.stats = &stats;
+            CHECK(pump_core(f, fpop, drainAll, nb, &carry) == PumpResult::Fed);
+            CHECK(stats.droppedBytes == 0 && stats.skippedSlices == 0 && carry.empty());
+            auto text = exported(f);
+            CHECK(text.find("HEAD_MARK") != std::string::npos);
+            CHECK(text.find("TAIL_MARK") != std::string::npos);
+            itcore_destroy(f);
+        }
+        // accepted>0 的 NEED_DRAIN 只前进已接收部分：重试上限为 1 也不丢掉未读尾部。
+        {
+            itcore_core *f = nullptr;
+            CHECK(itcore_create(&o, &f) == 0 && f);
+            auto drainAll = [&] { while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
+            std::deque<Chunk> fq;
+            fq.push_back({std::string(5000, '\a') + "PARTIAL_OK"});
+            auto fpop = [&]() -> std::optional<Chunk> {
+                if (fq.empty()) return std::nullopt;
+                Chunk k = std::move(fq.front()); fq.pop_front(); return k;
+            };
+            PumpCarry carry;
+            PumpStats stats;
+            PumpBudget nb;
+            nb.finalRetries = 1;
+            nb.stats = &stats;
+            CHECK(pump_core(f, fpop, drainAll, nb, &carry) == PumpResult::Fed);
+            CHECK(stats.droppedBytes == 0 && stats.skippedSlices == 0 && carry.empty());
+            CHECK(exported(f).find("PARTIAL_OK") != std::string::npos);
+            itcore_destroy(f);
+        }
+        // 达到上限仍零进展：丢弃这一片；排空恢复后下一片照收。终态文案与其它丢弃路径相同。
+        for (bool fin : {false, true}) {
+            itcore_core *f = nullptr;
+            makeFull(f);
+            int calls = 0;
+            auto drainAfterBound = [&] {
+                if (++calls >= 1 + kNeedDrainZeroProgressRetries)
+                    while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e);
+            };
+            std::deque<Chunk> fq;
+            const std::string lost = "LOST_DATA";
+            fq.push_back({lost});
+            fq.push_back({"TAIL_OK"});
+            auto fpop = [&]() -> std::optional<Chunk> {
+                if (fq.empty()) return std::nullopt;
+                Chunk k = std::move(fq.front()); fq.pop_front(); return k;
+            };
+            PumpCarry carry;
+            PumpStats stats;
+            PumpBudget nb;
+            nb.final = fin;
+            nb.finalRetries = kNeedDrainZeroProgressRetries;
+            nb.stats = &stats;
+            nb.log = logFn;
+            nb.logCtx = &sink;
+            sink = {};
+            CHECK(pump_core(f, fpop, drainAfterBound, nb, &carry) == PumpResult::Fed);
+            CHECK(stats.droppedBytes == lost.size() && stats.skippedSlices == 1 && sink.n == 1);
+            CHECK(sink.last.find("refused " + std::to_string(lost.size()) + " bytes after " +
+                                 std::to_string(kNeedDrainZeroProgressRetries)) != std::string::npos);
+            CHECK((sink.last.find("final") != std::string::npos) == fin);
+            CHECK(carry.empty() && fq.empty());
+            auto text = exported(f);
+            CHECK(text.find("LOST_DATA") == std::string::npos);
+            CHECK(text.find("TAIL_OK") != std::string::npos);
+            TerminalInputs tin;
+            tin.coreDropped = stats.droppedBytes;
+            auto st = classifyTerminal(tin);
+            CHECK(!st.failed && st.droppedOutputBytes == lost.size());
+            CHECK(st.error == "输出可能不完整，丢弃字节数=" + std::to_string(lost.size()));
+            itcore_destroy(f);
+        }
+        // 重试中途排空：不跳片、不记日志。
+        {
+            itcore_core *f = nullptr;
+            makeFull(f);
+            auto drainF = [&] { while (itcore_event *e = itcore_next_event(f)) itcore_event_release(e); };
+            std::deque<Chunk> fq;
+            fq.push_back({"\a\aRETRY_OK"});
+            auto fpop = [&]() -> std::optional<Chunk> {
+                if (fq.empty()) return std::nullopt;
+                Chunk k = std::move(fq.front()); fq.pop_front(); return k;
+            };
+            int calls = 0;
+            auto lateDrain = [&] { if (++calls == 3) drainF(); };
+            PumpCarry carry;
+            PumpBudget fb;
+            fb.log = logFn;
+            fb.logCtx = &sink;
+            sink = {};
+            CHECK(pump_core(f, fpop, lateDrain, fb, &carry) == PumpResult::Fed);
+            CHECK(sink.n == 0 && carry.empty() && calls >= 4);
+            CHECK(exported(f).find("RETRY_OK") != std::string::npos);
+            itcore_destroy(f);
+        }
+        // 无日志回调：达到上限仍跳过（不崩）。
+        {
+            itcore_core *f = nullptr;
+            makeFull(f);
+            std::deque<Chunk> fq;
+            fq.push_back({std::string(5, '\a')});
+            auto fpop = [&]() -> std::optional<Chunk> {
+                if (fq.empty()) return std::nullopt;
+                Chunk k = std::move(fq.front()); fq.pop_front(); return k;
+            };
+            PumpCarry carry;
+            CHECK(pump_core(f, fpop, [] {}, PumpBudget::unlimited(), &carry) == PumpResult::Fed && carry.empty());
+            itcore_destroy(f);
+        }
     }
     // PUMP-04：?2026 同步段被预算（FedMore）切开时不出半帧；段结束那次 pump 后立即放行
     {
@@ -1573,6 +1695,37 @@ static void ssh_direct_select() {
     CHECK(selectSshTransport(true, false) == SshTransportChoice::Unavailable);
 }
 
+// Running 阶段核心一直拒收：有限次重试后丢弃，不再 FedMore 空转；终态带上不完整输出。
+static void need_drain_running_discard_reported() {
+    PumpTestLoop loop;
+    PumpTestPane pane(loop, 1);
+    std::string bells(40000, '\a');
+    auto fr = itcore_feed(pane.core, reinterpret_cast<const uint8_t *>(bells.data()), bells.size());
+    CHECK(fr.status == ITCORE_NEED_DRAIN && fr.accepted > 0 && fr.accepted < bells.size());
+    uint8_t z = 'Z';
+    auto zf = itcore_feed(pane.core, &z, 1);
+    CHECK(zf.accepted == 0 && zf.status == ITCORE_NEED_DRAIN);
+    pane.drainEvents = false;
+    const std::string chunk = "VISIBLE";
+    pane.output.push_back({chunk});
+    const int feedsBefore = pane.trace->afterFeeds;
+    pane.step();
+    CHECK(pane.driver.phase == DrainPhase::Running);
+    CHECK(pane.driver.stats.droppedBytes == chunk.size());
+    CHECK(pane.driver.stats.skippedSlices == 1);
+    CHECK(pane.driver.carry.empty() && pane.output.empty());
+    CHECK(loop.timers.empty());
+    CHECK(pane.trace->terminalPublishes == 0);
+    CHECK(pane.trace->afterFeeds >= feedsBefore + 1 + kNeedDrainZeroProgressRetries);
+    CHECK(pane.text().find(chunk) == std::string::npos);
+    pane.finishSession();
+    loop.run();
+    CHECK(pane.trace->terminalPublishes == 1 && !pane.trace->terminal.failed);
+    CHECK(pane.trace->terminal.droppedOutputBytes == chunk.size());
+    CHECK(pane.trace->terminal.error == "输出可能不完整，丢弃字节数=" + std::to_string(chunk.size()));
+    CHECK(pane.trace->log.find("dropped=" + std::to_string(chunk.size())) != std::string::npos);
+}
+
 int main(int argc, char **argv) {
     std::string w = argc > 1 ? argv[1] : "all";
     if (w == "fsm_close") flood_close_destroys_continuation_target();
@@ -1581,6 +1734,7 @@ int main(int argc, char **argv) {
     else if (w == "fsm_finish") finish_session_during_draining_is_idempotent();
     else if (w == "fsm_late_tail") close_timeout_waits_for_reader_and_late_tail();
     else if (w == "fsm_close_grace") close_timeout_grace_abandons_drain();
+    else if (w == "need_drain") need_drain_running_discard_reported();
     else if (w == "fsm_tail") final_tail_complete_without_fault();
     else if (w == "fsm_dropped") final_dropped_bytes_reported_in_terminal();
     else if (w == "fsm_fatal") draining_fatal_counts_remaining_without_fault();
@@ -1601,7 +1755,7 @@ int main(int argc, char **argv) {
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
     else if (w == "search") search_driver();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); prestart_failure_leaves_starting(); gap02_closed_transport_drains_before_eof(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); prestart_failure_leaves_starting(); gap02_closed_transport_drains_before_eof(); need_drain_running_discard_reported(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

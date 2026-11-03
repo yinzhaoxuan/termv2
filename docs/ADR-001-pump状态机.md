@@ -421,3 +421,17 @@ Draining 期间 `status_.state` 仍然是 Running（终态还没发布），所�
 - 迟到的 Running/Closed/Failed 若状态已是 Failed 或 Exited，忽略，不能把 `fail()` 的文案覆盖掉，也不能把窗格拉回 Running。
 - Hyper-V 内层 `start` 失败同样同步返回。解析线程接着发 `HvAction::Fail` 和 `Failed`。窗格仍是 Starting 时，这一轮回调直接 `fail()`，不等 8 ms 续跑。Direct 在进入 Running 之前的失败没有这条 `HvAction::Fail`，继续走 §2.2 的 `finishSession`，文案和退出码不变。
 - 用户可见句子在 `formatSshPreStartError`。`ClientMissing` 为「未找到 ssh.exe」加可选功能安装提示，不加「SSH 配置快照无效」前缀。
+
+---
+
+## 12. A4：NEED_DRAIN 且 accepted==0（2026-11-03）
+
+§2.2 里「只有 Draining 才按 `finalRetries` 重试」不再适用。事件队列在进入 `itcore_feed` 时已经接近容量，核心会返回 `NEED_DRAIN` 且 `accepted==0`（一个字节都没收下）。这不是「这一片已经消费完」。
+
+规则（`pump_core`，Running 与 Draining 相同）：
+
+- 第一次 `accepted==0` 之后先 `afterFeed`（排空核心事件），再对**同一指针、同一长度**重喂。未超过上限时不增加 `PumpCarry::off`。
+- 重试次数是 `PumpBudget::finalRetries`，默认 `kNeedDrainZeroProgressRetries`（8），不含第一次 feed。小于 1 按 1，保证至少排空后再试一次。
+- 某次重试 `accepted>0`：只前进已接收的字节，剩余留在 carry 里。这与原先 `NEED_DRAIN` 且 `accepted>0` 的进度规则相同，不占用上面的重试次数。
+- 上限次重试仍是 `accepted==0`：把这一片计入 `droppedBytes` / `skippedSlices`，写调试日志，然后跳过。不再为了避免忙等而在 Running 里返回 `FedMore` 却永远停在同一片上（续跑定时器会空转）。
+- 跳过的字节随既有终态路径出现：`completePump` → `classifyTerminal` 在 `errorText` 里附加「输出可能不完整，丢弃字节数=N」。Running 期间丢掉的字节记在 `PumpStats` 上，会话结束时一并上报，不单独改 `ui/`。

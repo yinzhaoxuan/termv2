@@ -1,5 +1,12 @@
 # iterm2-win 进度汇总
 
+## 2026-11-03：REVIEW A4 NEED_DRAIN 零进展
+
+- `itcore_feed` 返回 `NEED_DRAIN` 且 `accepted==0` 时，pump 先 `afterFeed` 排空事件，再重喂同一段未读字节，偏移不前进。
+  连续零进展重试上限是 `kNeedDrainZeroProgressRetries`（8，不含第一次 feed），Running 与 Draining 共用 `PumpBudget::finalRetries`。
+  超过上限仍拒收才把这一片计入 `droppedBytes` 并跳过；会话结束时沿用「输出可能不完整，丢弃字节数=N」。
+  `accepted>0` 仍只前进已接收的部分。见 [ADR-001](ADR-001-pump状态机.md) §12。单测在 PANE-08 与 PANE-28。
+
 ## 2026-11-03：REVIEW A2 / GAP-02 收尾排空
 
 - 已由 [ADR-001](ADR-001-pump状态机.md) 收口，本轮不改状态机。`finishSession` 只进入 Draining 并登记续跑；`itcore_finish_input` 要等传输 Closed/Failed，且队列和 carry 都空。
