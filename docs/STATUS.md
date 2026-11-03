@@ -2,7 +2,15 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
-## 2026-11-04：A5、A1 余量、DS-2、B1–B5（工作区，未提交）
+## 2026-11-04：E4/E5、NEW-02、NEW-03、DS-12 Direct 首次信任
+
+- **E4 / E5**（`299b3c1`）：ui 默认用仓库内 nlohmann；`IT2W_REQUIRE_VECTORS`；`IT2W_SANITIZE_THREAD`；`CMakePresets.json`（dev / asan / tsan / mingw / mingw-direct）；根 README；GitHub Actions（linux / asan / tsan 测试 + mingw 交叉编译，mingw-direct 仅手动触发）。首次 CI 全绿，`986cdf7` 的 Windows 文件经 mingw 编译通过。
+- **NEW-02**（`c69bc48`）：`itcore_history_rows` 改为按组增量计数，push / 淘汰只置脏首尾组，查询时惰性重排。5000 行历史再输出 10 万行：整段重建 100000 → 0 次（197.9 s → 0.19 s）；单条 10 万段软换行行：157.7 s → 1.6 s。
+- **NEW-03**（`2fcaac3`）：核对确认没有地方跨 feed 缓存 `abs_row`；`itcore.h` 写明它只在同一时刻有效；新增淘汰后高亮回归测试。
+- **DS-12**（设计 [DS-12-Direct首次信任.md](DS-12-Direct首次信任.md)）：Direct 遇到未知主机时窗格给出「核对指纹…」，确认框默认取消，确认后把本次出示的密钥原子写入 `configDir/ssh/known_hosts` 并重连一次。密钥变化只追加提示，不给信任按钮；DSS 可照常校验已信任的条目，但不提供信任。Direct 默认值不变。
+- macOS ctest 113/113。**待验证**：Direct 代码只在 `IT2W_SSH_DIRECT=ON` 时编译，需要在 GitHub Actions 手动触发 `mingw-direct`；Windows 手测见 DS-12 §6。
+
+## 2026-11-04：A5、A1 余量、DS-2、B1–B5（`986cdf7`）
 
 设计：[DS-2-启动描述与B批.md](DS-2-启动描述与B批.md)。基线 `a06bbf6`。
 

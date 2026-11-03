@@ -315,6 +315,63 @@ static void test_preferences_and_auth() {
     }
 }
 
+static void test_presented_host_key() {
+    using T = DirectHostKeyType;
+    struct { T type; const char *name; } cases[] = {
+        {T::Ed25519, "ssh-ed25519"}, {T::Rsa, "ssh-rsa"},
+        {T::Ecdsa256, "ecdsa-sha2-nistp256"}, {T::Ecdsa384, "ecdsa-sha2-nistp384"},
+        {T::Ecdsa521, "ecdsa-sha2-nistp521"}
+    };
+    for (const auto &c : cases) {
+        CHECK(directHostKeyTypeName(c.type) == c.name);
+        CHECK(canOfferTrust(c.type));
+        auto key = presentHostKey("[example.com]:2222", c.type, std::string_view("\0\xff\x80", 3), "SHA256:test");
+        CHECK(key && key->knownHostsName == "[example.com]:2222" && key->keyType == c.name &&
+              key->keyBase64 == "AP+A" && key->fingerprint == "SHA256:test");
+    }
+    CHECK(directHostKeyTypeName(T::Dss) == "ssh-dss");
+    CHECK(!directHostKeyTypeName(T::Unknown));
+    for (auto type : {T::Dss, T::Unknown}) {
+        CHECK(!canOfferTrust(type));
+        CHECK(!presentHostKey("host", type, "raw", "SHA256:test"));
+    }
+    CHECK(!presentHostKey("host", T::Ed25519, {}, "SHA256:test"));
+    const auto key = presentHostKey("hv-guid", T::Ed25519, "raw", "SHA256:test");
+    auto exit = mapDirectFailure({DirectStage::HostKey, DirectFailureKind::HostKeyUnknown, 0, key});
+    CHECK(exit.error == SshError::HostKeyUnknown && exit.hostKey && exit.hostKey->knownHostsName == "hv-guid");
+    exit = mapDirectFailure({DirectStage::HostKey, DirectFailureKind::HostKeyChanged, 0, key});
+    CHECK(exit.error == SshError::HostKeyChanged && !exit.hostKey);
+}
+
+static void test_host_key_base64() {
+    struct { const char *raw, *encoded; } cases[] = {
+        {"f", "Zg=="}, {"fo", "Zm8="}, {"foo", "Zm9v"}, {"foobar", "Zm9vYmFy"}
+    };
+    for (const auto &c : cases) {
+        const auto key = presentHostKey("host", DirectHostKeyType::Ed25519, c.raw, "fp");
+        CHECK(key && key->keyBase64 == c.encoded);
+    }
+    CHECK(!presentHostKey("host", DirectHostKeyType::Ed25519, "", "fp"));
+    std::string raw;
+    for (unsigned char c = 0; c < 32; ++c) raw += char(c);
+    const auto key = presentHostKey("host", DirectHostKeyType::Ed25519, raw, "fp");
+    CHECK(key && key->keyBase64 == "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+    CHECK(key && key->keyBase64.size() == 44);
+    if (!key || key->keyBase64.size() != 44) return;
+    // 独立按四字符组解码，校验二进制内容与长度。
+    const std::string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string decoded;
+    for (size_t i = 0; i < key->keyBase64.size(); i += 4) {
+        const auto group = key->keyBase64.substr(i, 4);
+        unsigned value = 0;
+        for (char c : group) value = (value << 6) | (c == '=' ? 0u : unsigned(alphabet.find(c)));
+        decoded += char((value >> 16) & 0xff);
+        if (group[2] != '=') decoded += char((value >> 8) & 0xff);
+        if (group[3] != '=') decoded += char(value & 0xff);
+    }
+    CHECK(decoded.size() == 32 && decoded == raw);
+}
+
 static void test_failure_mapping() {
     using Stage = DirectStage;
     using Kind = DirectFailureKind;
@@ -396,6 +453,8 @@ int main() {
     test_known_hosts();
     test_preferences_and_auth();
     test_failure_mapping();
+    test_presented_host_key();
+    test_host_key_base64();
     test_channel_exit_and_pty();
     std::printf("ssh_direct_logic: %s (%d failures)\n", failures ? "FAILED" : "OK", failures);
     return failures ? 1 : 0;

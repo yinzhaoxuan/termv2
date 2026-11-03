@@ -87,7 +87,8 @@ struct DirectSshTransport::Impl {
               std::optional<int64_t> errorCode = std::nullopt) const;
     void checkpoint(uint64_t until = 0) const;
     [[noreturn]] void fail(DirectFailureKind, int code = 0, std::string detail = {},
-                           std::optional<TransportFault> = std::nullopt) const;
+                           std::optional<TransportFault> = std::nullopt,
+                           std::optional<PresentedHostKey> = std::nullopt) const;
     void check(int rc, std::string detail = {}) const;
     WSANETWORKEVENTS waitSocket(uint64_t until, bool closing = false,
                                 bool connecting = false, int directions = -1);

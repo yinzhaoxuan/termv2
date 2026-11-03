@@ -481,7 +481,7 @@ std::optional<Win32PaneBackend::HyperVResolution> Win32PaneBackend::resolveHyper
 
 bool Win32PaneBackend::startSession() {
     auto hyperV = std::exchange(pendingHyperV_, std::nullopt);
-    { std::lock_guard l(statusMu_); status_.recovery = {}; }
+    { std::lock_guard l(statusMu_); status_.recovery = {}; status_.hostKeyChanged = false; }
     itcore_options opt{};
     opt.abi_version = ITCORE_ABI_VERSION;
     opt.struct_size = sizeof(opt);
@@ -699,6 +699,10 @@ void Win32PaneBackend::completePump(uint64_t dropped) {
         status_.errorText = terminal_.error;
         status_.exitCode = terminal_.exitCode;
         status_.hasForegroundJob = false;
+        if (sshExit_) {
+            status_.recovery = sshRecovery(*sshExit_);
+            status_.hostKeyChanged = sshExit_->error == SshError::HostKeyChanged;
+        }
     }
     const std::string endLine = formatPaneDiagLine(
         sessionId_, attempt_, "session.end", 0, std::nullopt, terminal_.droppedOutputBytes,

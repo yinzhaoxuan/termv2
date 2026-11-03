@@ -3,6 +3,7 @@
 #pragma once
 #include "../common/it2app/limits.h"
 #include "hyperv_resolve.h"
+#include "ssh_session.h"
 #include "uishell/pane_backend.h"
 #include <chrono>
 #include <atomic>
@@ -225,6 +226,7 @@ SyncStartOutcome settleSyncStart(SyncStart result, std::string error);
 std::optional<std::string> immediatePreStartFailure(bool sessionStillStarting, bool transportFailed,
                                                     bool hvFailed, std::string hvError);
 uishell::SessionRecovery hyperVRecovery(it2w::HvFailure, const std::vector<it2w::HvCandidate> &);
+uishell::SessionRecovery sshRecovery(const it2w::SshExitInfo &);
 // category 空或 None：text 已是完整句子。否则「类别: 说明」。
 std::string formatTransportFailure(std::string_view category, std::string_view text);
 std::string formatLocalShellStartError(std::string_view exeUtf8);

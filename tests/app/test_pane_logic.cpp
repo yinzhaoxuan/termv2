@@ -48,6 +48,22 @@ static void hyperv_recovery() {
     }
 }
 
+static void ssh_recovery() {
+    it2w::SshExitInfo exit;
+    exit.error = it2w::SshError::HostKeyUnknown;
+    CHECK(sshRecovery(exit).kind == uishell::SessionRecovery::None);
+    exit.hostKey = it2w::PresentedHostKey{"hv-guid", "ssh-ed25519", "cmF3", "SHA256:test"};
+    const auto recovery = sshRecovery(exit);
+    CHECK(recovery.kind == uishell::SessionRecovery::TrustHostKey && recovery.choices.empty());
+    CHECK(recovery.hostKey && recovery.hostKey->knownHostsName == "hv-guid" &&
+          recovery.hostKey->keyType == "ssh-ed25519" && recovery.hostKey->keyBase64 == "cmF3" &&
+          recovery.hostKey->fingerprint == "SHA256:test");
+    for (auto error : {it2w::SshError::HostKeyChanged, it2w::SshError::AuthFailed, it2w::SshError::None}) {
+        exit.error = error;
+        const auto ignored = sshRecovery(exit);
+        CHECK(ignored.kind == uishell::SessionRecovery::None && !ignored.hostKey);
+    }
+}
 static void limits() {
     RateLimiter bell(1000);
     CHECK(bell.allow(0)); CHECK(!bell.allow(500)); CHECK(!bell.allow(999)); CHECK(bell.allow(1000)); CHECK(!bell.allow(1999));
@@ -1807,7 +1823,7 @@ int main(int argc, char **argv) {
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
     else if (w == "search") search_driver();
-    else { hyperv_recovery(); limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); prestart_failure_leaves_starting(); gap02_closed_transport_drains_before_eof(); need_drain_running_discard_reported(); } }
+    else { hyperv_recovery(); ssh_recovery(); limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); prestart_failure_leaves_starting(); gap02_closed_transport_drains_before_eof(); need_drain_running_discard_reported(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

@@ -95,7 +95,7 @@ int main() {
     recovery.recovery = {R::ChooseAddress, {{"nic", "网卡 10.0.0.1"}}};
     CHECK(paneOverlay(false, false, "", recovery).buttonLabel == "选择地址…");
     struct RecoveryCase { R::Kind kind; std::string label; };
-    const RecoveryCase cases[] = {{R::None, "重连"}, {R::StartVmAndConnect, "启动并连接"}, {R::ChooseAddress, "选择地址…"}};
+    const RecoveryCase cases[] = {{R::None, "重连"}, {R::StartVmAndConnect, "启动并连接"}, {R::ChooseAddress, "选择地址…"}, {R::TrustHostKey, "核对指纹…"}};
     for (auto state : {S::Starting, S::Running, S::Reconnecting, S::Exited, S::Failed}) {
       recovery.state = state;
       for (const auto& c : cases) {
@@ -114,6 +114,26 @@ int main() {
           CHECK(missing.text == "连接配置已删除（引用缺失）。请在左侧选择连接后新建会话。");
         }
       }
+    }
+    recovery = {S::Failed, 0, false, "", "HostKeyChanged SHA256:test"};
+    CHECK(paneOverlay(false, false, "", recovery).text == "会话失败：HostKeyChanged SHA256:test");
+    recovery.hostKeyChanged = true;
+    auto changed = paneOverlay(false, false, "", recovery);
+    CHECK(changed.buttonLabel == "重连");
+    CHECK(changed.text == "会话失败：HostKeyChanged SHA256:test\n主机密钥与已信任的不同。确认服务器确实更换过密钥后，手动删除 known_hosts 中的旧条目再连接。");
+    CHECK(recovery.errorText == "HostKeyChanged SHA256:test");
+  }
+  {
+    const uishell::HostKeyOffer key{"hv-guid", "ssh-ed25519", "cmF3", "SHA256:test"};
+    CHECK(hostKeyTrustPrompt(key, "C:/配置/ssh/known_hosts") ==
+          "无法验证主机「hv-guid」的身份。\n密钥类型：ssh-ed25519\n指纹：SHA256:test\n\n"
+          "请通过可信渠道核对指纹，例如在服务器控制台运行：\n"
+          "  ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub\n"
+          "一致后再信任。信任后会写入：\nC:/配置/ssh/known_hosts\n并重新连接。");
+    for (const char* type : {"ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-rsa"}) {
+      auto offer = key; offer.keyType = type;
+      const std::string shortType = offer.keyType == "ssh-rsa" ? "rsa" : "ecdsa";
+      CHECK(hostKeyTrustPrompt(offer, "path").find("ssh_host_" + shortType + "_key.pub") != std::string::npos);
     }
   }
   CHECK(stateLabel(uishell::SessionState::Reconnecting) == "正在重连");

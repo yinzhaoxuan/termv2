@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,9 +17,14 @@ struct CaretRect { int x, y, w, h; bool valid; };      // renderer caret_rect_px
 
 enum class SessionState { Starting, Running, Reconnecting, Exited, Failed };
 struct AddressChoice { std::string adapterId; std::string label; };  // 「<网卡名> <地址>」
+struct HostKeyOffer {
+  std::string knownHostsName, keyType, keyBase64, fingerprint;
+  bool operator==(const HostKeyOffer&) const = default;
+};
 struct SessionRecovery {
-  enum Kind { None, StartVmAndConnect, ChooseAddress } kind = None;
+  enum Kind { None, StartVmAndConnect, ChooseAddress, TrustHostKey } kind = None;
   std::vector<AddressChoice> choices;  // ChooseAddress：按后端给的顺序
+  std::optional<HostKeyOffer> hostKey;
 };
 struct SessionStatus {
   SessionState state;
@@ -27,6 +33,7 @@ struct SessionStatus {
   std::string title;         // already rate-limited (<=10/s)
   std::string errorText;     // classified error for Failed (T07 categories)
   SessionRecovery recovery; // 只在 Failed 时有意义
+  bool hostKeyChanged = false;
 };
 
 // ---- 滚动历史搜索（草案 /workspace/qa/itcore_search-草案-v0.2.md §1.6 映射；架构师拍板 v0.1：纯文本、无正则）----

@@ -1,8 +1,10 @@
 // T07 SSH 会话：跨平台纯逻辑（ssh -G 解析、退出码/错误映射、输出尾部缓存）。
 // Windows 层 SshTransport 只负责落盘快照与在 ConPTY 中启动 ssh -F <快照> <alias>。
 #pragma once
+#include "ssh_host_key.h"
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,6 +44,7 @@ struct SshExitInfo {
     // ssh 子进程输出（ConPTY 下含 stderr）最后约 kSshOutputTailBytes 字节，去转义、按 UTF-8 边界截断。
     // 由传输层读线程自行记录，不依赖 UI 是否取走输出
     std::string outputTail;
+    std::optional<PresentedHostKey> hostKey; // 仅 Direct HostKeyUnknown
 };
 constexpr size_t kSshOutputTailBytes = 4096;
 // s 的最后 ≤max 字节，起点前移到 UTF-8 首字节（不切断多字节字符）

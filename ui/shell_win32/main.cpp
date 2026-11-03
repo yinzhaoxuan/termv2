@@ -30,6 +30,7 @@
 #include "uicfg/close_confirm.h"
 #include "uicfg/layout_ops.h"
 #include "uicfg/launch.h"
+#include "uicfg/known_hosts.h"
 #include "uicfg/reconnect.h"
 #include "uicfg/session_tree.h"
 #include "uicfg/settings.h"
@@ -561,11 +562,40 @@ std::optional<std::string> chooseHyperVAdapter(const PaneHost& p) {
   return choices[cmd - 1].adapterId;
 }
 
+void trustHostKey(PaneHost& p) {
+  const auto offer = p.status.recovery.hostKey;
+  if (!offer) return;
+  const auto line = knownHostsLine(*offer);
+  if (!line) {
+    g->statusNote = "主机密钥信息无效，未写入 known_hosts";
+    updateStatusBar();
+    return;
+  }
+  const std::string paneId = p.paneId, connectionId = p.connectionId;
+  const fs::path file = g->configDir / "ssh" / "known_hosts";
+  const auto prompt = hostKeyTrustPrompt(*offer, U(file.wstring()));
+  if (MessageBoxW(g->main, W(prompt).c_str(), L"核对主机指纹",
+                  MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
+  // 模态框会派发消息；只为仍在等待同一把密钥的窗格重连。
+  auto* pane = paneById(paneId);
+  if (!pane || pane->connectionId != connectionId || pane->status.state != SessionState::Failed ||
+      pane->status.recovery.kind != uishell::SessionRecovery::TrustHostKey ||
+      pane->status.recovery.hostKey != offer) return;
+  std::string error;
+  if (!appendKnownHost(file, *line, &error)) {
+    g->statusNote = "写入 known_hosts 失败：" + error;
+    updateStatusBar();
+    return;
+  }
+  reconnectPane(*pane);
+}
+
 void reconnectFromButton(PaneHost& p) {
   if (p.status.state != SessionState::Failed) { reconnectPane(p); return; }
   const std::string paneId = p.paneId;
   HvOverride hv{p.connectionId};
   switch (p.status.recovery.kind) {
+    case uishell::SessionRecovery::TrustHostKey: trustHostKey(p); return;
     case uishell::SessionRecovery::StartVmAndConnect: hv.startIfOff = true; break;
     case uishell::SessionRecovery::ChooseAddress:
       hv.adapterId = chooseHyperVAdapter(p);

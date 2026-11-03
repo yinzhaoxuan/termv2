@@ -22,6 +22,23 @@ std::string_view token(std::string_view &line) {
     line.remove_prefix(n);
     return result;
 }
+constexpr std::string base64Encode(std::string_view bytes) {
+    constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string encoded;
+    unsigned bits = 0, count = 0;
+    for (unsigned char c : bytes) {
+        bits = (bits << 8) | c;
+        count += 8;
+        while (count >= 6) {
+            count -= 6;
+            encoded += alphabet[(bits >> count) & 63];
+        }
+    }
+    if (count) encoded += alphabet[(bits << (6 - count)) & 63];
+    while (encoded.size() % 4) encoded += '=';
+    return encoded;
+}
+static_assert(base64Encode("") == "");
 std::optional<std::string> base64(std::string_view encoded) {
     if (encoded.empty()) return std::nullopt;
     auto digit = [](char c) -> int {
@@ -74,6 +91,29 @@ const char *stageName(DirectStage stage) {
     return "unknown stage";
 }
 } // namespace
+
+std::optional<std::string_view> directHostKeyTypeName(DirectHostKeyType type) {
+    switch (type) {
+    case DirectHostKeyType::Rsa: return "ssh-rsa";
+    case DirectHostKeyType::Dss: return "ssh-dss";
+    case DirectHostKeyType::Ecdsa256: return "ecdsa-sha2-nistp256";
+    case DirectHostKeyType::Ecdsa384: return "ecdsa-sha2-nistp384";
+    case DirectHostKeyType::Ecdsa521: return "ecdsa-sha2-nistp521";
+    case DirectHostKeyType::Ed25519: return "ssh-ed25519";
+    case DirectHostKeyType::Unknown: return std::nullopt;
+    }
+    return std::nullopt;
+}
+bool canOfferTrust(DirectHostKeyType type) {
+    return type != DirectHostKeyType::Dss && directHostKeyTypeName(type).has_value();
+}
+std::optional<PresentedHostKey> presentHostKey(std::string_view knownHostsName,
+    DirectHostKeyType type, std::string_view rawKey, std::string_view fingerprint) {
+    const auto name = directHostKeyTypeName(type);
+    if (!canOfferTrust(type) || rawKey.empty()) return std::nullopt;
+    return PresentedHostKey{std::string(knownHostsName), std::string(*name),
+                           base64Encode(rawKey), std::string(fingerprint)};
+}
 
 DirectSizes::DirectSizes(DirectGrid launch) : desired{clamp(launch), 0} {}
 void DirectSizes::resize(DirectGrid grid, uint64_t generation) {
@@ -232,6 +272,7 @@ SshExitInfo mapDirectFailure(DirectFailure failure) {
         result.error = SshError::ConfigError; reason = "known_hosts markers/certificates unsupported"; break;
     case DirectFailureKind::HostKeyUnknown:
         result.error = SshError::HostKeyUnknown;
+        result.hostKey = std::move(failure.hostKey);
         reason = "请先用兼容模式连接一次以确认指纹"; break;
     case DirectFailureKind::HostKeyChanged:
         result.error = SshError::HostKeyChanged; reason = "host key changed"; break;

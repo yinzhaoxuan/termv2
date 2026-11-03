@@ -195,9 +195,10 @@ void DirectSshTransport::Impl::setPhase(DirectStage next, const char *name) {
     phase = next; phaseAt = t;
 }
 [[noreturn]] void DirectSshTransport::Impl::fail(DirectFailureKind kind, int code, std::string detail,
-                                               std::optional<TransportFault> fault) const {
+                                               std::optional<TransportFault> fault,
+                                               std::optional<PresentedHostKey> hostKey) const {
     if (code != 0) diag("ssh.direct.fail", 0, 0, detail, static_cast<int64_t>(code));
-    auto exit = mapDirectFailure({phase, kind, code});
+    auto exit = mapDirectFailure({phase, kind, code, std::move(hostKey)});
     if (!detail.empty()) exit.detail += "; " + detail;
     throw Failure{std::move(exit), fault};
 }

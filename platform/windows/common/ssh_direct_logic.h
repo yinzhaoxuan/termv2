@@ -1,5 +1,6 @@
 // Portable direct-SSH policy only. No transport, OS or crypto-library dependency.
 #pragma once
+#include "ssh_host_key.h"
 #include "ssh_session.h"
 #include "ssh_snapshot.h"
 #include <array>
@@ -11,6 +12,14 @@
 #include <vector>
 
 namespace it2w {
+
+enum class DirectHostKeyType { Unknown, Rsa, Dss, Ecdsa256, Ecdsa384, Ecdsa521, Ed25519 };
+// 验证与诊断名称包含 DSS；首次信任单独限制。
+std::optional<std::string_view> directHostKeyTypeName(DirectHostKeyType);
+bool canOfferTrust(DirectHostKeyType);
+// DSS 和未知类型不提供信任；rawKey 是 SSH 公钥 blob，不是指纹。
+std::optional<PresentedHostKey> presentHostKey(std::string_view knownHostsName,
+    DirectHostKeyType, std::string_view rawKey, std::string_view fingerprint);
 
 struct DirectGrid {
     int cols = 80, rows = 24;
@@ -80,6 +89,7 @@ struct DirectFailure {
     DirectStage stage;
     DirectFailureKind kind;
     int code = 0; // Native diagnostic code only, never a remote exit status.
+    std::optional<PresentedHostKey> hostKey;
 };
 SshExitInfo mapDirectFailure(DirectFailure failure);
 // Signal takes precedence over status. Common signal names have conventional

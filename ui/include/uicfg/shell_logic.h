@@ -46,6 +46,7 @@ LinkPrompt linkPrompt(const std::string& url);
 // 窗格覆盖层：缺失引用优先于占位；按钮文案总是填充。
 struct PaneOverlay { bool visible; bool showReconnect; std::string text; std::string buttonLabel; };
 PaneOverlay paneOverlay(bool missingRef, bool notStarted, const std::string& connName, const uishell::SessionStatus& st);
+std::string hostKeyTrustPrompt(const uishell::HostKeyOffer&, const std::string& knownHostsPath);
 std::string stateLabel(uishell::SessionState s);
 // 会话树标签来自连接名 + snaps 运行计数，不用 pane title。
 // snaps：启动起算，直到 Exited/Failed 才 erase。仅当新旧状态在「计入运行」集合上不同时才需 refreshTree。

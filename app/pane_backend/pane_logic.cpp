@@ -79,6 +79,15 @@ uishell::SessionRecovery hyperVRecovery(it2w::HvFailure failure, const std::vect
     }
     return out;
 }
+uishell::SessionRecovery sshRecovery(const it2w::SshExitInfo &exit) {
+    uishell::SessionRecovery out;
+    if (exit.error == it2w::SshError::HostKeyUnknown && exit.hostKey) {
+        const auto &key = *exit.hostKey;
+        out.kind = uishell::SessionRecovery::TrustHostKey;
+        out.hostKey = uishell::HostKeyOffer{key.knownHostsName, key.keyType, key.keyBase64, key.fingerprint};
+    }
+    return out;
+}
 std::string formatLocalShellStartError(std::string_view exeUtf8) {
     const std::string path = exeUtf8.empty() ? std::string("cmd.exe") : std::string(exeUtf8);
     return "本地 shell 启动失败：" + path + "。请确认该程序存在且可执行。";

@@ -134,6 +134,7 @@ static std::string recoveryButton(const uishell::SessionStatus& st) {
   switch (st.recovery.kind) {
     case uishell::SessionRecovery::StartVmAndConnect: return "启动并连接";
     case uishell::SessionRecovery::ChooseAddress: return "选择地址…";
+    case uishell::SessionRecovery::TrustHostKey: return "核对指纹…";
     case uishell::SessionRecovery::None: return "重连";
   }
   return "重连";
@@ -143,9 +144,23 @@ PaneOverlay paneOverlay(bool missingRef, bool notStarted, const std::string& con
   auto button = recoveryButton(st);
   if (missingRef) return {true, false, "连接配置已删除（引用缺失）。请在左侧选择连接后新建会话。", button};
   if (notStarted) return {true, true, "未连接：" + connName + "。点击「连接」或按 Enter 开始", "连接"};
-  if (st.state == S::Failed) return {true, true, "会话失败：" + (st.errorText.empty() ? std::string("未知错误") : st.errorText), button};
+  if (st.state == S::Failed) {
+    std::string text = "会话失败：" + (st.errorText.empty() ? std::string("未知错误") : st.errorText);
+    if (st.hostKeyChanged)
+      text += "\n主机密钥与已信任的不同。确认服务器确实更换过密钥后，手动删除 known_hosts 中的旧条目再连接。";
+    return {true, true, text, button};
+  }
   if (st.state == S::Exited) return {true, true, "会话已退出（退出码 " + std::to_string(st.exitCode) + "）", button};
   return {false, false, {}, button};
+}
+
+std::string hostKeyTrustPrompt(const uishell::HostKeyOffer& key, const std::string& knownHostsPath) {
+  const std::string shortType = key.keyType == "ssh-ed25519" ? "ed25519" :
+                                key.keyType == "ssh-rsa" ? "rsa" : "ecdsa";
+  return "无法验证主机「" + key.knownHostsName + "」的身份。\n密钥类型：" + key.keyType +
+         "\n指纹：" + key.fingerprint + "\n\n请通过可信渠道核对指纹，例如在服务器控制台运行：\n" +
+         "  ssh-keygen -lf /etc/ssh/ssh_host_" + shortType + "_key.pub\n" +
+         "一致后再信任。信任后会写入：\n" + knownHostsPath + "\n并重新连接。";
 }
 
 bool statusAffectsSessionTree(uishell::SessionState prev, uishell::SessionState next) {

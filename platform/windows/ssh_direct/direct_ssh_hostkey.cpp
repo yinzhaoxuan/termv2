@@ -81,16 +81,18 @@ void DirectSshTransport::Impl::verifyHostKey() {
     int type = 0, algorithm = 0;
     const char *key = libssh2_session_hostkey(session, &length, &type);
     if (!key) fail(DirectFailureKind::NoHostKeyAlgorithm);
-    const char *name = nullptr;
+    DirectHostKeyType keyType = DirectHostKeyType::Unknown;
     switch (type) {
-    case LIBSSH2_HOSTKEY_TYPE_RSA: algorithm = LIBSSH2_KNOWNHOST_KEY_SSHRSA; name = "ssh-rsa"; break;
-    case LIBSSH2_HOSTKEY_TYPE_DSS: algorithm = LIBSSH2_KNOWNHOST_KEY_SSHDSS; name = "ssh-dss"; break;
-    case LIBSSH2_HOSTKEY_TYPE_ECDSA_256: algorithm = LIBSSH2_KNOWNHOST_KEY_ECDSA_256; name = "ecdsa-sha2-nistp256"; break;
-    case LIBSSH2_HOSTKEY_TYPE_ECDSA_384: algorithm = LIBSSH2_KNOWNHOST_KEY_ECDSA_384; name = "ecdsa-sha2-nistp384"; break;
-    case LIBSSH2_HOSTKEY_TYPE_ECDSA_521: algorithm = LIBSSH2_KNOWNHOST_KEY_ECDSA_521; name = "ecdsa-sha2-nistp521"; break;
-    case LIBSSH2_HOSTKEY_TYPE_ED25519: algorithm = LIBSSH2_KNOWNHOST_KEY_ED25519; name = "ssh-ed25519"; break;
+    case LIBSSH2_HOSTKEY_TYPE_RSA: algorithm = LIBSSH2_KNOWNHOST_KEY_SSHRSA; keyType = DirectHostKeyType::Rsa; break;
+    case LIBSSH2_HOSTKEY_TYPE_DSS: algorithm = LIBSSH2_KNOWNHOST_KEY_SSHDSS; keyType = DirectHostKeyType::Dss; break;
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_256: algorithm = LIBSSH2_KNOWNHOST_KEY_ECDSA_256; keyType = DirectHostKeyType::Ecdsa256; break;
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_384: algorithm = LIBSSH2_KNOWNHOST_KEY_ECDSA_384; keyType = DirectHostKeyType::Ecdsa384; break;
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_521: algorithm = LIBSSH2_KNOWNHOST_KEY_ECDSA_521; keyType = DirectHostKeyType::Ecdsa521; break;
+    case LIBSSH2_HOSTKEY_TYPE_ED25519: algorithm = LIBSSH2_KNOWNHOST_KEY_ED25519; keyType = DirectHostKeyType::Ed25519; break;
     default: fail(DirectFailureKind::NoHostKeyAlgorithm, type);
     }
+    const auto name = directHostKeyTypeName(keyType);
+    if (!name) fail(DirectFailureKind::NoHostKeyAlgorithm, type, "不支持的主机密钥类型");
     unsigned char digest[EVP_MAX_MD_SIZE], encoded[4 * EVP_MAX_MD_SIZE + 1]{};
     unsigned digestLength = 0;
     if (!EVP_Digest(key, length, digest, &digestLength, EVP_sha256(), nullptr))
@@ -98,7 +100,8 @@ void DirectSshTransport::Impl::verifyHostKey() {
     EVP_EncodeBlock(encoded, digest, static_cast<int>(digestLength));
     std::string fingerprint(reinterpret_cast<char *>(encoded));
     while (!fingerprint.empty() && fingerprint.back() == '=') fingerprint.pop_back();
-    std::string detail = std::string(name) + " SHA256:" + fingerprint;
+    fingerprint = "SHA256:" + fingerprint;
+    std::string detail = std::string(*name) + " " + fingerprint;
     diag("ssh.direct.hostkey", 0, 0, detail);
     // hostLower is already the known_hosts name (alias, or [host]:port). Do not
     // bracket it again: OpenSSH does not put_host_port a HostKeyAlias.
@@ -112,9 +115,10 @@ void DirectSshTransport::Impl::verifyHostKey() {
         if (!knownTypes.empty()) {
             detail += "; known_hosts types=";
             for (const auto &t : knownTypes) detail += t + " ";
-            detail += "; server presented=" + std::string(name);
+            detail += "; server presented=" + std::string(*name);
         }
-        fail(DirectFailureKind::HostKeyUnknown, 0, detail);
+        fail(DirectFailureKind::HostKeyUnknown, 0, detail, std::nullopt,
+             presentHostKey(hostLower, keyType, {key, length}, fingerprint));
     }
     fail(DirectFailureKind::KnownHostsParseFailed, rc, detail);
 }
