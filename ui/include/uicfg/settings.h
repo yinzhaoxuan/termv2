@@ -34,6 +34,10 @@ struct SettingsFile {
   std::optional<std::string> osc52Raw;
   bool osc52Invalid() const { return osc52Raw.has_value(); }
   Osc52Settings osc52OrDefault() const { return osc52.value_or(Osc52Settings{}); }
+  // 隐藏字段：缺省/类型不对按 true；仅在文件中存在时写回，非法原值保留
+  std::optional<bool> confirmMultilinePaste;
+  std::optional<std::string> confirmMultilinePasteRaw;
+  bool confirmMultilinePasteOrDefault() const { return confirmMultilinePaste.value_or(true); }
 };
 
 

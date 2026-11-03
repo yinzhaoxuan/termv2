@@ -26,6 +26,43 @@ int main() {
   // 粘贴换行
   CHECK(normalizePasteText("a\r\nb\nc\rd") == "a\rb\rc\rd");
   CHECK(normalizePasteText(std::string("x\0y", 3)) == "x");
+  {  // 粘贴预览：末尾换行触发确认，但不额外算空行
+    CHECK(!pastePreview("", true).needsConfirm && pastePreview("", true).message.empty());
+    CHECK(!pastePreview("单行", true).needsConfirm && pastePreview("单行", true).message.empty());
+    auto trailing = pastePreview("a\r", true);
+    CHECK(trailing.needsConfirm && trailing.message == "将粘贴 1 行、2 字节：\na");
+    CHECK(pastePreview("a\rb", true).message == "将粘贴 2 行、3 字节：\na\nb");
+    CHECK(pastePreview("a\r\r", true).message == "将粘贴 2 行、3 字节：\na\n");
+    CHECK(pastePreview("\r", true).needsConfirm && pastePreview("\r", true).message == "将粘贴 1 行、1 字节：\n");
+    CHECK(pastePreview("中\r文", true).message == "将粘贴 2 行、7 字节：\n中\n文");
+    CHECK(!pastePreview("a\rb\r", false).needsConfirm && pastePreview("a\rb\r", false).message.empty());
+
+    std::string lines, shown;
+    for (int i = 1; i <= 12; ++i) {
+      if (i > 1) lines += '\r';
+      lines += std::to_string(i);
+      if (i <= 10) shown += "\n" + std::to_string(i);
+    }
+    CHECK(pastePreview(lines, true).message == "将粘贴 12 行、26 字节：" + shown + "\n…（其余 2 行未显示）");
+    CHECK(pastePreview(lines.substr(0, 20), true).message == "将粘贴 10 行、20 字节：" + shown);
+
+    std::string cjk;
+    for (int i = 0; i < 120; ++i) cjk += "中";
+    CHECK(pastePreview(cjk + "文\r", true).message == "将粘贴 1 行、364 字节：\n" + cjk);
+    CHECK(pastePreview(cjk + "\r", true).message == "将粘贴 1 行、361 字节：\n" + cjk);
+    CHECK(pastePreview(std::string(121, 'x') + "\r", true).message == "将粘贴 1 行、122 字节：\n" + std::string(120, 'x'));
+
+    std::string controls, escaped;
+    for (char ch = 0; ch < 0x20; ++ch) {
+      if (ch == '\r' || ch == '\n') continue;
+      controls += ch; escaped += '^'; escaped += static_cast<char>(ch + '@');
+    }
+    controls += '\x7f'; controls += '\r';
+    CHECK(pastePreview(controls, true).message == "将粘贴 1 行、32 字节：\n" + escaped + "^?");
+    std::string tabs, carets;
+    for (int i = 0; i < 60; ++i) { tabs += '\t'; carets += "^I"; }
+    CHECK(pastePreview(tabs + "x\r", true).message == "将粘贴 1 行、62 字节：\n" + carets);
+  }
   CHECK(!parseCommandArg({L"it2w_shell.exe"}));
   CHECK(*parseCommandArg({L"x", L"--command", L"t.cmd a b"}) == L"t.cmd a b");
   CHECK(*parseCommandArg({L"x", L"--command=dir /s"}) == L"dir /s");
@@ -36,9 +73,49 @@ int main() {
   CHECK(!linkPrompt("file:///C:/x").canOpen && !linkPrompt("javascript:alert(1)").canOpen && !linkPrompt("http://a b").canOpen);
   // 状态覆盖层
   uishell::SessionStatus st{uishell::SessionState::Failed, 0, false, "", "认证失败"};
-  auto o = overlayFor(st);
-  CHECK(o.visible && o.showReconnect && o.text.find("认证失败") != std::string::npos);
-  st.state = uishell::SessionState::Running; CHECK(!overlayFor(st).visible);
+  auto o = paneOverlay(false, false, "", st);
+  CHECK(o.visible && o.showReconnect && o.text == "会话失败：认证失败" && o.buttonLabel == "重连");
+  st.errorText.clear();
+  CHECK(paneOverlay(false, false, "", st).text == "会话失败：未知错误");
+  st.state = uishell::SessionState::Exited; st.exitCode = 17;
+  o = paneOverlay(false, false, "", st);
+  CHECK(o.visible && o.showReconnect && o.text == "会话已退出（退出码 17）" && o.buttonLabel == "重连");
+  auto placeholder = paneOverlay(false, true, "本地终端", st);
+  CHECK(placeholder.visible && placeholder.showReconnect && placeholder.buttonLabel == "连接");
+  CHECK(placeholder.text == "未连接：本地终端。点击「连接」或按 Enter 开始");
+  CHECK(paneOverlay(false, true, "开发 SSH", st).text == "未连接：开发 SSH。点击「连接」或按 Enter 开始");
+  {
+    using S = uishell::SessionState;
+    using R = uishell::SessionRecovery;
+    uishell::SessionStatus recovery{S::Failed, 0, false, "", "VmNotRunning 启动并连接"};
+    CHECK(paneOverlay(false, false, "", recovery).buttonLabel == "重连");  // 文案不决定恢复动作
+    recovery.recovery.kind = R::StartVmAndConnect;
+    recovery.errorText = "任意错误";
+    CHECK(paneOverlay(false, false, "", recovery).buttonLabel == "启动并连接");
+    recovery.recovery = {R::ChooseAddress, {{"nic", "网卡 10.0.0.1"}}};
+    CHECK(paneOverlay(false, false, "", recovery).buttonLabel == "选择地址…");
+    struct RecoveryCase { R::Kind kind; std::string label; };
+    const RecoveryCase cases[] = {{R::None, "重连"}, {R::StartVmAndConnect, "启动并连接"}, {R::ChooseAddress, "选择地址…"}};
+    for (auto state : {S::Starting, S::Running, S::Reconnecting, S::Exited, S::Failed}) {
+      recovery.state = state;
+      for (const auto& c : cases) {
+        recovery.recovery.kind = c.kind;
+        auto normal = paneOverlay(false, false, "", recovery);
+        auto label = state == S::Failed ? c.label : "重连";
+        CHECK(normal.buttonLabel == label);
+        if (state == S::Failed || state == S::Exited) CHECK(normal.visible && normal.showReconnect);
+        else CHECK(!normal.visible && !normal.showReconnect && normal.text.empty());
+        auto pending = paneOverlay(false, true, "开发 SSH", recovery);
+        CHECK(pending.visible && pending.showReconnect && pending.buttonLabel == "连接");
+        CHECK(pending.text == "未连接：开发 SSH。点击「连接」或按 Enter 开始");
+        for (bool notStarted : {false, true}) {  // 缺失引用优先于占位与会话状态
+          auto missing = paneOverlay(true, notStarted, "开发 SSH", recovery);
+          CHECK(missing.visible && !missing.showReconnect && missing.buttonLabel == label);
+          CHECK(missing.text == "连接配置已删除（引用缺失）。请在左侧选择连接后新建会话。");
+        }
+      }
+    }
+  }
   CHECK(stateLabel(uishell::SessionState::Reconnecting) == "正在重连");
   {  // PERF-01：标题变化不刷树；仅进出运行集合才 refreshTree
     using S = uishell::SessionState;

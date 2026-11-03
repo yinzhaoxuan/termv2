@@ -70,9 +70,22 @@ std::string formatTransportFailure(std::string_view category, std::string_view t
     if (text.empty()) return std::string(category);
     return std::string(category) + ": " + std::string(text);
 }
+uishell::SessionRecovery hyperVRecovery(it2w::HvFailure failure, const std::vector<it2w::HvCandidate> &candidates) {
+    uishell::SessionRecovery out;
+    if (failure == it2w::HvFailure::VmNotRunning) out.kind = uishell::SessionRecovery::StartVmAndConnect;
+    else if (failure == it2w::HvFailure::AddressAmbiguous) {
+        out.kind = uishell::SessionRecovery::ChooseAddress;
+        for (const auto &c : candidates) out.choices.push_back({c.adapterId, c.adapterName + " " + c.address});
+    }
+    return out;
+}
 std::string formatLocalShellStartError(std::string_view exeUtf8) {
     const std::string path = exeUtf8.empty() ? std::string("cmd.exe") : std::string(exeUtf8);
     return "本地 shell 启动失败：" + path + "。请确认该程序存在且可执行。";
+}
+std::string formatLocalPathError(LocalPathError error, std::string_view pathUtf8) {
+    return std::string(error == LocalPathError::ExecutableNotFound ? "未找到程序：" : "工作目录不存在：") +
+           std::string(pathUtf8);
 }
 std::string terminalLog(uint64_t attempt, const TerminalStatus &s, uint64_t coreDropped, uint64_t queueDropped) {
     return "[pane] session end attempt=" + std::to_string(attempt) + " state=" + (s.failed ? "Failed" : "Exited") +

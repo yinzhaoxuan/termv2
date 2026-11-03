@@ -1,5 +1,8 @@
 #include "uicfg/shell_logic.h"
+#include <algorithm>
 #include <cctype>
+#include <string_view>
+#include <utility>
 namespace uicfg {
 static std::string up(std::string s) { for (auto& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); return s; }
 static std::optional<std::string> normKey(const std::string& k) {
@@ -53,6 +56,63 @@ std::string normalizePasteText(const std::string& in) {
   }
   return out;
 }
+
+constexpr size_t kPastePreviewMaxLines = 10, kPastePreviewMaxCodePoints = 120;
+
+static size_t utf8SequenceBytes(std::string_view text, size_t i) {
+  size_t end = i + 1;
+  while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) ++end;
+  return end - i;
+}
+
+static std::string renderControlByte(unsigned char ch) {
+  return {'^', ch == 0x7f ? '?' : static_cast<char>(ch + '@')};
+}
+
+static std::string previewLine(std::string_view line) {
+  std::string out;
+  size_t chars = 0;
+  for (size_t i = 0; i < line.size();) {
+    auto ch = static_cast<unsigned char>(line[i]);
+    bool control = ch < 0x20 || ch == 0x7f;
+    size_t width = control ? 2 : 1;  // 上限按转义后的可见码点计算
+    if (chars + width > kPastePreviewMaxCodePoints) break;
+    if (control) {
+      out += renderControlByte(ch);
+      ++i;
+    } else {
+      size_t bytes = utf8SequenceBytes(line, i);
+      out.append(line.substr(i, bytes));
+      i += bytes;
+    }
+    chars += width;
+  }
+  return out;
+}
+
+// 按 CR 分行，末尾 CR 不额外算空行；空串为 0 行。
+static size_t countPastedLines(std::string_view text) {
+  size_t lines = std::count(text.begin(), text.end(), '\r');
+  if (!text.empty() && text.back() != '\r') ++lines;
+  return lines;
+}
+
+PastePreview pastePreview(const std::string& text, bool confirmEnabled) {
+  if (!confirmEnabled || text.find('\r') == std::string::npos) return {false, {}};
+  size_t lines = countPastedLines(text);
+  std::string message = "将粘贴 " + std::to_string(lines) + " 行、" + std::to_string(text.size()) + " 字节：";
+  size_t start = 0, shown = 0;
+  while (start < text.size() && shown < kPastePreviewMaxLines) {
+    size_t end = text.find('\r', start);
+    if (end == std::string::npos) end = text.size();
+    message += '\n';
+    message += previewLine(std::string_view(text).substr(start, end - start));
+    start = end + 1;
+    ++shown;
+  }
+  if (lines > shown) message += "\n…（其余 " + std::to_string(lines - shown) + " 行未显示）";
+  return {true, std::move(message)};
+}
 LinkPrompt linkPrompt(const std::string& url) {
   auto c = checkLink(url);
   if (c.decision == LinkDecision::Allow)
@@ -69,11 +129,23 @@ std::string stateLabel(uishell::SessionState s) {
   }
   return "";
 }
-PaneOverlay overlayFor(const uishell::SessionStatus& st) {
+static std::string recoveryButton(const uishell::SessionStatus& st) {
+  if (st.state != uishell::SessionState::Failed) return "重连";
+  switch (st.recovery.kind) {
+    case uishell::SessionRecovery::StartVmAndConnect: return "启动并连接";
+    case uishell::SessionRecovery::ChooseAddress: return "选择地址…";
+    case uishell::SessionRecovery::None: return "重连";
+  }
+  return "重连";
+}
+PaneOverlay paneOverlay(bool missingRef, bool notStarted, const std::string& connName, const uishell::SessionStatus& st) {
   using S = uishell::SessionState;
-  if (st.state == S::Failed) return {true, true, "会话失败：" + (st.errorText.empty() ? std::string("未知错误") : st.errorText)};
-  if (st.state == S::Exited) return {true, true, "会话已退出（退出码 " + std::to_string(st.exitCode) + "）"};
-  return {false, false, {}};
+  auto button = recoveryButton(st);
+  if (missingRef) return {true, false, "连接配置已删除（引用缺失）。请在左侧选择连接后新建会话。", button};
+  if (notStarted) return {true, true, "未连接：" + connName + "。点击「连接」或按 Enter 开始", "连接"};
+  if (st.state == S::Failed) return {true, true, "会话失败：" + (st.errorText.empty() ? std::string("未知错误") : st.errorText), button};
+  if (st.state == S::Exited) return {true, true, "会话已退出（退出码 " + std::to_string(st.exitCode) + "）", button};
+  return {false, false, {}, button};
 }
 
 bool statusAffectsSessionTree(uishell::SessionState prev, uishell::SessionState next) {

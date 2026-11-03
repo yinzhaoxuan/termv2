@@ -58,7 +58,7 @@ std::string buildWindowsCommandLine(const std::vector<std::string> &argv);
 std::vector<std::string> parseWindowsCommandLine(const std::string &cmd);
 
 // GAP-01：快照叶子名带进程号，避免崩溃留下的 ssh-1-1.conf 挡住下次启动，也避免多窗格互撞。
-// 形式 ssh-<pid>-<sid>-<aid>.conf。这里不删残留；启动时清理仍待配置目录锁接入。
+// 形式 ssh-<pid>-<sid>-<aid>.conf。启动时持有配置目录锁后，由 uicfg::cleanupStaleSnapshots 清理残留（uicfg/snapshot_cleanup.h）。
 inline std::string sshSnapshotLeafName(uint64_t processId, uint64_t sessionId, uint64_t attemptId) {
     return "ssh-" + std::to_string(processId) + "-" + std::to_string(sessionId) + "-" +
            std::to_string(attemptId) + ".conf";

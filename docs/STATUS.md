@@ -2,6 +2,20 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
+## 2026-11-04：A5、A1 余量、DS-2、B1–B5（工作区，未提交）
+
+设计：[DS-2-启动描述与B批.md](DS-2-启动描述与B批.md)。基线 `a06bbf6`。
+
+- **A5**：加载 `connections.json` 时逐条校验（端口、超时 1–600、ID 为空或重复、分组不存在、组 ID 重复）。非整数或越界的端口/超时记成 0 交给校验报错，不再让整个文件变成 Corrupt，也不再截断成别的端口。无效连接仍显示，启动时报「连接配置无效（字段）：说明」，状态栏提示条数。
+- **A1 余量**：拿到配置目录锁后，`cleanupStaleSnapshots` 删除 `ssh/snapshots` 下残留的 `ssh-<n>-<n>[-<n>].conf`（只删普通文件，不跟随符号链接，不进子目录）。
+- **DS-2**：`uicfg::describeLaunch` 统一给出 Local / SSH / Hyper-V / Error 四种启动描述；主界面的 `resolveLocal`、`resolveHyperV`、`resolveSsh` 都由它派生。
+- **B2 / B3**：保存的本地连接（如 PowerShell）真正拉起，传入程序、参数、工作目录（null → 用户主目录）和环境 inherit/set/unset；程序或目录不存在时同步 Failed，可重连。store 完整读写 `environment` 与 `closePolicy`（未知值原样保留，校验拒绝启动）。
+- **B1**：主界面注入 `resolveHyperV`，不再把 `fallbackHost` 当手动地址直连。解析中标题为「正在解析 Hyper-V 地址…」。`SessionStatus.recovery` 以结构化字段给出「启动并连接」（VmNotRunning）或「选择地址…」（AddressAmbiguous，带 adapterId），覆盖只作用于这一次重连。普通连接不会启动 VM。
+- **B4**：恢复工作区的窗格全部为「未连接」占位，点「连接」、按 Enter 或单击才启动；首次运行仍自动开本地终端。
+- **B5**：粘贴文本含换行时先预览确认（最多 10 行 × 120 码点，控制字符显示为 `^X`）；确定只发送一次、不补回车，取消发送零字节。隐藏设置 `confirmMultilinePaste`（默认 true）。
+- macOS 本机 ctest **107/107**（含 PANE-11；新增 uicfg_snapshot_cleanup_tests、uicfg_launch_tests、uicfg_compose_environment_tests）。
+- **未验证**：`ui/shell_win32/main.cpp`、`win32_pane_backend.cpp` 没有在本机编译（无 MinGW），需要 MinGW 交叉编译后再在 Windows 手测：从连接树启动 PowerShell（空格和中文参数、显式/null cwd、环境 set/unset）、程序或目录不存在的错误；Hyper-V 运行中 / 已关机 → 启动并连接 / 多候选 → 选择地址 / 回退地址标题；恢复四个 SSH 窗格后 `ssh.exe` 进程数为 0；多行粘贴确认与取消；启动时残留快照被清掉。
+
 ## 2026-11-03：REVIEW 增补二 D-5
 
 - ConPTY 写线程在协议 Reply 写成功后不再无条件调用 `OutputDebugStringA`。

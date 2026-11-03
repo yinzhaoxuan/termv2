@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 namespace uishell {
 
 struct PixelRect { int x, y, w, h; };
@@ -14,12 +15,18 @@ struct CellSize { int w, h; };   // physical px, from renderer GridMetrics::from
 struct CaretRect { int x, y, w, h; bool valid; };      // renderer caret_rect_px(), client px
 
 enum class SessionState { Starting, Running, Reconnecting, Exited, Failed };
+struct AddressChoice { std::string adapterId; std::string label; };  // 「<网卡名> <地址>」
+struct SessionRecovery {
+  enum Kind { None, StartVmAndConnect, ChooseAddress } kind = None;
+  std::vector<AddressChoice> choices;  // ChooseAddress：按后端给的顺序
+};
 struct SessionStatus {
   SessionState state;
   int exitCode;              // valid when Exited
   bool hasForegroundJob;     // informational only; 12.3 confirm uses state (Running/Starting/Reconnecting => confirm)
   std::string title;         // already rate-limited (<=10/s)
   std::string errorText;     // classified error for Failed (T07 categories)
+  SessionRecovery recovery; // 只在 Failed 时有意义
 };
 
 // ---- 滚动历史搜索（草案 /workspace/qa/itcore_search-草案-v0.2.md §1.6 映射；架构师拍板 v0.1：纯文本、无正则）----

@@ -11,10 +11,21 @@
 #include "hyperv_transport.h"
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace it2app {
 
+struct LocalLaunchOptions {
+    std::wstring executable;  // 空 = 默认 shell
+    std::vector<std::wstring> arguments;
+    std::optional<std::wstring> workingDirectory;
+    std::vector<std::pair<std::wstring, std::wstring>> environment;  // 空 = 继承
+};
+
 struct PaneBackendConfig {
+    // 非空 connectionId 先调；nullopt 且无错误表示非本地连接，继续 Hyper-V / SSH。
+    std::function<std::optional<LocalLaunchOptions>(const std::string &connectionId, std::string *error)> resolveLocal;
     // connectionId → SSH 启动参数（由 UI 从 uicfg Connection 构造）。返回 nullopt 时 *error 给出原因，
     // 窗格进入 Failed。接口签名里 factory 只有 connectionId，所以解析器在构造工厂时注入。
     std::function<std::optional<it2w::SshLaunchOptions>(const std::string &connectionId, std::string *error)> resolveSsh;

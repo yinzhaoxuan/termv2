@@ -1,5 +1,6 @@
 #include "uicfg/store.h"
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <nlohmann/json.hpp>
 #ifdef _WIN32
@@ -28,6 +29,23 @@ const char* authTo(AuthMode m) {
 }
 json nullable(const std::optional<std::string>& v) { return v ? json(*v) : json(nullptr); }
 
+// 缺键取 fallback；int 范围内的 JSON 整数取原值；其它取 0，仅用于 0 非法的字段（端口、超时）。
+int intFieldOrZero(const json& j, const char* key, int fallback) {
+  auto it = j.find(key);
+  if (it == j.end()) return fallback;
+  // 先区分无符号整数，避免超大值在 get<int>() 时截断。
+  if (it->is_number_unsigned()) {
+    auto value = it->get<json::number_unsigned_t>();
+    return value <= (std::numeric_limits<int>::max)() ? static_cast<int>(value) : 0;
+  }
+  if (it->is_number_integer()) {
+    auto value = it->get<json::number_integer_t>();
+    if (value >= (std::numeric_limits<int>::min)() && value <= (std::numeric_limits<int>::max)())
+      return static_cast<int>(value);
+  }
+  return 0;
+}
+
 Connection connFrom(const json& j) {
   Connection c;
   c.id = j.at("id"); c.name = j.at("name"); c.groupId = j.value("groupId", "");
@@ -43,7 +61,7 @@ Connection connFrom(const json& j) {
     else if (mode == "hyperv") ep.mode = EndpointMode::HyperV;
     else throw std::runtime_error("未知 endpoint.mode: " + mode);
     ep.host = opt<std::string>(e, "host");
-    ep.port = e.value("port", 22);
+    ep.port = intFieldOrZero(e, "port", 22);
     if (e.contains("hyperv") && !e.at("hyperv").is_null()) {
       const auto& h = e.at("hyperv");
       HyperVEndpoint hv;
@@ -61,7 +79,7 @@ Connection connFrom(const json& j) {
     ss.user = s.at("user");
     ss.authMode = authFrom(s.at("auth").at("mode"));
     ss.identityFile = opt<std::string>(s.at("auth"), "identityFile");
-    ss.connectTimeoutSeconds = s.value("connectTimeoutSeconds", 15);
+    ss.connectTimeoutSeconds = intFieldOrZero(s, "connectTimeoutSeconds", 15);
     c.ssh = ss;
   } else if (kind == "local") {
     c.kind = ConnectionKind::Local;
@@ -70,6 +88,13 @@ Connection connFrom(const json& j) {
     ls.executable = l.at("executable");
     ls.arguments = l.value("arguments", std::vector<std::string>{});
     ls.workingDirectory = opt<std::string>(l, "workingDirectory");
+    if (l.contains("environment")) {
+      const auto& e = l.at("environment");
+      ls.environment.inherit = e.value("inherit", true);
+      ls.environment.set = e.value("set", std::map<std::string, std::string>{});
+      ls.environment.unset = e.value("unset", std::vector<std::string>{});
+    }
+    ls.closePolicy = l.value("closePolicy", "terminateSessionTree");
     c.local = ls;
   } else {
     throw std::runtime_error("未知 kind: " + kind);
@@ -98,8 +123,9 @@ json connTo(const Connection& c) {
     j["kind"] = "local";
     j["local"] = {{"executable", c.local->executable}, {"arguments", c.local->arguments},
                   {"workingDirectory", nullable(c.local->workingDirectory)},
-                  {"environment", {{"inherit", true}, {"set", json::object()}, {"unset", json::array()}}},
-                  {"closePolicy", "terminateSessionTree"}};
+                  {"environment", {{"inherit", c.local->environment.inherit},
+                                   {"set", c.local->environment.set}, {"unset", c.local->environment.unset}}},
+                  {"closePolicy", c.local->closePolicy}};
   }
   return j;
 }
@@ -172,7 +198,7 @@ LoadResult loadConnections(const fs::path& file) {
   if (!fs::exists(file, ec)) { r.status = LoadStatus::NotFound; return r; }
   std::string why;
   switch (parseFile(file, r.data, why)) {
-    case Parse::Ok: r.status = LoadStatus::Ok; return r;
+    case Parse::Ok: r.status = LoadStatus::Ok; r.validation = validateConnectionsFile(r.data); return r;
     case Parse::Newer: r.status = LoadStatus::NewerSchema; r.readOnly = true; r.detail = why; return r;
     case Parse::Bad: break;
   }
@@ -181,6 +207,7 @@ LoadResult loadConnections(const fs::path& file) {
   std::string why2;
   if (fs::exists(bak, ec) && parseFile(bak, r.data, why2) == Parse::Ok) {
     r.status = LoadStatus::RecoveredBackup;
+    r.validation = validateConnectionsFile(r.data);
     return r;
   }
   r.status = LoadStatus::Corrupt;

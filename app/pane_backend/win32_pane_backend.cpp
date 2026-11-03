@@ -33,6 +33,8 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
+#include <variant>
 
 using namespace it2w;
 
@@ -100,6 +102,26 @@ std::string toUtf8(std::wstring_view w) {
     std::string s(size_t(n > 0 ? n : 0), '\0');
     if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), s.data(), n, nullptr, nullptr);
     return s;
+}
+
+std::optional<std::wstring> resolveLocalExecutable(std::wstring executable) {
+    if (!std::filesystem::path(executable).is_absolute()) {
+        DWORD size = SearchPathW(nullptr, executable.c_str(), L".exe", 0, nullptr, nullptr);
+        if (!size) return std::nullopt;
+        std::wstring path(size, L'\0');
+        DWORD n = SearchPathW(nullptr, executable.c_str(), L".exe", size, path.data(), nullptr);
+        if (!n || n >= size) return std::nullopt;
+        path.resize(n);
+        executable = std::move(path);
+    }
+    DWORD attrs = GetFileAttributesW(executable.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) return std::nullopt;
+    return executable;
+}
+
+bool localDirectoryExists(const std::wstring &directory) {
+    DWORD attrs = GetFileAttributesW(directory.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 SshTransportFactory makeSshFactory(bool direct, std::string *err) {
@@ -226,10 +248,14 @@ public:
     void clearSearch() override;
 
 private:
+    struct HyperVResolution { std::optional<HyperVLaunch> launch; std::string error; };
+    std::optional<HyperVResolution> resolveHyperVNow();
     void applyFont(FontSpec f);         // UI 线程：重建字体 → GridMetrics → 像素尺寸 → 网格 → generation
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
     LRESULT onMessage(UINT, WPARAM, LPARAM);
     bool startSession();
+    std::variant<LaunchSpec, std::string> buildLocalSpec(std::optional<LocalLaunchOptions> local, GridSize gs);
+    bool failSyncStart(std::string text);
     void fail(std::string text);
     void pushCellPixelSize();          // GridMetrics → itcore_set_cell_pixel_size
     void pump(); // 单轮预算；绝不派发消息/调用 PaneEvents
@@ -338,6 +364,7 @@ private:
     uishell::SessionStatus status_;
     std::optional<SshExitInfo> sshExit_;
     std::optional<HvAction> hvResult_;   // T09 解析结果（Fail 时作为错误文本）
+    std::optional<HyperVResolution> pendingHyperV_;
     std::optional<uint32_t> localExit_;
     bool focused_ = false, closing_ = false, finished_ = false, skipChar_ = false;
     bool pendingStart_ = false;             // M17：网格仍是 20×5 下限时推迟 startSession（ConPTY 过小会丢启动输出）
@@ -415,7 +442,46 @@ bool Win32PaneBackend::attach(void *parentHwnd, const uishell::PixelRect &rc, fl
     return true;
 }
 
+std::variant<LaunchSpec, std::string> Win32PaneBackend::buildLocalSpec(std::optional<LocalLaunchOptions> local, GridSize gs) {
+    LaunchSpec spec;
+    spec.executable = local ? local->executable : cfg_->localShell;
+    if (local) {
+        spec.arguments = std::move(local->arguments);
+        spec.workingDirectory = std::move(local->workingDirectory);
+        spec.environment = std::move(local->environment);
+    }
+    if (spec.executable.empty()) {
+        wchar_t buf[MAX_PATH];
+        DWORD n = GetEnvironmentVariableW(L"ComSpec", buf, MAX_PATH);
+        spec.executable = (n > 0 && n < MAX_PATH) ? std::wstring(buf, n) : L"C:\\Windows\\System32\\cmd.exe";
+    }
+    auto executable = resolveLocalExecutable(spec.executable);
+    if (!executable)
+        return formatLocalPathError(LocalPathError::ExecutableNotFound, toUtf8(spec.executable));
+    spec.executable = std::move(*executable);
+    if (spec.workingDirectory && !localDirectoryExists(*spec.workingDirectory))
+        return formatLocalPathError(LocalPathError::WorkingDirectoryNotFound, toUtf8(*spec.workingDirectory));
+    if (connId_.empty() && localCommand_) {
+        auto plan = planLocalShellCommand(spec.executable, *localCommand_);
+        if (!plan) return std::string("--command 含换行，已拒绝");
+        spec.arguments = std::move(plan->args);
+        spec.rawArgumentTail = std::move(plan->rawTail);
+    }
+    spec.initialSize = gs;
+    return spec;
+}
+
+std::optional<Win32PaneBackend::HyperVResolution> Win32PaneBackend::resolveHyperVNow() {
+    if (!cfg_->resolveHyperV) return std::nullopt;
+    HyperVResolution result;
+    result.launch = cfg_->resolveHyperV(connId_, &result.error);
+    if (!result.launch && result.error.empty()) return std::nullopt;
+    return result;
+}
+
 bool Win32PaneBackend::startSession() {
+    auto hyperV = std::exchange(pendingHyperV_, std::nullopt);
+    { std::lock_guard l(statusMu_); status_.recovery = {}; }
     itcore_options opt{};
     opt.abi_version = ITCORE_ABI_VERSION;
     opt.struct_size = sizeof(opt);
@@ -423,7 +489,9 @@ bool Win32PaneBackend::startSession() {
     opt.rows = resize_.dims().rows;
     opt.scrollback_lines = cfg_->scrollbackLines;
     opt.memory_limit_bytes = cfg_->memoryLimitBytes;
-    if (itcore_create(&opt, &core_) != 0 || !core_) { core_ = nullptr; fail("itcore_create 失败"); return false; }
+    if (itcore_create(&opt, &core_) != 0 || !core_) {
+        core_ = nullptr; fail("itcore_create 失败"); return false;
+    }
     itcore_resize(core_, resize_.dims().cols, resize_.dims().rows, resize_.generation());
     // 首次 feed 前：GridMetrics 单元格像素尺寸（CSI 14/16 t）与配置色（OSC 10/11/12/4 查询与 104/110–112 恢复）
     pushCellPixelSize();
@@ -459,7 +527,17 @@ bool Win32PaneBackend::startSession() {
             for (const auto &hex : sniffer->observe(bytes)) pumpLog(nullptr, ("[pane] osc52 out hex=" + hex).c_str());
         };
     }
-    if (connId_.empty()) {
+    std::optional<LocalLaunchOptions> local;
+    if (!connId_.empty() && cfg_->resolveLocal) {
+        std::string err;
+        local = cfg_->resolveLocal(connId_, &err);
+        if (!err.empty()) return failSyncStart(std::move(err));
+    }
+    if (!hyperV && !connId_.empty() && !local) hyperV = resolveHyperVNow();
+    if (connId_.empty() || local) {
+        auto result = buildLocalSpec(std::move(local), gs);
+        if (auto *error = std::get_if<std::string>(&result)) return failSyncStart(std::move(*error));
+        const auto &spec = std::get<LaunchSpec>(result);
         TransportCallbacks cb;
         cb.onStateChanged = onState;
         cb.onOutputAvailable = onOut;
@@ -470,69 +548,54 @@ bool Win32PaneBackend::startSession() {
         cb.onOutputTap = outputTap;
         auto lt = std::make_unique<LocalT>();
         lt->t = std::make_unique<ConPtyTransport>(cb);
-        LaunchSpec spec;
-        spec.executable = cfg_->localShell;
-        if (spec.executable.empty()) {
-            wchar_t buf[MAX_PATH];
-            DWORD n = GetEnvironmentVariableW(L"ComSpec", buf, MAX_PATH);
-            spec.executable = (n > 0 && n < MAX_PATH) ? std::wstring(buf, n) : L"C:\\Windows\\System32\\cmd.exe";
-        }
-        if (localCommand_) {
-            auto plan = planLocalShellCommand(spec.executable, *localCommand_);
-            if (!plan) { fail("--command 含换行，已拒绝"); return false; }
-            spec.arguments = std::move(plan->args);
-            spec.rawArgumentTail = std::move(plan->rawTail);
-        }
-        spec.initialSize = gs;  // environment 为空 → 继承
         auto *raw = lt->t.get();
         transport_ = std::move(lt);
         shared_->transport = transport_;
-        if (!raw->start(SessionId{sessionId_}, AttemptId{attempt_}, spec)) {
-            auto outcome = settleSyncStart(SyncStart::PreStartFailed, formatLocalShellStartError(toUtf8(spec.executable)));
-            if (outcome.failed) fail(std::move(outcome.error));
-            return !outcome.failed;
-        }
-    } else if (std::string herr; cfg_->resolveHyperV && [&] {
-                   auto h = cfg_->resolveHyperV(connId_, &herr);
-                   if (!h) return !herr.empty();   // 有错误文本：是 Hyper-V 连接但配置无效
-                   auto id = normalizeVmId(h->policy.vmId);
-                   if (!id) { herr = "Hyper-V VM ID 格式无效"; return true; }
-                   h->policy.vmId = *id;
-                   h->ssh.initialSize = gs;
-                   HyperVCallbacks cb;
-                   cb.onStateChanged = onState;
-                   cb.onOutputAvailable = onOut;
-                   cb.onFinished = [ws](SessionId, AttemptId, const SshExitInfo &x) {
-                       if (auto sh = ws.lock()) postTo<P>(*sh->queue, [x](P &p) { p.sshExit_ = x; });
-                   };
-                   cb.onDiagnostic = onDiag;
-                   cb.onOutputTap = outputTap;
-                   cb.onResolved = [ws](SessionId, AttemptId, const HvAction &a) {
-                       if (auto sh = ws.lock()) postTo<P>(*sh->queue, [a](P &p) {
-                           p.hvResult_ = a;
-                           // HyperVTransport 已将 SnapshotError 展平成文本；这里仍按窗格固定模式标注。
-                           constexpr std::string_view snapshotPrefix = "SSH 配置快照无效：";
-                           if (p.sshDirect_ && a.kind == HvAction::Fail && a.text.starts_with(snapshotPrefix))
-                               p.hvResult_->text.replace(0, snapshotPrefix.size(), "SSH 配置无效（直连）：");
-                           if (a.kind == HvAction::Connect) {
-                               std::lock_guard l(p.statusMu_);
-                               p.status_.title = (a.fallback ? "手动地址 " : "Hyper-V ") + a.host;
-                           }
-                           if (a.kind == HvAction::Connect) p.publishStatus();
-                       });
-                   };
-                   auto factory = makeSshFactory(sshDirect_, &herr);
-                   if (!factory) return true;  // 已识别为 Hyper-V；由外层 fail(herr)，不能继续走 SSH 分支
-                   auto ht = std::make_unique<HyperVT>();
-                   ht->t = std::make_unique<HyperVTransport>(cb, std::move(factory));
-                   auto *raw = ht->t.get();
-                   transport_ = std::move(ht);
-                   shared_->transport = transport_;
-                   raw->start(SessionId{sessionId_}, AttemptId{attempt_}, std::move(*h));
-                   herr.clear();
-                   return true;
-               }()) {
-        if (!herr.empty()) { fail(herr); return false; }
+        if (!raw->start(SessionId{sessionId_}, AttemptId{attempt_}, spec))
+            return failSyncStart(formatLocalShellStartError(toUtf8(spec.executable)));
+    } else if (hyperV) {
+        if (!hyperV->error.empty()) { fail(hyperV->error); return false; }
+        auto h = std::move(*hyperV->launch);
+        { std::lock_guard l(statusMu_); status_.title = "正在解析 Hyper-V 地址…"; }
+        publishStatus();
+        auto id = normalizeVmId(h.policy.vmId);
+        if (!id) { fail("Hyper-V VM ID 格式无效"); return false; }
+        h.policy.vmId = *id;
+        h.ssh.initialSize = gs;
+        HyperVCallbacks cb;
+        cb.onStateChanged = onState;
+        cb.onOutputAvailable = onOut;
+        cb.onFinished = [ws](SessionId, AttemptId, const SshExitInfo &x) {
+            if (auto sh = ws.lock()) postTo<P>(*sh->queue, [x](P &p) { p.sshExit_ = x; });
+        };
+        cb.onDiagnostic = onDiag;
+        cb.onOutputTap = outputTap;
+        cb.onResolved = [ws](SessionId, AttemptId, const HvAction &a) {
+            if (auto sh = ws.lock()) postTo<P>(*sh->queue, [a](P &p) {
+                p.hvResult_ = a;
+                // HyperVTransport 已将 SnapshotError 展平成文本；这里仍按窗格固定模式标注。
+                constexpr std::string_view snapshotPrefix = "SSH 配置快照无效：";
+                if (p.sshDirect_ && a.kind == HvAction::Fail && a.text.starts_with(snapshotPrefix))
+                    p.hvResult_->text.replace(0, snapshotPrefix.size(), "SSH 配置无效（直连）：");
+                if (a.kind == HvAction::Connect) {
+                    std::lock_guard l(p.statusMu_);
+                    p.status_.title = (a.fallback ? "手动地址 " : "Hyper-V ") + a.host;
+                } else if (a.kind == HvAction::Fail) {
+                    std::lock_guard l(p.statusMu_);
+                    p.status_.recovery = hyperVRecovery(a.failure, a.candidates);
+                }
+                if (a.kind == HvAction::Connect) p.publishStatus();
+            });
+        };
+        std::string err;
+        auto factory = makeSshFactory(sshDirect_, &err);
+        if (!factory) { fail(err); return false; }
+        auto ht = std::make_unique<HyperVT>();
+        ht->t = std::make_unique<HyperVTransport>(cb, std::move(factory));
+        auto *raw = ht->t.get();
+        transport_ = std::move(ht);
+        shared_->transport = transport_;
+        raw->start(SessionId{sessionId_}, AttemptId{attempt_}, std::move(h));
     } else {
         std::string err;
         std::optional<SshLaunchOptions> o = cfg_->resolveSsh ? cfg_->resolveSsh(connId_, &err) : std::nullopt;
@@ -555,13 +618,16 @@ bool Win32PaneBackend::startSession() {
         shared_->transport = transport_;
         if (auto se = raw->start(SessionId{sessionId_}, AttemptId{attempt_}, *o)) {
             const bool direct = raw->mode() == SshTransportMode::Direct;
-            auto outcome = settleSyncStart(SyncStart::PreStartFailed,
-                                            formatSshPreStartError(direct, se->kind, se->field, se->reason));
-            if (outcome.failed) fail(std::move(outcome.error));
-            return !outcome.failed;
+            return failSyncStart(formatSshPreStartError(direct, se->kind, se->field, se->reason));
         }
     }
     return true;
+}
+
+bool Win32PaneBackend::failSyncStart(std::string text) {
+    auto outcome = settleSyncStart(SyncStart::PreStartFailed, std::move(text));
+    if (outcome.failed) fail(std::move(outcome.error));
+    return !outcome.failed;
 }
 
 void Win32PaneBackend::fail(std::string text) {
@@ -985,6 +1051,8 @@ void Win32PaneBackend::reconnect() {
     vp_.toBottom();
     ++attempt_;
     { std::lock_guard l(statusMu_); status_ = {uishell::SessionState::Starting, 0, false, {}, {}}; }
+    // UI 的一次性覆盖只在 reconnect 调用期间有效；即使等网格变大，也先同步取好启动参数。
+    pendingHyperV_ = connId_.empty() ? std::nullopt : resolveHyperVNow();
     queue_->setWake([h] { PostMessageW(h, WM_PANE_WAKE, 0, 0); });
     publishStatus();
     // 重连时窗口通常已有真实尺寸；若仍卡在下限则继续推迟

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -28,11 +29,13 @@
 
 #include "uicfg/close_confirm.h"
 #include "uicfg/layout_ops.h"
+#include "uicfg/launch.h"
 #include "uicfg/reconnect.h"
 #include "uicfg/session_tree.h"
 #include "uicfg/settings.h"
 #include "uicfg/shell_logic.h"
 #include "uicfg/shell_models.h"
+#include "uicfg/snapshot_cleanup.h"
 #include "uicfg/store.h"
 #include "uicfg/tab_model.h"
 #include "uicfg/workspace.h"
@@ -49,6 +52,12 @@ using namespace uicfg;
 using uishell::SessionState;
 
 namespace {
+
+void appendNote(std::string& note, const std::string& text) {
+  if (text.empty()) return;
+  if (!note.empty()) note += "；";
+  note += text;
+}
 
 // ---------- UTF-8 / UTF-16 ----------
 std::wstring W(const std::string& s) {
@@ -83,6 +92,13 @@ struct PaneHost {
   uishell::SessionStatus status{SessionState::Starting, 0, false, "", ""};
   PaneAttempts attempts;
   bool missingRef = false;  // 恢复布局时连接已删除
+  bool notStarted = false;
+};
+
+struct HvOverride {
+  std::string connectionId;
+  bool startIfOff = false;
+  std::optional<std::string> adapterId;
 };
 
 struct App {
@@ -112,6 +128,7 @@ struct App {
   struct { bool active = false; std::vector<int> path; Rect splitArea; } divDrag;
   bool imeComposing = false;
   uishell::PaneBackendFactory factory;
+  std::optional<HvOverride> hvOverride;
   bool skipChar = false;
   bool quitting = false;
   UINT dpi = 96;
@@ -207,12 +224,12 @@ void showOldAttempt(PaneHost& p) {
 
 void positionOverlay(PaneHost& p) {
   RECT rc; GetClientRect(p.host, &rc);
-  auto ov = p.missingRef ? PaneOverlay{true, false, "连接配置已删除（引用缺失）。请在左侧选择连接后新建会话。"}
-                         : overlayFor(p.status);
+  auto ov = paneOverlay(p.missingRef, p.notStarted, connName(p.connectionId), p.status);
   ShowWindow(p.overlay, ov.visible ? SW_SHOW : SW_HIDE);
   ShowWindow(p.reconnectBtn, ov.showReconnect ? SW_SHOW : SW_HIDE);
   if (!ov.visible) return;
   SetWindowTextW(p.overlay, W(ov.text).c_str());
+  SetWindowTextW(p.reconnectBtn, W(ov.buttonLabel).c_str());
   SetWindowPos(p.overlay, HWND_TOP, px(16), px(16), std::max(0L, rc.right - px(32)), px(60), 0);
   SetWindowPos(p.reconnectBtn, HWND_TOP, px(16), px(84), px(96), px(28), 0);
 }
@@ -430,6 +447,7 @@ void onPaneStatus(const std::string& paneId, const uishell::SessionStatus& st) {
 }
 
 void startSession(PaneHost& p) {
+  p.notStarted = false;
   if (auto* c = findConn(p.connectionId)) g->snaps.onSessionStarted(p.paneId, *c);  // 启动时快照
   else if (p.connectionId.empty()) { Connection local; local.name = "本地终端"; local.kind = ConnectionKind::Local; g->snaps.onSessionStarted(p.paneId, local); }
   uishell::PaneEvents ev;
@@ -466,9 +484,10 @@ void startSession(PaneHost& p) {
 
 LRESULT CALLBACK PaneHostProc(HWND, UINT, WPARAM, LPARAM);
 
-PaneHost& createPane(const std::string& paneId, const std::string& connectionId, bool missingRef) {
+enum class PaneStart { Now, Placeholder };
+PaneHost& createPane(const std::string& paneId, const std::string& connectionId, bool missingRef, PaneStart start) {
   auto p = std::make_unique<PaneHost>();
-  p->paneId = paneId; p->connectionId = connectionId; p->missingRef = missingRef;
+  p->paneId = paneId; p->connectionId = connectionId; p->missingRef = missingRef; p->notStarted = start == PaneStart::Placeholder;
   p->host = CreateWindowExW(0, kPaneHostClass, L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                             0, 0, 10, 10, g->main, nullptr, g->inst, nullptr);
   SetWindowLongPtrW(p->host, GWLP_USERDATA, (LONG_PTR)new std::string(paneId));
@@ -485,7 +504,8 @@ PaneHost& createPane(const std::string& paneId, const std::string& connectionId,
   SendMessageW(p->reconnectBtn, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
   PaneHost& ref = *p;
   g->panes[paneId] = std::move(p);
-  if (!missingRef) startSession(ref);
+  if (!missingRef && start == PaneStart::Now) startSession(ref);
+  else positionOverlay(ref);
   return ref;
 }
 
@@ -502,8 +522,17 @@ void destroyPane(const std::string& paneId) {
   g->panes.erase(it);
 }
 
+bool startPlaceholder(PaneHost& p) {
+  if (!p.notStarted || p.missingRef) return false;
+  startSession(p);
+  focusPane(p.paneId);
+  refreshTree();
+  return true;
+}
+
 void reconnectPane(PaneHost& p) {
   if (p.missingRef) return;
+  if (startPlaceholder(p)) return;
   if (p.backend) {
     p.backend->reconnect();  // 后端：新 core + 进程，attempt +1，保留上一 attempt 只读文本
     p.attempts.reconnect(p.backend->previousAttemptText());  // 按 15.4 预算截断，只留一个
@@ -516,9 +545,46 @@ void reconnectPane(PaneHost& p) {
   focusPane(p.paneId);
 }
 
+std::optional<std::string> chooseHyperVAdapter(const PaneHost& p) {
+  // TrackPopupMenu 会派发消息，窗格状态可能被替换，因此这里有意拷贝。
+  const auto choices = p.status.recovery.choices;
+  if (choices.empty()) return std::nullopt;
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return std::nullopt;
+  for (size_t i = 0; i < choices.size(); ++i)
+    AppendMenuW(menu, MF_STRING, (UINT_PTR)(i + 1), W(choices[i].label).c_str());
+  RECT rc; GetWindowRect(p.reconnectBtn, &rc);
+  UINT cmd = (UINT)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+                                rc.left, rc.bottom, 0, g->main, nullptr);
+  DestroyMenu(menu);
+  if (!cmd || cmd > choices.size()) return std::nullopt;
+  return choices[cmd - 1].adapterId;
+}
+
+void reconnectFromButton(PaneHost& p) {
+  if (p.status.state != SessionState::Failed) { reconnectPane(p); return; }
+  const std::string paneId = p.paneId;
+  HvOverride hv{p.connectionId};
+  switch (p.status.recovery.kind) {
+    case uishell::SessionRecovery::StartVmAndConnect: hv.startIfOff = true; break;
+    case uishell::SessionRecovery::ChooseAddress:
+      hv.adapterId = chooseHyperVAdapter(p);
+      if (!hv.adapterId) return;
+      break;
+    case uishell::SessionRecovery::None:
+    default: reconnectPane(p); return;
+  }
+  // 弹出菜单会派发消息，窗格可能已关闭。
+  auto* pane = paneById(paneId);
+  if (!pane || pane->connectionId != hv.connectionId) return;
+  g->hvOverride = std::move(hv);
+  reconnectPane(*pane);
+  g->hvOverride.reset();
+}
+
 PaneSessionInfo infoFor(const PaneHost& p) {
   return {p.paneId, p.status.title.empty() ? connName(p.connectionId) : p.status.title, connName(p.connectionId),
-          p.missingRef ? SessionState::Exited : p.status.state};
+          p.missingRef || p.notStarted ? SessionState::Exited : p.status.state};
 }
 std::optional<PaneSessionInfo> lookupInfo(const std::string& id) {
   if (auto* p = paneById(id)) return infoFor(*p);
@@ -533,7 +599,7 @@ bool confirm(const CloseSummary& s) {
 void openTab(const std::string& connectionId) {
   size_t i = g->tabBar.newTab(connectionId, connName(connectionId));  // 双击连接：总是新标签
   Tab& t = g->tabBar.tabs()[i];
-  createPane(t.activePaneId, connectionId, false);
+  createPane(t.activePaneId, connectionId, false, PaneStart::Now);
   refreshTabs(); layoutPanes(); focusPane(t.activePaneId); refreshTree();
 }
 
@@ -563,7 +629,7 @@ void splitActive(SplitAxis axis) {
   if (!t || !p) return;
   std::string conn = p->connectionId, newId = "pane-" + std::to_string(GetTickCount64()) + "-" + std::to_string(++g->paneSeq);
   if (!splitPane(*t, p->paneId, axis, newId)) return;
-  createPane(newId, conn, p->missingRef);  // 同一连接，独立 Session
+  createPane(newId, conn, p->missingRef, PaneStart::Now);  // 同一连接，独立 Session
   layoutPanes(); focusPane(newId); refreshTree();
 }
 
@@ -590,7 +656,16 @@ void pasteClipboard() {
     if (auto* s = static_cast<const wchar_t*>(GlobalLock(h))) { w = s; GlobalUnlock(h); }
   }
   CloseClipboard();
-  if (!w.empty()) p->backend->paste(normalizePasteText(U(w)));  // 上限由后端判断，超限走 onPasteRejected
+  if (w.empty()) return;
+  const auto text = normalizePasteText(U(w));
+  const auto preview = pastePreview(text, g->settings.confirmMultilinePasteOrDefault());
+  const std::string paneId = p->paneId;
+  auto* backend = p->backend.get();
+  if (preview.needsConfirm &&
+      MessageBoxW(g->main, W(preview.message).c_str(), L"确认粘贴", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
+  // 弹框会派发消息，只向原窗格的原后端发送。
+  p = paneById(paneId);
+  if (p && p->backend.get() == backend) p->backend->paste(text);  // 上限由后端判断，超限走 onPasteRejected
 }
 
 uishell::PaneBackendFactory makeFactory();
@@ -843,10 +918,19 @@ bool handleKey(UINT msg, WPARAM w, LPARAM l) {
 LRESULT CALLBACK PaneHostProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   auto* id = reinterpret_cast<std::string*>(GetWindowLongPtrW(h, GWLP_USERDATA));
   switch (m) {
-    case WM_MOUSEACTIVATE: case WM_LBUTTONDOWN:
+    case WM_MOUSEACTIVATE:
       if (id) focusPane(*id);
-      return m == WM_MOUSEACTIVATE ? MA_ACTIVATE : 0;
+      return MA_ACTIVATE;
+    case WM_LBUTTONDOWN:
+      if (id) {
+        focusPane(*id);
+        if (auto* p = paneById(*id)) startPlaceholder(*p);
+      }
+      return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN: case WM_CHAR: case WM_SYSCHAR:
+      if (m == WM_KEYDOWN && w == VK_RETURN && id) {
+        if (auto* p = paneById(*id); p && startPlaceholder(*p)) { g->skipChar = true; return 0; }
+      }
       if (handleKey(m, w, l)) return 0;
       break;
     case WM_IME_STARTCOMPOSITION: g->imeComposing = true; break;
@@ -880,7 +964,7 @@ LRESULT CALLBACK PaneHostProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       }
       break;
     case WM_COMMAND:
-      if (LOWORD(w) == kIdReconnect && id) { if (auto* p = paneById(*id)) reconnectPane(*p); return 0; }
+      if (LOWORD(w) == kIdReconnect && id) { if (auto* p = paneById(*id)) reconnectFromButton(*p); return 0; }
       break;
     case WM_ERASEBKGND: {
       RECT rc; GetClientRect(h, &rc); FillRect((HDC)w, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH)); return 1;
@@ -1132,20 +1216,55 @@ fs::path configDirPath() {
 }
 
 #ifndef IT2W_SHELL_STUB_BACKEND
-std::optional<it2w::SshLaunchOptions> resolveSsh(const std::string& id, std::string* err) {
-  const Connection* c = findConn(id);
-  if (!c) { *err = "连接配置不存在"; return std::nullopt; }
-  if (c->kind != ConnectionKind::Ssh || !c->endpoint || !c->ssh) { *err = "不是 SSH 连接"; return std::nullopt; }
+LaunchContext currentLaunchContext() {
+  LaunchContext ctx;
+  if (const wchar_t* home = _wgetenv(L"USERPROFILE")) ctx.userHome = U(home);
+  if (wchar_t* block = GetEnvironmentStringsW()) {
+    for (const wchar_t* p = block; *p;) {
+      const std::wstring entry(p);
+      // 从 1 开始找分隔符，保留 =C: 这类每盘符当前目录项。
+      const auto eq = entry.find(L'=', 1);
+      ctx.parentEnvironment.emplace_back(U(entry.substr(0, eq)),
+                                         eq == std::wstring::npos ? "" : U(entry.substr(eq + 1)));
+      p += entry.size() + 1;
+    }
+    FreeEnvironmentStringsW(block);
+  }
+  return ctx;
+}
+
+LaunchDesc describe(const std::string& id, std::string* err) {
+  err->clear();
+  auto desc = describeLaunch(g->conns, id, currentLaunchContext());
+  if (const auto* error = std::get_if<LaunchError>(&desc)) *err = error->message;
+  return desc;
+}
+
+it2app::LocalLaunchOptions localOptions(const LocalLaunchDesc& local) {
+  it2app::LocalLaunchOptions o;
+  o.executable = W(local.executable);
+  for (const auto& arg : local.arguments) o.arguments.push_back(W(arg));
+  if (local.workingDirectory) o.workingDirectory = W(*local.workingDirectory);
+  if (local.environment)
+    for (const auto& [name, value] : *local.environment) o.environment.emplace_back(W(name), W(value));
+  return o;
+}
+
+std::optional<it2app::LocalLaunchOptions> resolveLocal(const std::string& id, std::string* err) {
+  const auto desc = describe(id, err);
+  if (const auto* local = std::get_if<LocalLaunchDesc>(&desc)) return localOptions(*local);
+  return std::nullopt;
+}
+
+it2w::SshLaunchOptions sshOptions(const SshLaunchDesc& ssh) {
   it2w::SshLaunchOptions o;
-  if (c->endpoint->mode == EndpointMode::Manual) o.target.hostName = c->endpoint->host.value_or("");
-  else if (c->endpoint->hyperv && c->endpoint->hyperv->fallbackHost) o.target.hostName = *c->endpoint->hyperv->fallbackHost;
-  else { *err = "Hyper-V 地址解析尚未接入（T09），且未设置备用地址"; return std::nullopt; }
-  o.target.port = (uint16_t)c->endpoint->port;
-  o.target.user = c->ssh->user;
-  o.target.connectTimeoutSec = (uint32_t)c->ssh->connectTimeoutSeconds;
-  o.target.auth = c->ssh->authMode == AuthMode::Agent ? it2w::SshAuthMode::Agent
-                : c->ssh->authMode == AuthMode::KeyFile ? it2w::SshAuthMode::KeyFile : it2w::SshAuthMode::Interactive;
-  o.target.keyFile = c->ssh->identityFile.value_or("");
+  o.target.hostName = ssh.host;
+  o.target.port = ssh.port;
+  o.target.user = ssh.user;
+  o.target.connectTimeoutSec = ssh.connectTimeoutSec;
+  o.target.auth = ssh.auth == AuthMode::Agent ? it2w::SshAuthMode::Agent
+                : ssh.auth == AuthMode::KeyFile ? it2w::SshAuthMode::KeyFile : it2w::SshAuthMode::Interactive;
+  o.target.keyFile = ssh.identityFile;
   fs::path sshDir = g->configDir / L"ssh", snapDir = sshDir / L"snapshots";
   std::error_code ec; fs::create_directories(snapDir, ec);
   fs::path kh = sshDir / L"known_hosts", empty = sshDir / L"empty_known_hosts";
@@ -1154,6 +1273,32 @@ std::optional<it2w::SshLaunchOptions> resolveSsh(const std::string& id, std::str
   o.target.emptyKnownHostsFile = U(empty.wstring());
   o.snapshotDir = snapDir.wstring();
   return o;
+}
+
+std::optional<it2w::HyperVLaunch> resolveHyperV(const std::string& id, std::string* err) {
+  const auto desc = describe(id, err);
+  const auto* hv = std::get_if<HyperVLaunchDesc>(&desc);
+  if (!hv) return std::nullopt;
+  it2w::HyperVLaunch launch;
+  launch.policy.vmId = hv->vmId;
+  launch.policy.adapterId = hv->adapterId;
+  launch.policy.addressFamily = hv->addressFamily;
+  launch.policy.fallbackHost = hv->fallbackHost;
+  launch.policy.startIfOff = hv->startIfOff;
+  launch.ssh = sshOptions(hv->ssh);
+  if (g->hvOverride && g->hvOverride->connectionId == id) {
+    launch.policy.startIfOff = g->hvOverride->startIfOff;
+    if (g->hvOverride->adapterId) launch.policy.adapterId = g->hvOverride->adapterId;
+  }
+  return launch;
+}
+
+std::optional<it2w::SshLaunchOptions> resolveSsh(const std::string& id, std::string* err) {
+  const auto desc = describe(id, err);
+  if (const auto* ssh = std::get_if<SshLaunchDesc>(&desc)) return sshOptions(*ssh);
+  if (std::holds_alternative<LaunchError>(desc)) return std::nullopt;
+  *err = std::holds_alternative<HyperVLaunchDesc>(desc) ? "内部错误：Hyper-V 连接未经 resolveHyperV" : "不是 SSH 连接";
+  return std::nullopt;
 }
 #endif
 
@@ -1171,6 +1316,8 @@ uishell::PaneBackendFactory makeFactory() {
     if (!st->inner || st->family != g->settings.fontFamily || st->size != g->settings.fontSize ||
         st->osc52 != g->settings.osc52OrDefault()) {  // osc52：只影响此后新建的窗格
       it2app::PaneBackendConfig cfg;
+      cfg.resolveLocal = resolveLocal;
+      cfg.resolveHyperV = resolveHyperV;
       cfg.resolveSsh = resolveSsh;
       cfg.fontFamily = W(g->settings.fontFamily);
       cfg.fontSizePt = (float)g->settings.fontSize;
@@ -1204,8 +1351,15 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     MessageBoxW(nullptr, W("配置目录已被另一个实例占用：" + err).c_str(), L"it2w", MB_OK | MB_ICONERROR);
     return 1;
   }
+  const auto cleanup = cleanupStaleSnapshots(app.configDir / L"ssh" / L"snapshots");
+  for (const auto& error : cleanup.errors)
+    OutputDebugStringW(W("it2w_shell: 清理残留 SSH 快照失败：" + error + "\n").c_str());
   auto lc = loadConnections(app.configDir / "connections.json");
   app.conns = std::move(lc.data); app.connsReadOnly = lc.readOnly;
+  const auto report = reportValidation(app.conns, lc.validation);
+  appendNote(app.statusNote, report.statusNote);
+  for (const auto& detail : report.details)
+    OutputDebugStringW(W("it2w_shell: " + detail + "\n").c_str());
   if (lc.status == LoadStatus::Corrupt)
     MessageBoxW(nullptr, W("connections.json 无法读取：" + lc.detail).c_str(), L"it2w", MB_OK | MB_ICONWARNING);
   auto ls = loadSettings(app.configDir / "settings.json");
@@ -1216,12 +1370,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     auto fam = normalizeFontFamily(app.settings.fontFamily);
     if (fam && fontInstalled(*fam)) app.settings.fontFamily = *fam;
     else {
-      if (fam) app.statusNote = "字体「" + *fam + "」不存在，已用默认 " + defaultSettings().fontFamily;
+      if (fam) appendNote(app.statusNote, "字体「" + *fam + "」不存在，已用默认 " + defaultSettings().fontFamily);
       app.settings.fontFamily = defaultSettings().fontFamily;
     }
   }
   if (app.settings.osc52Invalid()) {  // 隐藏字段 osc52 不合法：按全关，提示一次（文件里的原值保存时原样写回）
-    app.statusNote += (app.statusNote.empty() ? "" : "；") + std::string("osc52 配置无效，已按全关处理");
+    appendNote(app.statusNote, "osc52 配置无效，已按全关处理");
     OutputDebugStringW(L"it2w_shell: settings.json osc52 配置无效，已按全关处理\n");
   }
   auto lw = loadWorkspace(app.configDir / "workspace.json");
@@ -1236,7 +1390,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     }
     if (auto cmd = parseCommandArg(argv)) {
       if (cmd->empty()) {  // --command 无值：不传给后端，提示一次
-        app.statusNote += (app.statusNote.empty() ? "" : "；") + std::string("--command 缺少命令行，已忽略");
+        appendNote(app.statusNote, "--command 缺少命令行，已忽略");
         OutputDebugStringW(L"it2w_shell: --command 缺少命令行，已忽略\n");
       } else {
         app.startupCommand = std::move(*cmd);
@@ -1255,7 +1409,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
                            CW_USEDEFAULT, CW_USEDEFAULT, 1200, 760, nullptr, nullptr, inst, nullptr);
   if (!h) return 1;
 
-  // 恢复布局：引用缺失的窗格只放占位，不启动
+  // 恢复布局：所有窗格只放占位，等待用户连接
   std::map<std::string, bool> missing;
   for (auto& b : missingReferencePanes(app.ws, app.conns)) if (b.status == PaneBindStatus::MissingConnection) missing[b.paneId] = true;
   std::vector<Tab> restored = std::move(app.ws.tabs);
@@ -1263,7 +1417,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   app.tabBar.load(std::move(restored));
   for (auto& t : app.tabBar.tabs()) {
     std::function<void(const LayoutNode&)> walk = [&](const LayoutNode& n) {
-      if (n.kind == LayoutNode::Kind::Pane) { createPane(n.paneId, n.connectionId, missing.count(n.paneId) > 0); return; }
+      if (n.kind == LayoutNode::Kind::Pane) { createPane(n.paneId, n.connectionId, missing.count(n.paneId) > 0, PaneStart::Placeholder); return; }
       walk(*n.first); walk(*n.second);
     };
     walk(t.root);

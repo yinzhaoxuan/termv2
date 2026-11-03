@@ -31,6 +31,10 @@ KeyMatch matchKey(const std::map<std::string, std::string>& bindings, const Chor
 // 剪贴板文本 → paste()：CRLF 与单独 LF 都转 CR（终端回车语义），NUL 截断后部
 std::string normalizePasteText(const std::string& clipboardUtf8);
 
+struct PastePreview { bool needsConfirm; std::string message; };
+// 按 CR 分行，末尾 CR 不额外算空行："a\rb" = 2 行，"a\r" = 1 行；任何 CR 都触发确认。
+PastePreview pastePreview(const std::string& normalizedText, bool confirmEnabled);
+
 // 命令行：it2w_shell.exe --command "<命令行>"（也接受 --command=<命令行>）。
 // 返回首个本地窗格要执行的命令；未给出返回 nullopt；--command 后缺值返回空串（调用方报错）。
 std::optional<std::wstring> parseCommandArg(const std::vector<std::wstring>& argv);
@@ -39,9 +43,9 @@ std::optional<std::wstring> parseCommandArg(const std::vector<std::wstring>& arg
 struct LinkPrompt { bool canOpen; std::string message; std::string url; };
 LinkPrompt linkPrompt(const std::string& url);
 
-// 窗格覆盖层 / 状态栏文案；Failed 时 showReconnect=true
-struct PaneOverlay { bool visible; bool showReconnect; std::string text; };
-PaneOverlay overlayFor(const uishell::SessionStatus& st);
+// 窗格覆盖层：缺失引用优先于占位；按钮文案总是填充。
+struct PaneOverlay { bool visible; bool showReconnect; std::string text; std::string buttonLabel; };
+PaneOverlay paneOverlay(bool missingRef, bool notStarted, const std::string& connName, const uishell::SessionStatus& st);
 std::string stateLabel(uishell::SessionState s);
 // 会话树标签来自连接名 + snaps 运行计数，不用 pane title。
 // snaps：启动起算，直到 Exited/Failed 才 erase。仅当新旧状态在「计入运行」集合上不同时才需 refreshTree。

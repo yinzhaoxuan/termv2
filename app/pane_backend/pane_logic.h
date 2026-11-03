@@ -2,6 +2,8 @@
 // resize generation、跨线程 → UI 线程的事件派发队列。Win32 实现见 win32_pane_backend.cpp。
 #pragma once
 #include "../common/it2app/limits.h"
+#include "hyperv_resolve.h"
+#include "uishell/pane_backend.h"
 #include <chrono>
 #include <atomic>
 #include <cstddef>
@@ -222,9 +224,12 @@ SyncStartOutcome settleSyncStart(SyncStart result, std::string error);
 // 没有 HvAction::Fail（Direct 在进入 Running 之前失败）返回 nullopt，继续异步 finishSession。
 std::optional<std::string> immediatePreStartFailure(bool sessionStillStarting, bool transportFailed,
                                                     bool hvFailed, std::string hvError);
+uishell::SessionRecovery hyperVRecovery(it2w::HvFailure, const std::vector<it2w::HvCandidate> &);
 // category 空或 None：text 已是完整句子。否则「类别: 说明」。
 std::string formatTransportFailure(std::string_view category, std::string_view text);
 std::string formatLocalShellStartError(std::string_view exeUtf8);
+enum class LocalPathError { ExecutableNotFound, WorkingDirectoryNotFound };
+std::string formatLocalPathError(LocalPathError, std::string_view pathUtf8);
 
 // DS-11 / D-2：pane-diag 一行。phase 压成单个字段；没有错误码时 err=-。msg 里的换行换成空格。
 // v 是日志格式版本，不是产品版本。

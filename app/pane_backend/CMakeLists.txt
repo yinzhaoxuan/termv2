@@ -1,7 +1,7 @@
 # T08：uishell::PaneBackend 实现。平台无关逻辑所有平台编译并单测；Win32 实现只在 WIN32 构建。
 add_library(it2w_pane_logic STATIC pane_logic.cpp pane_search.cpp)
-target_include_directories(it2w_pane_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(it2w_pane_logic PUBLIC itcore)
+target_include_directories(it2w_pane_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/ui/include)
+target_link_libraries(it2w_pane_logic PUBLIC itcore it2w_platform_common)
 if(NOT MSVC)
   target_compile_options(it2w_pane_logic PRIVATE -Wall -Wextra)
 endif()

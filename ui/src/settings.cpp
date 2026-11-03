@@ -67,6 +67,11 @@ Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
       if (auto o = parseOsc52(j["osc52"])) f.osc52 = *o;
       else { f.osc52 = Osc52Settings{}; f.osc52Raw = j["osc52"].dump(); }  // 不合法：按全关，原值留着写回
     }
+    if (j.contains("confirmMultilinePaste")) {
+      const auto& value = j["confirmMultilinePaste"];
+      if (value.is_boolean()) f.confirmMultilinePaste = value.get<bool>();
+      else { f.confirmMultilinePaste = true; f.confirmMultilinePasteRaw = value.dump(); }
+    }
     if (j.contains("keybindings") && j.at("keybindings").is_object()) {
       for (auto it = j.at("keybindings").begin(); it != j.at("keybindings").end(); ++it)
         f.keybindings[it.key()] = it.value().get<std::string>();
@@ -169,6 +174,8 @@ bool saveSettings(const fs::path& file, SettingsFile& data, bool readOnly, std::
   if (data.osc52Raw) j["osc52"] = json::parse(*data.osc52Raw, nullptr, false);  // 不合法的原值原样写回
   else if (data.osc52)
     j["osc52"] = {{"allowWrite", data.osc52->allowWrite}, {"allowRead", data.osc52->allowRead}, {"maxBytes", data.osc52->maxBytes}};
+  if (data.confirmMultilinePasteRaw) j["confirmMultilinePaste"] = json::parse(*data.confirmMultilinePasteRaw, nullptr, false);
+  else if (data.confirmMultilinePaste) j["confirmMultilinePaste"] = *data.confirmMultilinePaste;
   fs::path tmp = file; tmp += ".tmp";
   if (!writeDurable(tmp, j.dump(2), error)) { std::error_code ec; fs::remove(tmp, ec); return false; }
   std::error_code ec;

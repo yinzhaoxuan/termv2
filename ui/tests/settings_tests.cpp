@@ -116,6 +116,34 @@ int main() {
     }
   }
 
+  {  // 多行粘贴确认：缺省启用，隐藏字段仅在存在时写回
+    auto write = [&](const nlohmann::json& j) { std::ofstream o(f, std::ios::binary | std::ios::trunc); o << j; };
+    auto read = [&] { std::ifstream in(f); return nlohmann::json::parse(in); };
+    CHECK(!d.confirmMultilinePaste && !d.confirmMultilinePasteRaw && d.confirmMultilinePasteOrDefault());
+    write({{"schemaVersion", 1}});
+    auto missing = loadSettings(f);
+    CHECK(missing.status == LoadStatus::Ok && !missing.data.confirmMultilinePaste && missing.data.confirmMultilinePasteOrDefault());
+    CHECK(saveSettings(f, missing.data, false, &err) && !read().contains("confirmMultilinePaste"));
+    for (bool enabled : {true, false}) {
+      write({{"schemaVersion", 1}, {"confirmMultilinePaste", enabled}});
+      auto loaded = loadSettings(f);
+      CHECK(loaded.status == LoadStatus::Ok && loaded.data.confirmMultilinePaste == std::optional<bool>(enabled));
+      CHECK(!loaded.data.confirmMultilinePasteRaw && loaded.data.confirmMultilinePasteOrDefault() == enabled);
+      CHECK(saveSettings(f, loaded.data, false, &err) && read().at("confirmMultilinePaste") == enabled);
+      CHECK(loadSettings(f).data.confirmMultilinePasteOrDefault() == enabled);
+    }
+    for (const char* raw : {"null", "0", "1.5", "\"false\"", "[]", "{\"enabled\":false}"}) {
+      const auto value = nlohmann::json::parse(raw);
+      write({{"schemaVersion", 1}, {"confirmMultilinePaste", value}});
+      auto loaded = loadSettings(f);
+      CHECK(loaded.status == LoadStatus::Ok && loaded.data.confirmMultilinePaste == std::optional<bool>(true));
+      CHECK(loaded.data.confirmMultilinePasteOrDefault() && loaded.data.confirmMultilinePasteRaw == std::optional<std::string>(value.dump()));
+      CHECK(saveSettings(f, loaded.data, false, &err) && read().at("confirmMultilinePaste") == value);
+      auto again = loadSettings(f);
+      CHECK(again.data.confirmMultilinePasteOrDefault() && again.data.confirmMultilinePasteRaw == loaded.data.confirmMultilinePasteRaw);
+    }
+  }
+
   resetKeybindings(r.data);
   CHECK(r.data.keybindings.at("newTab") == "Ctrl+Shift+T");
 

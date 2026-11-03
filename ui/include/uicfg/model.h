@@ -1,6 +1,7 @@
 // 第 13 节配置模型（connections.json）
 #pragma once
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -33,10 +34,18 @@ struct SshSettings {
   int connectTimeoutSeconds = 15;
 };
 
+struct LocalEnvironment {
+  bool inherit = true;
+  std::map<std::string, std::string> set;
+  std::vector<std::string> unset;
+};
+
 struct LocalSettings {
   std::string executable;
   std::vector<std::string> arguments;
   std::optional<std::string> workingDirectory;
+  LocalEnvironment environment;
+  std::string closePolicy = "terminateSessionTree";
 };
 
 struct Connection {

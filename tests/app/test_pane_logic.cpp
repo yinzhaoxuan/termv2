@@ -27,6 +27,27 @@ using namespace it2app;
 static int fails = 0;
 #define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
 
+static void hyperv_recovery() {
+    using F = it2w::HvFailure;
+    using R = uishell::SessionRecovery;
+    const std::vector<it2w::HvCandidate> candidates{
+        {"nic-2", "虚拟 网卡二", "10.0.0.2"}, {"nic-1", "网卡一", "2001:db8::1"}};
+    auto r = hyperVRecovery(F::VmNotRunning, candidates);
+    CHECK(r.kind == R::StartVmAndConnect && r.choices.empty());
+    r = hyperVRecovery(F::AddressAmbiguous, candidates);
+    CHECK(r.kind == R::ChooseAddress && r.choices.size() == 2);
+    if (r.choices.size() == 2) {
+        CHECK(r.choices[0].adapterId == "nic-2" && r.choices[0].label == "虚拟 网卡二 10.0.0.2");
+        CHECK(r.choices[1].adapterId == "nic-1" && r.choices[1].label == "网卡一 2001:db8::1");
+    }
+    r = hyperVRecovery(F::AddressAmbiguous, {});
+    CHECK(r.kind == R::ChooseAddress && r.choices.empty());
+    for (auto failure : {F::None, F::VmNotFound, F::VmAccessDenied, F::VmAddressUnavailable, F::ExecutableNotFound}) {
+        r = hyperVRecovery(failure, candidates);
+        CHECK(r.kind == R::None && r.choices.empty());
+    }
+}
+
 static void limits() {
     RateLimiter bell(1000);
     CHECK(bell.allow(0)); CHECK(!bell.allow(500)); CHECK(!bell.allow(999)); CHECK(bell.allow(1000)); CHECK(!bell.allow(1999));
@@ -1697,6 +1718,13 @@ static void prestart_failure_leaves_starting() {
     CHECK(local.find("本地 shell 启动失败") != std::string::npos);
     CHECK(local.find("C:\\Windows\\System32\\cmd.exe") != std::string::npos);
     CHECK(formatLocalShellStartError("").find("cmd.exe") != std::string::npos);
+    for (auto error : {LocalPathError::ExecutableNotFound, LocalPathError::WorkingDirectoryNotFound}) {
+        const std::string path = "C:/中文 路径/missing";
+        const auto text = formatLocalPathError(error, path);
+        CHECK(text == (error == LocalPathError::ExecutableNotFound ? "未找到程序：" : "工作目录不存在：") + path);
+        const auto outcome = settleSyncStart(SyncStart::PreStartFailed, text);
+        CHECK(outcome.failed && outcome.reconnectAllowed && outcome.error == text);
+    }
 }
 
 static void ssh_direct_select() {
@@ -1779,7 +1807,7 @@ int main(int argc, char **argv) {
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
     else if (w == "search") search_driver();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); prestart_failure_leaves_starting(); gap02_closed_transport_drains_before_eof(); need_drain_running_discard_reported(); } }
+    else { hyperv_recovery(); limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); prestart_failure_leaves_starting(); gap02_closed_transport_drains_before_eof(); need_drain_running_discard_reported(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;
