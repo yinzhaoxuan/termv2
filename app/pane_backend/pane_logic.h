@@ -186,6 +186,15 @@ enum class FrameMode { VSync, Immediate, Force };
 struct PumpStats { uint64_t droppedBytes = 0; uint32_t skippedSlices = 0; };
 struct PumpDecision { bool complete = false, armTimer = false, frame = false, fault = false; };
 PumpDecision decidePumpStep(DrainPhase phase, PumpResult result, bool carryEmpty);
+// closer 已 timedOut、传输仍非 Closed/Failed：从首次观察到该状态起算宽限，期满放弃等待。
+// None：不介入（未超时、读侧已结束，或不在 Draining）。没有时钟时只等待，不按调用次数猜时间。
+inline constexpr uint64_t kCloseTimeoutGraceMs = 1000;
+inline constexpr char kCloseTimeoutDetail[] = "关闭超时，已强制结束";
+struct CloseGraceState { bool armed = false; uint64_t startMs = 0; };
+enum class CloseGraceAction : uint8_t { None, ArmAndWait, Wait, Abandon };
+CloseGraceAction decideCloseTimeoutGrace(DrainPhase phase, bool inputEnded, bool closeTimedOut,
+                                         CloseGraceState state, bool hasClock, uint64_t nowMs,
+                                         uint64_t graceMs = kCloseTimeoutGraceMs);
 FrameMode chooseFrameMode(DrainPhase phase, bool pending, bool force = false);
 enum class PaneOp { Input, Close, ResizeTransport, Search, ResizeCore, Reconnect };
 bool opAllowed(DrainPhase phase, PaneOp op);

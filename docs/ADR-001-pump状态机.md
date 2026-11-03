@@ -382,7 +382,7 @@ Draining 期间 `status_.state` 仍然是 Running（终态还没发布），所�
 
 与 Claude 草案的分歧及结论：
 
-1. **I5（Closed 后读线程是否仍 push）**：Codex 实现选择保守路径——`decision.complete && !host.pumpInputEnded()` 时不完成收尾，继续挂续跑；关闭超时也不无界 pop，按预算丢弃并记账。采纳。
+1. **I5（Closed 后读线程是否仍 push）**：Codex 实现选择保守路径——`decision.complete && !host.pumpInputEnded()` 时不完成收尾，继续挂续跑；关闭超时也不无界 pop，按预算丢弃并记账。采纳。2026-11-03 补充：closer 已报 `timedOut` 且传输仍非终态时，宽限 1s 后放弃等待并发布终态，见 §10。未超时的关闭仍按本条一直等到 Closed/Failed。
 2. **PERF-01 0.25 s**：作为验收目标保留，真机第 15 轮测量；不作为本提交阻断项。
 3. **PaneEvents 派发时机**：草案写在 `pumpStep` 末尾 `flushEvents`；实现改为 `PostMessage(WM_PANE_EVENTS)`，在 pump 栈完全退回后再发回调。更严格满足「回调下方没有 pump 帧」，采纳。
 4. **成功日志**：草案 D4 常开；初版实现绑在 `ITERM2WIN_OSC52_PING`。定稿改回常开。
@@ -390,3 +390,18 @@ Draining 期间 `status_.state` 仍然是 Running（终态还没发布），所�
 6. **present_frame 接线**：`Win32PaneBackend::present` → `renderer_->present_frame(force ? Force : mode)`；模式由 `chooseFrameMode(phase, pending, force)` 决定。渲染复审此项。
 
 备选 A1–A4 维持草案结论：本 ADR 落地首选方案；会话执行器（E1）推迟。
+
+---
+
+## 10. D-4 关闭超时后的收尾宽限（2026-11-03）
+
+§9 的保守路径仍然成立：`Draining` 在 `pumpInputEnded()`（传输 `Closed`/`Failed`）之前不调用 `finish_input`。ConPTY 的 closer 在读线程退出前一直停在 `Closing`，`closedEvent_` 要等 `doClose` 后半段才发信号。窗格关闭线程的 `waitClosed(5s)` 因此可以先返回超时，`SessionCloser` 已经写好 `timedOut` 和「关闭超时，已强制结束」，但 `PumpDriver::step` 仍因传输不是终态而每 8 ms 续跑。终态发不出去，Draining 不结束。
+
+补充规则（`decideCloseTimeoutGrace`，`PumpDriver::step`）：
+
+- 只在 `Draining`、closer 已 `timedOut`、且 `pumpInputEnded()` 仍为 false 时计时。起点是第一次观察到这个组合（与 pump 预算同一个 `nowMs`）。
+- 宽限 `kCloseTimeoutGraceMs`（1000 ms）内继续按 final 预算排空。期间若传输进入终态，后面的收尾与原来一样，晚到的尾部不会被提前丢掉。
+- 期满：把 carry 里还没喂的字节和队列里至多一轮 `maxBytes` 记入 `droppedBytes`，然后走原来的 complete 路径（`finish_input`、VSync、`classifyTerminal`）。`timedOut` 让终态成为 Failed，`errorText` 为关闭线程写下的原因；有丢弃时仍追加「输出可能不完整，丢弃字节数=N」。续跑定时器撤掉，不再等待 Closed。
+- 未超时的关闭不武装宽限。没有注入时钟时只等待，避免用步数冒充时间。
+- `PumpDriver::reset`（重连）清掉宽限起点，新 attempt 重新计时。
+- 放弃那一轮仍然不无界 `pop`：读线程可能还在写。没被这轮取走的字节留在传输队列里，由仍在等 `waitClosed(INFINITE)` 的关闭线程随后释放。

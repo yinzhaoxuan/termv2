@@ -237,6 +237,8 @@ private:
         auto state = transport_->state();
         return state == TransportState::Closed || state == TransportState::Failed;
     }
+    // closer 已上报 timedOut 而传输仍可能停在 Closing。PumpDriver 据此给收尾宽限，期满放弃等待。
+    bool pumpCloseTimedOut() const { return closeOutcome_ && closeOutcome_->timedOut; }
     void afterFeed() { drainCoreEvents(); }
     void finishPumpInput(itcore_core *core) { itcore_finish_input(core); }
     void presentPump(FrameMode mode);
@@ -1000,7 +1002,7 @@ void Win32PaneBackend::startCloser(CloseReason why) {
             CloseOutcome r;
             auto t = std::static_pointer_cast<Transport>(sh.transport);
             t->close(why);  // T03A §1.4 九步由传输层 closer 线程执行；这里只等它在预算内结束
-            if (!t->waitClosed(kCloserBudgetMs)) { r.ok = false; r.timedOut = true; r.detail = "关闭超时，已强制结束"; }
+            if (!t->waitClosed(kCloserBudgetMs)) { r.ok = false; r.timedOut = true; r.detail = kCloseTimeoutDetail; }
             return r;
         },
         [](SessionShared &sh) {
@@ -1121,6 +1123,7 @@ void Win32PaneBackend::revealSearchRow(int32_t viewRow) {
 void Win32PaneBackend::onCloseDone(const CloseOutcome &r) {
     closeOutcome_ = r;
     finishSession(); // 只请求 Draining；不在关闭结果回调栈里同步 feed/EOF
+    // timedOut 后传输仍可能是 Closing。续跑在宽限内排空，期满由 PumpDriver 结束并发布 r.detail。
 }
 
 void Win32PaneBackend::requestClose() {
