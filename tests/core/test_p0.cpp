@@ -210,8 +210,8 @@ static std::vector<std::string> feed_ev(itcore_core *c, const std::string &s, in
 // CORE-20：DA2、CSI 18/14/16 t（像素尺寸由后端提供）、CSI 22/23 t 标题栈、OSC 1
 static void winops() {
     auto *c = make(20, 5);
-    CHECK(feed(c, "\x1b[>c") == "\x1b[>64;2500;0c");
-    CHECK(feed(c, "\x1b[>0c") == "\x1b[>64;2500;0c");
+    CHECK(feed(c, "\x1b[>c") == "\x1b[>1;0;0c");   // VT220，补丁号 0（docs/identity-14.3.md）
+    CHECK(feed(c, "\x1b[>0c") == "\x1b[>1;0;0c");
     CHECK(feed(c, "\x1b[18t") == "\x1b[8;5;20t");
     CHECK(feed(c, "\x1b[14t") == "\x1b[4;80;160t");     // 尺寸未设：按 8x16 估算
     CHECK(feed(c, "\x1b[16t") == "\x1b[6;16;8t");

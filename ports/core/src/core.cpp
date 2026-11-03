@@ -371,6 +371,13 @@ struct itcore_core final : itcore::TokenSink {
             if (!reply.empty()) push(ITCORE_EV_REPLY_BYTES, std::move(reply));
             break;
         }
+        case TokenType::Dcs: {
+            // DECRQSS / XTGETTCAP。sixel、tmux 等其它 DCS 保持沉默。查询不改屏幕。
+            std::string reply;
+            screen->apply(t, &reply);
+            if (!reply.empty()) push(ITCORE_EV_REPLY_BYTES, std::move(reply));
+            break;
+        }
         case TokenType::Incomplete: ++incomplete; break;
         case TokenType::Error: fatal = true; break;
         default: break;

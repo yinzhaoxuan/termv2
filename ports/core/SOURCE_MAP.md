@@ -40,7 +40,7 @@
 | `src/screen.h` `Row` / `Grid` | `sources/VT100/VT100Grid.{h,m}` | 光标、滚动区、行、默认字符、scrollUp/appendChars | 去除 DVR/代理/脏行；行带 `id`/`revision`/`itcore_wrap`（hard/soft/wide）；0 基坐标在协议边界转 1 基。 |
 | `src/screen.h` `Scrollback` | `sources/LineBuffer/LineBuffer.h` | 未包装逻辑行 + 按宽重排 | 双重限额（行数与字节，设计 15.4：默认 10000 / 64MiB）；重排合并连续 soft 逻辑行；无 LineBlock 分块/搜索索引（P1 子集）。 |
 | `src/screen.cpp` `apply_csi_defaults` | `sources/VT100/VT100CSIParser.m` `SetCSITypeAndDefaultParameters` | CUP/HVP→1,1；ED/EL/DSR/DA/SGR→0；CU*/ICH/DCH/IL/DL/…→1 | 仅实现 P1 网格/模式/查询相关命令；返回命令标签供应用层分派；其余 CSI 仍由解析器消费、无副作用。 |
-| `src/screen.cpp` `Screen::do_sgr` / `set_mode` | `sources/VT100/VT100Terminal.m` `executeSGR` / DECSET/DECRST | 粗体/斜体/下划线/反色、16/256/真彩（分号与冒号子参数）、DECAWM/DECOM/IRM/DECTCEM、47/1047/1048/1049、2004 | 无 SGR 栈、无图片/鼠标扩展；DA1 应答拟定 `?1;2c`（设计 14.3，未冻结）。 |
+| `src/screen.cpp` `Screen::do_sgr` / `set_mode` | `sources/VT100/VT100Terminal.m` `executeSGR` / DECSET/DECRST | 粗体/斜体/下划线/反色、16/256/真彩（分号与冒号子参数，含色彩空间与 58/59）、下划线样式、上划线、DECAWM/DECOM/IRM/DECTCEM、47/1047/1048/1049、2004 | 无 SGR 栈、无图片/鼠标扩展。DA1/DA2/DA3/XTVERSION 见 `docs/identity-14.3.md`（VT220，`?62;22c` / `>1;0;0c`）。上划线 53/55 不在该提交的 `executeSGR` 里，按 ECMA-48 补。 |
 | `src/screen.cpp` `cell_width` | `sources/ScreenChar/ScreenChar.m` 宽字符逻辑 | 东亚宽≈2、组合/ZWJ=0 | **差异**：未移植完整 UCD/emoji ZWJ 序列宽度；默认策略固定为精简区间表（设计 14.2）。 |
 | `src/core.cpp` 快照 ABI | 设计 14.1 / 14.2 `Snapshot` | `acquire_snapshot` / grapheme / cursor | 快照自持字素池拷贝；`first_row` 相对视口顶（负=历史）；销毁 core 后快照仍可读至 release。 |
 
@@ -84,5 +84,5 @@
 - ANSI DECRQM（`CSI Ps $ p`）：对应上游 `VT100Terminal` 的 ANSI 分支，4→IRM、20→LNM，其余 Pm=0。LNM 置位时 LF/VT/FF 兼回车，Enter 编码为 CR LF（上游 newlineMode）；ABI：DEC 私有模式用 `itcore_mode_query`，ANSI 模式用 `itcore_ansi_mode_query`，两个编号空间互不影响（?4 DECSCLM 仅记录状态 vs 4 IRM）。
 - T09 Hyper-V：无上游对应（Windows 专有）。`hyperv_resolve.*` 地址解析策略，`hyperv_query.*` PowerShell 查询，`hyperv_transport.*` 解析后接 SSH。
 - P0 第 1 批：`screen.cpp` 字符集/制表位/SGR 扩展/DECSCNM/DECSCUSR/DECALN/DECSTR/DEC DSR ← 上游 `VT100Terminal.m`、`VT100Screen` 对应处理（setCharacterSet、tab stops、DECALN、softReset、DSR）。
-- P0 第 2 批：`screen.cpp` DA2 ← `VT100Output.m`（`>64;2500;0c`）；`core.cpp` `winops`（CSI 14/16/18/22/23 t）← `VT100Terminal.m` 窗口操作；OSC 0/1/2/4/10/11/12/104/110–112 ← `VT100Terminal.m` executeXtermSetKvp / 颜色查询；默认调色板按 xterm。
+- P0 第 2 批：`screen.cpp` DA2 最初对照 `VT100Output.m` 的 `>64;2500;0c`；GAP-16 改为 VT220 `>1;0;0c`（`docs/identity-14.3.md`）。`core.cpp` `winops`（CSI 14/16/18/22/23 t）← `VT100Terminal.m` 窗口操作；OSC 0/1/2/4/10/11/12/104/110–112 ← `VT100Terminal.m` executeXtermSetKvp / 颜色查询；默认调色板按 xterm。
 - `itcore_export_text` / `Screen::export_text`：重连归档用，无上游直接对应（近似上游 `PTYSession` 重启时保留旧内容的做法）。

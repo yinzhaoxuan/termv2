@@ -39,8 +39,8 @@
 
 | 能力 | 传输 | 现状 | 设计要点 | 依赖 | 状态 |
 |---|---|---|---|---|---|
-| SGR 子参数、下划线样式（4:0..5、21）、下划线颜色（58/59）、上划线（53/55） | 全部 | 有缺陷（GAP-14） | 单元格加样式位；ABI 版本递增规则（DS-8） | — | [ ] |
-| DA1/DA2 身份、XTVERSION、DECRQSS、XTGETTCAP | 全部（DCS 类只在 D 上） | 宣告高于实际能力（GAP-16） | 宣告级别、TERM 取值、terminfo 三者一致（DS-7） | F-0 | [ ] |
+| SGR 子参数、下划线样式（4:0..5、21）、下划线颜色（58/59）、上划线（53/55） | 全部 | GAP-14 已在核心与 D2D 几何落地；Linux CORE-22。实机未画波浪线 | [identity-14.3.md](identity-14.3.md) 不涉及；样式位不递增 ABI | — | [~] |
+| DA1/DA2 身份、XTVERSION、DECRQSS、XTGETTCAP | 全部（DCS 类只在 D 上） | GAP-16：VT220 + 补丁号 0，查询有应答；Linux CORE-23。实机 vim 未跑 | [identity-14.3.md](identity-14.3.md)。TERM 仍未与 terminfo 对齐 | F-0 | [~] |
 | Kitty 键盘协议、modifyOtherKeys、CSI u | 全部 | 无 | Windows 虚拟键 → 协议编码；Alt 语义（对应 Option 当 Meta/Esc）；push/pop 栈深度 | F-4 | [ ] |
 | 鼠标 1005/1015/1016；1007 可由程序开关 | 全部 | 无 | 1016 需要像素坐标与 DPI 换算 | — | [ ] |
 | DECSLRM 左右边距、矩形操作、选择性擦除 | 全部 | 无 | 屏幕模型改动面大；完成后才能提高 DA 级别 | — | [ ] |

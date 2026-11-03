@@ -115,7 +115,7 @@ struct Cursor { int x = 0, y = 0; };  // 0 基；x 可等于 cols（待换行）
 
 struct SavedCursor {
     Cursor cur;
-    uint32_t fg = 0, bg = 0;
+    uint32_t fg = 0, bg = 0, underline_color = 0;
     uint16_t flags = 0;
     char g[2] = {'B', 'B'};  // G0/G1 字符集（DECSC 一并保存，同上游）
     int gl = 0;
@@ -331,6 +331,8 @@ private:
     void set_mode(const Token &t, bool set);
     void do_sgr(const Token &t);
     void do_cup(int row1, int col1);
+    void reply_dcs(const Token &t, std::string *reply) const;
+    std::string sgr_decrqss() const;
     void enter_alt(bool clear);
     void leave_alt(bool clear);
     void evict_to_scrollback(Row &&r);
