@@ -1,0 +1,72 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "IT2W_SANITIZE": "OFF",
+        "IT2W_SANITIZE_THREAD": "OFF"
+      }
+    },
+    {
+      "name": "asan",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build-asan",
+      "cacheVariables": { "IT2W_SANITIZE": "ON" }
+    },
+    {
+      "name": "tsan",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build-tsan",
+      "cacheVariables": { "IT2W_SANITIZE_THREAD": "ON" }
+    },
+    {
+      "name": "mingw",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build-mingw",
+      "toolchainFile": "${sourceDir}/cmake/mingw-w64.cmake",
+      "cacheVariables": { "IT2W_SSH_DIRECT": "OFF" }
+    },
+    {
+      "name": "mingw-direct",
+      "inherits": "mingw",
+      "binaryDir": "${sourceDir}/build-mingw-direct",
+      "cacheVariables": { "IT2W_SSH_DIRECT": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "mingw", "configurePreset": "mingw" },
+    { "name": "mingw-direct", "configurePreset": "mingw-direct" }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" },
+      "filter": { "exclude": { "name": "^T07\\.ssh_live$" } }
+    },
+    {
+      "name": "asan",
+      "inherits": "dev",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "tsan",
+      "inherits": "dev",
+      "configurePreset": "tsan",
+      "filter": {
+        "exclude": {
+          "name": "^(T07\\.ssh_live|PANE-11\\.flood_close_destroys_continuation_target)$"
+        }
+      }
+    }
+  ]
+}

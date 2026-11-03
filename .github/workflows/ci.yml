@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake --preset dev
+      - run: cmake --build --preset dev -j2
+      - run: ctest --preset dev -j2
+
+  asan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # 兼容 runner 上 GCC sanitizer 的地址空间布局（google/sanitizers#1614）。
+      - run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - run: cmake --preset asan
+      - run: cmake --build --preset asan -j2
+      - run: ctest --preset asan -j2
+
+  tsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # 避免 Ubuntu 24.04 的高 ASLR 熵与 TSan shadow memory 冲突。
+      - run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - run: cmake --preset tsan
+      - run: cmake --build --preset tsan -j2
+      - run: ctest --preset tsan -j2
+
+  mingw:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # 工具链显式调用 -posix 编译器，无需切换通用名称的 alternatives。
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 g++-mingw-w64-x86-64-posix
+      - run: cmake --preset mingw
+      - run: cmake --build --preset mingw -j2
+
+  mingw-direct:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 g++-mingw-w64-x86-64-posix
+      - run: cmake --preset mingw-direct
+      - run: cmake --build --preset mingw-direct -j2

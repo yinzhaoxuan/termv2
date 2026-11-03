@@ -1,0 +1,46 @@
+# termv2
+
+termv2 是从 iTerm2 派生的 C++20 Windows 终端，使用 CMake 构建。产品壳为 `it2w_shell.exe`，本地会话使用 ConPTY，SSH 默认使用系统 `ssh.exe` + ConPTY，也可选编进程内 libssh2 直连。Linux/macOS 原生构建用于可移植逻辑与单元测试，不构建 Windows 产品壳。
+
+## 快速开始
+
+需要 CMake ≥ 3.24、支持 C++20 的编译器和 make。nlohmann/json 默认使用仓库内头文件，无需安装系统包；可用 `-DUICFG_USE_SYSTEM_NLOHMANN=ON` 显式选择系统 nlohmann_json ≥ 3.11。
+
+```sh
+cmake --preset dev
+cmake --build --preset dev -j8
+ctest --preset dev -j8
+```
+
+`dev` 使用 `RelWithDebInfo`，输出到 `build/`。`asan`（ASan/UBSan）和 `tsan`（TSan）使用各自构建目录，命令中替换 preset 名即可，需 Clang 或 GCC 支持。测试 preset 均排除需要私有 SSH 实验环境的 `T07.ssh_live`，`tsan` 另排除 `PANE-11.flood_close_destroys_continuation_target`。
+
+CORE-01/02 输入向量不在仓库中，`ITCORE_VECTORS` 默认指向 `/workspace/qa/vectors/core01_02.json`；缺失时告警并跳过。配置时加 `-DIT2W_REQUIRE_VECTORS=ON` 可将缺失变成错误；用 `-DITCORE_VECTORS=/path/to/core01_02.json` 指定已有向量。
+
+在 Ubuntu 24.04 安装交叉编译器后构建 Windows 产品（默认目标含 `it2w_shell.exe`）：
+
+```sh
+sudo apt-get update
+sudo apt-get install -y mingw-w64 g++-mingw-w64-x86-64-posix
+cmake --preset mingw
+cmake --build --preset mingw -j8
+```
+
+产品壳位于 `build-mingw/ui/it2w_shell.exe`。交叉构建不运行原生测试。
+
+`mingw-direct` 在 `build-mingw-direct/` 启用 `IT2W_SSH_DIRECT=ON`，首次构建会下载并编译固定版本、校验 SHA-256 的 OpenSSL 与 libssh2：
+
+```sh
+cmake --preset mingw-direct
+cmake --build --preset mingw-direct -j8
+```
+
+运行时环境变量见 [HANDOFF §2](docs/HANDOFF.md#2-如何构建与测试)。
+
+## 接下来读
+
+- [交接与构建测试说明](docs/HANDOFF.md)（构建依赖与 preset 以本 README 和 CMake 为准）
+- [当前状态与待验证项](docs/STATUS.md)
+- ADR：[窗格 pump](docs/ADR-001-pump状态机.md)、[OSC 52 读能力](docs/ADR-002-CAP01-P06-osc52-read.md)、[Direct SSH](docs/ADR-003-ssh-direct.md)
+- [启动描述与 B 批设计](docs/DS-2-启动描述与B批.md)
+- [上游来源](UPSTREAM.md)
+- [第三方声明](THIRD-PARTY-NOTICES.md)
