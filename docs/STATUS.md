@@ -1,5 +1,7 @@
 # iterm2-win 进度汇总
 
+交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
+
 ## 2026-11-03：REVIEW 增补二 D-5
 
 - ConPTY 写线程在协议 Reply 写成功后不再无条件调用 `OutputDebugStringA`。
