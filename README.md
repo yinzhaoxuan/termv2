@@ -40,6 +40,7 @@ cmake --build --preset mingw-direct -j8
 
 - [交接与构建测试说明](docs/HANDOFF.md)（构建依赖与 preset 以本 README 和 CMake 为准）
 - [当前状态与待验证项](docs/STATUS.md)
+- [剩余工作与推荐顺序](docs/TODO.md)
 - ADR：[窗格 pump](docs/ADR-001-pump状态机.md)、[OSC 52 读能力](docs/ADR-002-CAP01-P06-osc52-read.md)、[Direct SSH](docs/ADR-003-ssh-direct.md)
 - [启动描述与 B 批设计](docs/DS-2-启动描述与B批.md)
 - [上游来源](UPSTREAM.md)

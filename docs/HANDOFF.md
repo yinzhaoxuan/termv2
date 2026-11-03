@@ -8,7 +8,7 @@ termv2 是从 iTerm2 派生的 Windows 终端。本地会话走 ConPTY；SSH 默
 
 先读本文，再按需要打开文末索引里的原文。进度流水在 [STATUS.md](STATUS.md)。设计决策在 `docs/ADR-*.md`。与 iTerm2 的差距和 v0.1 待办在仓库根的 `REVIEW.md` 与两份 `REVIEW-增补-*.md`（不在 `docs/` 下）。v0.1 之后的能力提纲在 [ROADMAP-iTerm2-parity.md](ROADMAP-iTerm2-parity.md)。
 
-**2026-11-04 更新：** 第 4.1 节 A5、第 4.2 节 B1–B5、第 4.3 节 A1 余量 / E4 / E5 / NEW-02 / NEW-03、第 4.5 节 Direct 首次信任界面都已在 main 上实现（设计见 [DS-2-启动描述与B批.md](DS-2-启动描述与B批.md)、[DS-12-Direct首次信任.md](DS-12-Direct首次信任.md)）。Windows 代码由 CI 的 mingw 任务编译，Windows 实机手测仍待做。进度与待手测项见 STATUS 2026-11-04。下文第 4、6 节保留原样，读到这些项时以 STATUS 为准。
+**2026-11-04 更新：** 第 4.1 节 A5、第 4.2 节 B1–B5、第 4.3 节 A1 余量 / E4 / E5 / NEW-02 / NEW-03、第 4.5 节 Direct 首次信任界面都已在 main 上实现（设计见 [DS-2-启动描述与B批.md](DS-2-启动描述与B批.md)、[DS-12-Direct首次信任.md](DS-12-Direct首次信任.md)）。Windows 代码由 CI 的 mingw 任务编译，Windows 实机手测仍待做。进度与待手测项见 STATUS 2026-11-04，**剩余工作与推荐顺序见 [TODO.md](TODO.md)**。下文第 4、6 节保留原样，读到这些项时以 STATUS 为准。
 
 **勾选框已经过时。** `REVIEW-增补-2026-11-02.md` 写于 `c1d475d..06497a0`，当时 GAP-01/14/15/16、A2–A4、A′、D-1–D-4 以及 D-5 的 ODS 门控都还没落地。那些项在 2026-11-03 的 PR #1–#10 里进了 main。根目录 REVIEW 的 `[ ]` 没有回写。以本文第 3 节和 `git log` 为准，不要按旧勾选重做。
 

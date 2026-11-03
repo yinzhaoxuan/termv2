@@ -327,31 +327,35 @@ A/A′/B 的最小可测路径一具备，就应立即开始 C，不要等 D/E �
 
 ## 8. 待完成项清单
 
-状态说明：`[ ]` 未开始，`[~]` 有部分代码但未闭环。每项都要能对应到上文 GAP 或 §3。
+状态说明：`[ ]` 未开始，`[~]` 有部分代码但未闭环，`[x]` 代码已在 main（括号里是落地提交；「待实机」表示 Windows 上还没手测）。每项都要能对应到上文 GAP 或 §3。
+
+**2026-11-04 回写：** 下面的勾选已对照 main `22ee722` 更新。剩余工作的优先级与上下文见 [docs/TODO.md](docs/TODO.md)，逐日进度见 [docs/STATUS.md](docs/STATUS.md)。两份 `REVIEW-增补-*.md` 的勾选停在各自日期，以本节为准。
 
 ### A. 会话基础（P1）
-- [ ] A1 每个后端分配唯一 SessionId；快照文件名跨进程唯一；启动时清理过期快照（GAP-01）
-- [ ] A2 finishSession 改为多轮排空，队列清空后才 finish_input；新增尾部完整性测试（GAP-02）
-- [ ] A3 ssh.exe 缺失及所有启动前失败统一走 Failed，并给出可操作的错误提示（GAP-15）
-- [ ] A4 NEED_DRAIN 且 accepted=0 时重试，不丢字节，并设无进展上限（§6）
-- [ ] A5 加载时校验配置，端口越界报错而不是截断（§6）
+- [x] A1 每个后端分配唯一 SessionId；快照文件名跨进程唯一；启动时清理过期快照（GAP-01）——SessionId 与 `ssh-<pid>-<sid>-<aid>.conf` 见 `48e0a06`；拿到配置目录锁后 `uicfg::cleanupStaleSnapshots` 清残留见 `986cdf7`。
+- [x] A2 finishSession 改为多轮排空，队列清空后才 finish_input；新增尾部完整性测试（GAP-02）——ADR-001 状态机 `7a901d4`，回归 PANE-27 `b5e9ec1`。
+- [x] A3 ssh.exe 缺失及所有启动前失败统一走 Failed，并给出可操作的错误提示（GAP-15）——`0356230`（ADR-001 §11）。待实机。
+- [x] A4 NEED_DRAIN 且 accepted=0 时重试，不丢字节，并设无进展上限（§6）——`a740590`（ADR-001 §12，上限 8 次）。
+- [x] A5 加载时校验配置，端口越界报错而不是截断（§6）——`986cdf7`：`validateConnectionsFile` / `validateInFile`，非法端口与超时启动时报「连接配置无效」。
 
 ### A′. 仿真正确性（P1/P2）
-- [ ] A′1 SGR 38/48 冒号形式支持色彩空间；实现 58/59 下划线颜色（GAP-14）
-- [ ] A′2 下划线样式 4:0..5、21；上划线 53/55；`itcore_cell` 增加样式位，D2D 绘制波浪线、双线、点线、虚线（GAP-14）
-- [ ] A′3 DA1/DA2 级别统一，宣告不超过实际能力；XTVERSION；DECRQSS（m、r、SP q、" q）；XTGETTCAP（GAP-16）
-- [ ] A′4 DECRQM 覆盖 ?1007，并让备用屏滚轮转方向键的行为可由程序关闭（§3.1）
-- [ ] A′5 新增 CORE-22（SGR）和 CORE-23（应答）测试
+- [x] A′1 SGR 38/48 冒号形式支持色彩空间；实现 58/59 下划线颜色（GAP-14）——`7cc613d`。
+- [x] A′2 下划线样式 4:0..5、21；上划线 53/55；`itcore_cell` 增加样式位，D2D 绘制波浪线、双线、点线、虚线（GAP-14）——`7cc613d`（用 `flags` 原有空位，ABI 版本仍为 0）。待实机看波浪线。
+- [x] A′3 DA1/DA2 级别统一，宣告不超过实际能力；XTVERSION；DECRQSS（m、r、SP q、" q）；XTGETTCAP（GAP-16）——`7cc613d`，选择记在 `docs/identity-14.3.md`。待实机 `vim -u NONE` 的 `v:termresponse`。
+- [x] A′4 DECRQM 覆盖 ?1007，并让备用屏滚轮转方向键的行为可由程序关闭（§3.1）——`c84cec5`（初始复位，与 xterm/iTerm2 一致）。
+- [x] A′5 新增 CORE-22（SGR）和 CORE-23（应答）测试——`7cc613d`。
 
 ### B. 主要使用场景（P1）
-- [ ] B1 主 UI 注入 resolveHyperV；显示解析进度、多地址选择、「启动并连接」、可见的回退（GAP-03）
-- [ ] B2 local 连接路由：executable、arguments、cwd、环境 inherit/set/unset 完整贯通（GAP-04）
-- [ ] B3 store 完整保存和加载 local.environment 与 closePolicy（GAP-04）
-- [ ] B4 工作区恢复为未连接占位，点击后才连接（GAP-05）
-- [ ] B5 多行粘贴预览和确认，取消时发送零字节（GAP-06）
+以下五项都在 `986cdf7`，设计见 `docs/DS-2-启动描述与B批.md`，Windows 代码已由 CI mingw 编译，均待实机。
+- [x] B1 主 UI 注入 resolveHyperV；显示解析进度、多地址选择、「启动并连接」、可见的回退（GAP-03）——`SessionStatus.recovery` 结构化给出恢复动作，覆盖只作用于一次重连。
+- [x] B2 local 连接路由：executable、arguments、cwd、环境 inherit/set/unset 完整贯通（GAP-04）——`uicfg::describeLaunch` + 后端 `resolveLocal`；cwd=null → 用户主目录。
+- [x] B3 store 完整保存和加载 local.environment 与 closePolicy（GAP-04）——未知 closePolicy 原样保留、校验拒绝启动。
+- [x] B4 工作区恢复为未连接占位，点击后才连接（GAP-05）——UI 侧 `PaneStart::Placeholder`，没有新增 SessionState。
+- [x] B5 多行粘贴预览和确认，取消时发送零字节（GAP-06）——`uicfg::pastePreview`；隐藏设置 `confirmMultilinePaste`。
 
 ### C. Windows 实机验证（P1 门槛）
-- [ ] C1 CAP-01：ConPTY 前后字节、TERM 实际值、terminfo、应答归属
+C 批全部仍开放。C1 有第 16–18 轮的文字记录（ADR-002 / STATUS），证据文件没入仓。待手测清单汇总在 `docs/TODO.md`。
+- [~] C1 CAP-01：ConPTY 前后字节、TERM 实际值、terminfo、应答归属
 - [ ] C2 SSH-CFG-01 / T07 在 Windows OpenSSH 上实连：未知主机、密钥变化、密码、口令、拒绝连接
 - [ ] C3 WIN-01/02/03：vim/top/tmux、中文 IME、混合 DPI、设备丢失、四窗格持续输出时的延迟分位数
 - [ ] C4 VM-01：Hyper-V 解析各分支（见 GAP-03 验收）
@@ -360,20 +364,20 @@ A/A′/B 的最小可测路径一具备，就应立即开始 C，不要等 D/E �
 
 ### D. 日常操作（P2）
 - [ ] D1 连接新建、编辑、删除，分组管理（GAP-07）
-- [~] D2 历史搜索：快捷键已定义，需实现搜索、跳转、软换行映射、取消和限额（GAP-07）
+- [~] D2 历史搜索：快捷键已定义，需实现搜索、跳转、软换行映射、取消和限额（GAP-07）——纯文本搜索已有（SRCH-01..03）；淘汰后高亮回归 `2fcaac3`（NEW-03）。正则留 v0.2，大历史单步耗时待实测。
 - [ ] D3 配色方案：传入 `PaneBackendConfig.colors`，支持导入 .itermcolors，让 appearanceProfileId 生效（GAP-07、§3.2）
 - [ ] D4 回滚行数和内存可配置；统一后端与核心的默认值（GAP-09）
-- [ ] D5 快捷键展示（编辑放 v0.2+）；实现搜索之前，Ctrl+Shift+F 不分配默认值（§6）
+- [~] D5 快捷键展示（编辑放 v0.2+）；实现搜索之前，Ctrl+Shift+F 不分配默认值（§6）——Ctrl+Shift+F 已接搜索、不再吞键；展示仍无。
 - [ ] D6 Ctrl+C 默认行为写入设计决策或恢复为设计默认（GAP-07）
-- [ ] D7 OSC 52 读/写开关（默认关闭）
-- [ ] D8 元数据滚动日志（5 MiB × 3）、诊断包导出（GAP-13）
+- [~] D7 OSC 52 读/写开关（默认关闭）——settings.json 隐藏字段 `osc52`；Direct 的读能力已关（`43850d0`）；无界面、无逐次读确认（NEW-04）。
+- [~] D8 元数据滚动日志（5 MiB × 3）、诊断包导出（GAP-13）——滚动日志与字段 `48e0a06`；诊断包导出和脱敏工具仍缺。
 
 ### E. 资源与交付（P2）
 - [ ] E1 会话执行器迁移，或基于实测写 ADR（GAP-08）
-- [ ] E2 `itcore_history_rows` 增加缓存，避免每次输出都 O(历史) 重排（GAP-08）
+- [x] E2 `itcore_history_rows` 增加缓存，避免每次输出都 O(历史) 重排（GAP-08）——`c69bc48`：按组增量计数，持续输出时整段重建 0 次（NEW-02）。
 - [ ] E3 会话和应用两级内存账本，含受控拒绝（GAP-09）
-- [ ] E4 根 CMake 默认使用仓库内 nlohmann；补齐 core01_02.json；缺数据时让必需测试失败（GAP-11）
-- [ ] E5 CMakePresets、根 README、GitHub Actions（Linux plain/ASan/TSan + Windows MSVC）（GAP-11）
+- [~] E4 根 CMake 默认使用仓库内 nlohmann；补齐 core01_02.json；缺数据时让必需测试失败（GAP-11）——`299b3c1`：nlohmann 默认仓库内；`-DIT2W_REQUIRE_VECTORS=ON` 时缺向量即失败。`core01_02.json` 本身仍在旧 Linux 机器的 `/workspace/qa/vectors/`，未入仓。
+- [~] E5 CMakePresets、根 README、GitHub Actions（Linux plain/ASan/TSan + Windows MSVC）（GAP-11）——`299b3c1`：预设、README、CI（linux / asan / tsan + mingw 交叉编译；mingw-direct 手动触发）。没有 MSVC 任务（Direct 只支持 MinGW）。
 - [ ] E6 统一许可表述；补根 LICENSE、SPDX、上游文件哈希清单、依赖审计（GAP-12）
 - [ ] E7 STATUS/SOURCE_MAP 去除陈旧条目，变更历史单独存放（§6）
 - [ ] E8 GlyphCache 图集与 glyph run 渲染路径（STATUS 第 4 批，也是连字的前提）
