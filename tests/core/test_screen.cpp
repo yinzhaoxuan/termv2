@@ -384,7 +384,7 @@ static void test_csi_defaults() {
     itcore_destroy(c);
 }
 
-// B2：itcore_history_rows 缓存——内容/列宽不变时不重排；push、resize、ED3、切屏都正确失效
+// B2：itcore_history_rows 缓存——push 增量维护；resize、ED3、切屏返回正确行数
 extern "C" uint64_t itcore_debug_history_recomputes(const itcore_core *c);
 static void test_history_cache() {
     itcore_core *c = make(10, 3, 1000);
@@ -398,7 +398,7 @@ static void test_history_cache() {
     CHECK(itcore_debug_history_recomputes(c) == n0);   // 命中缓存
     feed("x");                                          // 只改网格，不改历史
     CHECK(itcore_history_rows(c) == h && itcore_debug_history_recomputes(c) == n0);
-    feed("\r\n5\r\n");                                // 新行进历史 → 失效
+    feed("\r\n5\r\n");                                // 新行进历史 → 增量维护
     CHECK(itcore_history_rows(c) == h + 2);
     feed("\r\n0123456789ABCDEFGHIJ\r\n\r\n\r\n");     // 一条 20 字符的软换行逻辑行入历史
     uint32_t w10 = itcore_history_rows(c);
@@ -416,7 +416,7 @@ static void test_history_cache() {
     feed("\x1b" "c");                                 // RIS 清历史 → 失效
     CHECK(itcore_history_rows(c) == 0);
     itcore_destroy(c);
-    // max_lines 淘汰：历史满后每次 push 都淘汰最旧逻辑行，缓存须跟着失效。
+    // max_lines 淘汰：历史满后每次 push 都淘汰最旧逻辑行，缓存须增量维护。
     // 对照：同一字节流一次性喂给新核心（无旧缓存）得到的行数
     const char *steps[] = {"0123456789ABCDEFGHIJ\r\n0123456789ABCDEFGHIJ\r\n0123456789ABCDEFGHIJ\r\n0123456789ABCDEFGHIJ\r\n",
                            "s\r\n", "t\r\n", "u\r\nv\r\n"};
@@ -428,7 +428,7 @@ static void test_history_cache() {
         itcore_feed(e, reinterpret_cast<const uint8_t *>(st), std::strlen(st)); drain(e);
         all += st;
         uint32_t got = itcore_history_rows(e);
-        CHECK(itcore_debug_history_recomputes(e) == before + 1);  // 满历史时 push+淘汰也使缓存失效
+        CHECK(itcore_debug_history_recomputes(e) == before);  // 满历史时 push+淘汰不完整重建
         itcore_core *f = make(10, 2, 3);
         itcore_feed(f, reinterpret_cast<const uint8_t *>(all.data()), all.size()); drain(f);
         CHECK(got == itcore_history_rows(f));

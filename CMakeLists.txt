@@ -148,6 +148,13 @@ add_test(NAME CORE-04.alt_scroll_query COMMAND itcore_test_screen core04)
 add_test(NAME CORE-05.reflow COMMAND itcore_test_screen core05)
 add_test(NAME MEM-01.history_budget COMMAND itcore_test_screen mem01)
 add_test(NAME B2.history_rows_cache COMMAND itcore_test_screen histcache)
+add_executable(itcore_test_history_rows tests/core/test_history_rows.cpp)
+target_include_directories(itcore_test_history_rows PRIVATE ports/core/src)
+target_link_libraries(itcore_test_history_rows PRIVATE itcore)
+add_test(NAME NEW-02.history_rows_stream COMMAND itcore_test_history_rows stream)
+add_test(NAME NEW-02.history_rows_eviction COMMAND itcore_test_history_rows eviction)
+add_test(NAME NEW-02.history_rows_invalidation COMMAND itcore_test_history_rows invalidation)
+add_test(NAME NEW-02.history_rows_random COMMAND itcore_test_history_rows random)
 
 # T06：输入编码 encode_*（键盘/粘贴/鼠标）
 add_executable(itcore_test_encode tests/core/test_encode.cpp)

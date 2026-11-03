@@ -536,9 +536,11 @@ size_t Grid::mem_bytes() const {
 
 // ---- Scrollback ----
 void Scrollback::push(LogicalLine &&line) {
+    const bool extend = !lines_.empty() && !lines_.back().hard;
     bytes_ += line.mem_bytes();
     ++gen_;
     lines_.push_back(std::move(line));
+    if (display_rows_valid_) append_display_group(extend);
     trim();
 }
 void Scrollback::trim() {
@@ -546,10 +548,16 @@ void Scrollback::trim() {
            (lines_.size() > max_lines_ || bytes_ > max_bytes_)) {
         bytes_ -= lines_.front().mem_bytes();
         lines_.pop_front();
+        if (display_rows_valid_) trim_display_group();
         ++evicted_;
     }
 }
-void Scrollback::clear() { ++gen_; lines_.clear(); bytes_ = 0; }
+void Scrollback::clear() {
+    ++gen_;
+    lines_.clear(); bytes_ = 0;
+    display_groups_.clear(); display_rows_total_ = 0;
+    display_rows_valid_ = true;
+}
 
 static void reflow_line(const LogicalLine &ll, uint16_t cols, std::vector<Row> &out, bool last_hard,
                         const std::vector<SelPos> *src = nullptr, std::vector<std::vector<SelPos>> *opos = nullptr,
@@ -600,48 +608,70 @@ static void reflow_line(const LogicalLine &ll, uint16_t cols, std::vector<Row> &
     }
 }
 
-void Scrollback::reflow_into(uint16_t cols, std::vector<Row> &out) const {
-    out.clear();
-    for (auto &ll : lines_) reflow_line(ll, cols, out, ll.hard);
-}
-size_t Scrollback::display_rows(uint16_t cols) const {
-    std::vector<Row> tmp;
-    reflow_into(cols, tmp);
-    return tmp.size();
-}
-bool Scrollback::map_display_row(uint16_t cols, size_t display_row, size_t *logic_i, size_t *cell_off) const {
-    size_t shown = 0;
-    for (size_t li = 0; li < lines_.size(); ++li) {
-        std::vector<Row> part;
-        reflow_line(lines_[li], cols, part, lines_[li].hard);
-        if (display_row < shown + part.size()) {
-            size_t local = display_row - shown;
-            *logic_i = li;
-            *cell_off = 0;
-            // 估算行内偏移：前面 display 行占满的单元格数
-            size_t off = 0;
-            for (size_t k = 0; k < local; ++k) {
-                for (auto &c : part[k].cells)
-                    if (!(c.flags & ITCORE_CELL_CONTINUATION) && c.grapheme_id) off++;
-                // 更稳：按宽累计
-            }
-            // 精确：重算
-            off = 0;
-            size_t i = 0, col = 0; size_t target_row = local; size_t cur_row = 0;
-            while (i < lines_[li].cells.size()) {
-                if (cur_row == target_row && col == 0) { *cell_off = i; return true; }
-                auto &c = lines_[li].cells[i];
-                if (c.flags & ITCORE_CELL_CONTINUATION) { ++i; continue; }
-                uint8_t w = c.width ? c.width : 1;
-                if (col + w > cols) { ++cur_row; col = 0; continue; }
-                col += w; ++i;
-            }
-            *cell_off = 0;
-            return true;
-        }
-        shown += part.size();
+size_t Scrollback::group_display_rows(size_t first, size_t count, std::deque<DisplayGroup> &groups) const {
+    ++debug_hist_rows_group_recompute_count;
+    LogicalLine merged;
+    std::vector<Row> rows;
+    size_t total = 0, start = first;
+    for (size_t i = first; i < first + count; ++i) {
+        const auto &line = lines_[i];
+        merged.cells.insert(merged.cells.end(), line.cells.begin(), line.cells.end());
+        merged.hard = line.hard;
+        if (!line.hard && i + 1 < first + count) continue;
+        rows.clear();
+        reflow_line(merged, display_rows_cols_, rows, merged.hard);
+        groups.push_back({i + 1 - start, rows.size()});
+        total += rows.size();
+        merged.cells.clear();
+        start = i + 1;
     }
-    return false;
+    return total;
+}
+void Scrollback::append_display_group(bool extend) {
+    // 脏尾可包含多个已闭合组，统一留到下一次查询拆分/重排。
+    if (!extend && (display_groups_.empty() || !display_groups_.back().dirty))
+        display_groups_.push_back({});
+    auto &group = display_groups_.back();
+    ++group.lines;
+    group.dirty = true;
+}
+void Scrollback::trim_display_group() {
+    auto &group = display_groups_.front();
+    if (--group.lines == 0) {
+        display_rows_total_ -= group.rows;
+        display_groups_.pop_front();
+    } else {
+        group.dirty = true;
+    }
+}
+void Scrollback::recount_display_group(bool front) const {
+    const auto group = front ? display_groups_.front() : display_groups_.back();
+    std::deque<DisplayGroup> groups;
+    const size_t first = front ? 0 : lines_.size() - group.lines;
+    const size_t rows = group_display_rows(first, group.lines, groups);
+    display_rows_total_ -= group.rows;
+    display_rows_total_ += rows;
+    if (front) {
+        display_groups_.pop_front();
+        for (auto i = groups.rbegin(); i != groups.rend(); ++i) display_groups_.push_front(*i);
+    } else {
+        display_groups_.pop_back();
+        for (const auto &g : groups) display_groups_.push_back(g);
+    }
+}
+void Scrollback::rebuild_display_groups(uint16_t cols) const {
+    display_groups_.clear();
+    display_rows_cols_ = cols;
+    display_rows_total_ = group_display_rows(0, lines_.size(), display_groups_);
+    display_rows_valid_ = true;
+}
+size_t Scrollback::merged_display_rows(uint16_t cols, bool *recomputed) const {
+    const bool rebuild = !display_rows_valid_ || display_rows_cols_ != cols;
+    if (rebuild) rebuild_display_groups(cols);
+    if (!display_groups_.empty() && display_groups_.front().dirty) recount_display_group(true);
+    if (!display_groups_.empty() && display_groups_.back().dirty) recount_display_group(false);
+    if (recomputed) *recomputed = rebuild;
+    return display_rows_total_;
 }
 
 // ---- CSI defaults ----
@@ -736,32 +766,17 @@ void Screen::evict_thunk(Row &&r, void *ctx) {
 
 void Screen::evict_to_scrollback(Row &&r) {
     if (modes_.alt) return;  // 备用屏不进历史
-    // 将显示行并入逻辑行：软换行拼到上一逻辑行，硬换行结束。
-    if (!scrollback_.empty() && !scrollback_.at(scrollback_.logical_count() - 1).hard) {
-        // 不可变 at；改为重新压：简化策略——每显示行独立逻辑行，软标记保留在 wrap 上。
-    }
+    // 每个出屏行保存为一段；hard=false 表示重排时与下一段合并。
     LogicalLine ll;
     ll.id = r.id ? r.id : next_logic_id_++;
     ll.hard = (r.wrap == ITCORE_WRAP_HARD);
     for (auto &c : r.cells) {
         if (c.flags & ITCORE_CELL_CONTINUATION) continue;
-        if (c.grapheme_id == 0 && c.flags == 0) {
-            // 保留尾部空白压缩：跳过纯空，但中间空格保留——简化：全部推入非空及中间
-        }
         ll.cells.push_back(c);
     }
     // 去掉尾部空白
     while (!ll.cells.empty() && ll.cells.back().grapheme_id == 0 && ll.cells.back().flags == 0)
         ll.cells.pop_back();
-    // 合并软换行到前一行
-    if (!ll.hard && !scrollback_.empty()) {
-        // 无法直接改 deque 尾；用临时：pop 逻辑不可用。改为始终 push，硬=false 表示与下一行同逻辑。
-        // 重排时连续 soft 合并：见 reflow — 当前 reflow 按单 LogicalLine。
-        // 修正：软换行时合并进新结构——把 soft 行 cells 追加到“开放”逻辑行。
-    }
-    // 简化且可测：用开放缓冲
-    // 这里改为：硬换行 push；软换行累积到 pending_（成员）。为少改头文件，用 static 不行。
-    // 重新策略：每行都 push 为独立 LogicalLine，soft 的 hard=false；reflow_into 把连续 soft+最终 hard 合并。
     scrollback_.push(std::move(ll));
 }
 
@@ -789,15 +804,23 @@ static void reflow_merged(const Scrollback &sb, uint16_t cols, std::vector<Row> 
             acc.hard = false;
         }
     }
-    if (!acc.cells.empty() || acc.id) {
+    // 用段边界判断开放尾组，空 soft 段即使 id=0 也占一显示行。
+    if (!sb.empty() && !sb.at(sb.logical_count() - 1).hard) {
         acc.hard = false;
         reflow_line(acc, cols, out, false, &src, opos, empty);
     }
 }
 
+size_t Scrollback::merged_display_rows_full_for_test(uint16_t cols) const {
+    std::vector<Row> rows;
+    reflow_merged(*this, cols, rows);
+    return rows.size();
+}
+
 void Screen::resize(uint16_t cols, uint16_t rows) {
     if (!cols || !rows) return;
     if (cols != main_.cols() || rows != main_.rows()) ++search_serial_;
+    if (cols != main_.cols()) scrollback_.invalidate_display_rows();
     // 主屏：把当前网格软/硬行卸到 scrollback 再重排回填（简化：仅改网格尺寸，scrollback 重排用于快照）
     main_.resize(cols, rows);
     alt_.resize(cols, rows);
@@ -1343,7 +1366,7 @@ void Screen::compact_pool() {
     };
     main_.for_each_row([&](Row &r) { for (auto &c : r.cells) add(c); });
     alt_.for_each_row([&](Row &r) { for (auto &c : r.cells) add(c); });
-    scrollback_.for_each_line([&](LogicalLine &l) { for (auto &c : l.cells) add(c); });
+    scrollback_.for_each_line([&](const LogicalLine &l) { for (const auto &c : l.cells) add(c); });
     if (has_last_) add(last_printed_);
     if (link_id_) live.push_back(link_id_);
     auto m = pool_.compact(live);
@@ -1351,7 +1374,7 @@ void Screen::compact_pool() {
     auto fix = [&](Cell &c) { map(c.grapheme_id); map(c.hyperlink_id); };
     main_.for_each_row([&](Row &r) { for (auto &c : r.cells) fix(c); });
     alt_.for_each_row([&](Row &r) { for (auto &c : r.cells) fix(c); });
-    scrollback_.for_each_line([&](LogicalLine &l) { for (auto &c : l.cells) fix(c); });
+    scrollback_.for_each_cell_id(map);
     fix(last_printed_);
     map(link_id_);
     main_.touch_all_rows();
@@ -1613,15 +1636,10 @@ int Screen::ansi_mode_state(int mode) const {
 
 size_t Screen::history_display_rows() const {
     if (modes_.alt) return 0;
-    const uint16_t cols = grid().cols();
-    if (hist_rows_gen_ == scrollback_.generation() && hist_rows_cols_ == cols) return hist_rows_cache_;
-    std::vector<Row> hist;
-    reflow_merged(scrollback_, cols, hist);
-    ++debug_hist_rows_recompute_count;
-    hist_rows_gen_ = scrollback_.generation();
-    hist_rows_cols_ = cols;
-    hist_rows_cache_ = hist.size();
-    return hist_rows_cache_;
+    bool recomputed = false;
+    const size_t rows = scrollback_.merged_display_rows(grid().cols(), &recomputed);
+    if (recomputed) ++debug_hist_rows_recompute_count;
+    return rows;
 }
 
 // ---- 选区 ----

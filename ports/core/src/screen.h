@@ -199,19 +199,39 @@ public:
     size_t logical_count() const { return lines_.size(); }
     size_t bytes() const { return bytes_; }
     const LogicalLine &at(size_t i) const { return lines_[i]; }
-    // 以当前宽度重排：返回显示行列表（Row 形态），并填充 wrap。
-    void reflow_into(uint16_t cols, std::vector<Row> &out) const;
     void clear();
-    template <class F> void for_each_line(F f) { ++gen_; for (auto &l : lines_) f(l); }
-    // 内容代数：push/淘汰/clear/可写遍历都 +1（history_display_rows 缓存键，B2）
+    template <class F> void for_each_line(F f) const { for (const auto &l : lines_) f(l); }
+    template <class F> void for_each_cell_id(F f) {
+        // 池压缩只改字素/链接 ID，不能改宽度、CONTINUATION、行边界；保留显示行计数。
+        ++gen_;
+        for (auto &l : lines_) for (auto &c : l.cells) { f(c.grapheme_id); f(c.hyperlink_id); }
+    }
+    // 内容代数：push/clear/ID 重映射都 +1（搜索失效用）
     uint64_t generation() const { return gen_; }
     // 累计淘汰的逻辑段数（只增不减；clear 不重置），同上游 cumulativeScrollbackOverflow（搜索绝对行号用）
     uint64_t evicted() const { return evicted_; }
-    // 绝对显示行（从最旧开始）→ (逻辑行下标, 行内列偏移)；失败返回 false。
-    bool map_display_row(uint16_t cols, size_t display_row, size_t *logic_i, size_t *cell_off) const;
-    size_t display_rows(uint16_t cols) const;
+    size_t merged_display_rows(uint16_t cols, bool *recomputed = nullptr) const;
+    void invalidate_display_rows() { display_rows_valid_ = false; }
+    // 测试参考：走快照使用的完整 reflow_merged，不读计数缓存。
+    size_t merged_display_rows_full_for_test(uint16_t cols) const;
+    // 测试用：组范围重排次数（含完整重建；单次查询至多首/尾各一次）。
+    mutable uint64_t debug_hist_rows_group_recompute_count = 0;
 private:
     void trim();
+    struct DisplayGroup { size_t lines = 0, rows = 0; bool dirty = false; };
+    size_t group_display_rows(size_t first, size_t count, std::deque<DisplayGroup> &groups) const;
+    void append_display_group(bool extend);
+    void trim_display_group();
+    void recount_display_group(bool front) const;
+    void rebuild_display_groups(uint16_t cols) const;
+    // 有效时 groups 按顺序划分 lines_；干净组为 soft 连到下一个 hard，或开放尾组。
+    // push/淘汰只改首尾段数并置脏；脏尾范围合并查询前追加的组，查询时按 hard 拆回。
+    // rows 可在脏组中过期，total 始终是已存 rows 之和；查询至多重排首/尾范围各一次。
+    // 列宽变化使整个缓存失效；clear 保留缓存宽度，空分区直接有效。
+    mutable std::deque<DisplayGroup> display_groups_;
+    mutable size_t display_rows_total_ = 0;
+    mutable uint16_t display_rows_cols_ = 0;
+    mutable bool display_rows_valid_ = false;
     std::deque<LogicalLine> lines_;
     uint32_t max_lines_;
     uint64_t max_bytes_;
@@ -392,12 +412,8 @@ private:
     // 选区变化：新旧选区覆盖到的网格行全部取新 revision（全局计数器），历史行随计数器一起变
     void sel_touch(const Selection &old);
     size_t sel_hist_segments_ = 0;
-    // B2：history_display_rows 缓存（键 = 回滚代数 + 列宽）；后端每帧查询，避免每次整段重排
-    mutable uint64_t hist_rows_gen_ = ~0ull;
-    mutable uint16_t hist_rows_cols_ = 0;
-    mutable size_t hist_rows_cache_ = 0;
 public:
-    // 测试用：缓存未命中（真正重排）的次数
+    // 测试用：完整重建计数缓存的次数（不含首/尾组更新）
     mutable uint64_t debug_hist_rows_recompute_count = 0;
 private:
 };
