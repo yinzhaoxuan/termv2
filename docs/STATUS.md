@@ -1,5 +1,13 @@
 # iterm2-win 进度汇总
 
+## 2026-11-03：REVIEW 增补二 D-4
+
+- closer 上报 `timedOut`（「关闭超时，已强制结束」）后，传输仍可能停在 Closing。
+  排空不再一直等 `pumpInputEnded()`：宽限 `kCloseTimeoutGraceMs`（1s）内按预算继续喂输出，
+  期满丢弃尚未喂入的字节、结束 Draining，并撤掉 8 ms 续跑定时器。
+  终态为 Failed，`errorText` 带超时原因（有丢弃时附带字节数）。
+  未超时的关闭仍等到传输 Closed/Failed 再收尾。见 [ADR-001](ADR-001-pump状态机.md) §10。单测 PANE-25。
+
 ## 2026-11-03：REVIEW 增补二 D-3（HostKeyAlias 管道）
 
 - Hyper-V 的主机密钥身份改为 `hv-<规范化 VM GUID>`，不再只用解析出的 IP。
@@ -128,7 +136,7 @@
 - 传输改动：`ConPtyTransport::beginPaste(n, bracketed)` 透传（原先恒为 bracketed）；新增 `activeProcessCount()`（Job 基本记账 ActiveProcesses，加锁防 job_ 关闭竞态）；SshTransport 对应转发。
 
 ### T08 评审修复（R1–R4，对齐 UI 头 783435d）
-1. **关闭不阻塞 UI**：`requestClose` 把关闭交给本会话的关闭线程后立即返回。该线程调 `transport.close(User)`，由传输层 closer 执行 T03A §1.4 的 9 步和 3 s 强杀，再 `waitClosed(5 s)`。结果 post 到 UI 队列，UI 线程 `finishSession`（排空输出、finish_input、最终快照）后发 `onStatus(Exited)`，超时发 `onStatus(Failed, "关闭超时，已强制结束")`。超时后线程继续等传输真正结束，并在该线程上析构。析构函数先 close 队列，再把传输交给关闭线程（若尚未开始），只释放自己的引用，**不 join、不等待**。多窗格各自一条线程，并行关闭。单测 PANE-01：立即返回、只经 drain 送达、8 个会话并行（≈单个耗时）、超时路径、关闭中销毁不回调。
+1. **关闭不阻塞 UI**：`requestClose` 把关闭交给本会话的关闭线程后立即返回。该线程调 `transport.close(User)`，由传输层 closer 执行 T03A §1.4 的 9 步和 3 s 强杀，再 `waitClosed(5 s)`。结果 post 到 UI 队列，UI 线程 `finishSession`（排空输出、finish_input、最终快照）后发 `onStatus(Exited)`，超时发 `onStatus(Failed, "关闭超时，已强制结束")`。传输若在 `waitClosed` 超时后仍停在 Closing，D-4 再给 1s 排空宽限，期满结束 Draining 并发布这条 Failed（见文首）。超时后线程继续等传输真正结束，并在该线程上析构。析构函数先 close 队列，再把传输交给关闭线程（若尚未开始），只释放自己的引用，**不 join、不等待**。多窗格各自一条线程，并行关闭。单测 PANE-01：立即返回、只经 drain 送达、8 个会话并行（≈单个耗时）、超时路径、关闭中销毁不回调。
 2. **粘贴**：直接 `itcore_encode_paste`，由核心按 DECSET 2004 加标记并清洗 NUL 与内嵌起止标记（7 位 / C1，循环删除），已删除 `bracketedFromProbe`/`buildPaste`/`sanitizePasteBody`。核心返回 -2 或传输返回 TooLarge 时调 `onPasteRejected(bytes, 32768)`。单测 ENC-02。
 3. **`itcore_mode_query(core, mode)`** → `ITCORE_MODE_NOT_RECOGNIZED/SET/RESET`（0/1/2，与 DECRPM Pm 一致），仅 DEC 私有模式，覆盖 1 4（DECSCLM，仅记录） 7 9 25 47 1000 1002 1003 1006 1047 1049 2004。`CSI ? Ps $ p` → `CSI ? Ps ; Pm $ y`。单测 CORE-11。ANSI 模式另用 `itcore_ansi_mode_query(core, mode)`（4 IRM、20 LNM），保持原函数签名以稳定 C ABI；DEC ?4 与 ANSI 4 互不影响，CORE-13 覆盖。
 4. **选区在核心**：`itcore_selection_start/extend/clear/active/text`。端点存为 (逻辑段 id, 字符序号)，跟随滚动进历史、历史按宽度重排和 resize。起点被历史裁掉时夹到最早一行；切主/备用屏、RIS、ED 3 时清除。复制规则：软换行拼接，硬换行出 `\n`，行尾空白去掉，宽字符只出一次，WIDE 换行补的空格不算内容。快照里选中格带 `ITCORE_CELL_SELECTED` 并翻转 INVERSE，选区变化会 touch 全部行，触发脏行重绘。后端：本地模式（无鼠标报告或按住 Shift）下，移到另一格才开始拖选；单击清除选区并检查链接。`selectedText()`/`clearSelection()` 已实现；选区有/无变化（含被输出清掉）时发 `onSelectionChanged`。单测 CORE-12。

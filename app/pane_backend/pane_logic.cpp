@@ -17,6 +17,14 @@ PumpDecision decidePumpStep(DrainPhase phase, PumpResult r, bool carryEmpty) {
     if (phase == DrainPhase::Draining && r != PumpResult::FedMore && carryEmpty) return {true, false, false, false};
     return {false, r == PumpResult::FedMore || !carryEmpty, r != PumpResult::Idle, false};
 }
+CloseGraceAction decideCloseTimeoutGrace(DrainPhase phase, bool inputEnded, bool closeTimedOut,
+                                         CloseGraceState state, bool hasClock, uint64_t nowMs,
+                                         uint64_t graceMs) {
+    if (phase != DrainPhase::Draining || inputEnded || !closeTimedOut) return CloseGraceAction::None;
+    if (!state.armed) return CloseGraceAction::ArmAndWait;
+    if (!hasClock || nowMs < state.startMs || nowMs - state.startMs < graceMs) return CloseGraceAction::Wait;
+    return CloseGraceAction::Abandon;
+}
 FrameMode chooseFrameMode(DrainPhase phase, bool pending, bool force) {
     if (force) return FrameMode::Force;
     return phase == DrainPhase::Draining || (phase == DrainPhase::Running && pending) ? FrameMode::Immediate : FrameMode::VSync;

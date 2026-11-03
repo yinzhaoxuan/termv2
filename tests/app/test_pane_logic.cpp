@@ -933,7 +933,11 @@ struct PumpTestPane {
     std::function<void()> bell, title, viewport;
     uint64_t queueDropped = 0;
     bool drainEvents = true, timerWorks = true, yieldAfterSlice = false, inputEnded = true;
+    bool closeTimedOut = false, useClock = false;
+    uint64_t clockMs = 0;
+    std::string timeoutDetail;
     bool pumpInputEnded() const { return inputEnded; }
+    bool pumpCloseTimedOut() const { return closeTimedOut; }
     explicit PumpTestPane(PumpTestLoop &l, int i) : loop(l), id(i) { makeCore(); }
     ~PumpTestPane() {
         life.reset(); events.clear(); driver.stop(*this, sched); loop.cancel(id);
@@ -969,13 +973,15 @@ struct PumpTestPane {
         }
     }
     void finishPumpInput(itcore_core *c) {
-        CHECK(driver.carry.empty() && output.empty());
+        // 正常收尾时队列必须已空。关闭超时放弃时读侧仍未结束，允许留下未 pop 的块。
+        if (inputEnded) CHECK(driver.carry.empty() && output.empty());
         ++trace->finishedInputs; itcore_finish_input(c);
     }
     void presentPump(FrameMode mode) { trace->frames.push_back(mode); record(viewport); }
     void closePumpFault() { ++trace->faults; }
     void completePump(uint64_t dropped) {
         TerminalInputs in; in.coreDropped = dropped; in.queueDropped = queueDropped;
+        in.timedOut = closeTimedOut; in.timeoutDetail = timeoutDetail;
         trace->terminal = classifyTerminal(in);
         trace->log = terminalLog(1, trace->terminal, dropped, queueDropped);
         ++trace->terminalPublishes;
@@ -997,6 +1003,10 @@ struct PumpTestPane {
         ++trace->steps; trace->insideStep = true;
         auto budget = driver.phase == DrainPhase::Draining ? PumpBudget::finalSlice() : PumpBudget{};
         if (yieldAfterSlice) budget.yieldUi = [](void *) { return true; }; // 查询，不执行用户动作
+        if (useClock) {
+            budget.nowMs = [](void *ctx) { return static_cast<PumpTestPane *>(ctx)->clockMs; };
+            budget.clockCtx = this;
+        }
         driver.step(*this, core, sched, budget);
         trace->insideStep = false;
         auto token = std::weak_ptr<char>(life);
@@ -1082,6 +1092,126 @@ static void finish_session_during_draining_is_idempotent() {
     pane.finishSession(); pane.step();
     CHECK(pane.trace->finishedInputs == 1 && pane.trace->terminalPublishes == 1);
     CHECK(pane.trace->exported.find("TAIL_END") != std::string::npos);
+}
+static void close_timeout_grace_abandons_drain() {
+    auto armTimedOut = [](PumpTestPane &pane, uint64_t now) {
+        pane.inputEnded = false;
+        pane.closeTimedOut = true;
+        pane.timeoutDetail = kCloseTimeoutDetail;
+        pane.useClock = true;
+        pane.clockMs = now;
+        pane.finishSession();
+    };
+    {   // 宽限内继续等；期满即使传输仍未终态也结束，终态带上关闭超时，续跑定时器撤掉。
+        PumpTestLoop loop; PumpTestPane pane(loop, 1);
+        pane.output.push_back({"KEEP_ME"});
+        armTimedOut(pane, 5000);
+        loop.one();
+        CHECK(pane.driver.phase == DrainPhase::Draining && pane.driver.closeGrace.armed);
+        CHECK(pane.driver.closeGrace.startMs == 5000);
+        CHECK(pane.trace->finishedInputs == 0 && pane.trace->terminalPublishes == 0);
+        CHECK(!loop.timers.empty());
+        pane.clockMs = 5000 + kCloseTimeoutGraceMs - 1;
+        loop.one();
+        CHECK(pane.driver.phase == DrainPhase::Draining && pane.trace->terminalPublishes == 0);
+        pane.clockMs = 5000 + kCloseTimeoutGraceMs;
+        loop.one();
+        CHECK(pane.driver.phase == DrainPhase::Finished);
+        CHECK(pane.trace->finishedInputs == 1 && pane.trace->terminalPublishes == 1);
+        CHECK(pane.trace->terminal.failed);
+        CHECK(pane.trace->terminal.error == kCloseTimeoutDetail);
+        CHECK(pane.trace->exported.find("KEEP_ME") != std::string::npos);
+        CHECK(pane.driver.stats.droppedBytes == 0 && loop.timers.empty());
+        pane.step();
+        CHECK(loop.timers.empty() && pane.trace->terminalPublishes == 1);
+    }
+    {   // 宽限内晚到的尾部照常喂入。读侧在宽限到期前结束则走原收尾，不把尾部当丢弃。
+        PumpTestLoop loop; PumpTestPane pane(loop, 1);
+        armTimedOut(pane, 100);
+        loop.one();
+        pane.output.push_back({"LATE_READER_TAIL"});
+        pane.clockMs = 100 + 400;
+        loop.one();
+        CHECK(pane.trace->terminalPublishes == 0 && pane.text().find("LATE_READER_TAIL") != std::string::npos);
+        pane.inputEnded = true;
+        pane.clockMs = 100 + kCloseTimeoutGraceMs + 5000;
+        loop.run();
+        CHECK(pane.trace->finishedInputs == 1 && pane.driver.stats.droppedBytes == 0);
+        CHECK(pane.trace->exported.find("LATE_READER_TAIL") != std::string::npos);
+        CHECK(pane.trace->terminal.failed && pane.trace->terminal.error == kCloseTimeoutDetail);
+    }
+    {   // 期满时队列里还有数据：本轮已喂的留下，未喂的按丢弃记账，然后结束（不再等 Closed）。
+        PumpTestLoop loop; PumpTestPane pane(loop, 1);
+        armTimedOut(pane, 0);
+        loop.one();
+        const size_t nbytes = 200u * 1024u;
+        pane.output.push_back({std::string(nbytes, 'Z')});
+        pane.clockMs = kCloseTimeoutGraceMs;
+        loop.one();
+        CHECK(pane.driver.phase == DrainPhase::Finished && loop.timers.empty());
+        CHECK(pane.trace->terminalPublishes == 1 && pane.trace->terminal.failed);
+        CHECK(pane.trace->terminal.error.find(kCloseTimeoutDetail) != std::string::npos);
+        CHECK(pane.driver.stats.droppedBytes > 0 && pane.driver.stats.droppedBytes < nbytes);
+        CHECK(pane.trace->terminal.droppedOutputBytes == pane.driver.stats.droppedBytes);
+        CHECK(pane.trace->terminal.error.find(std::to_string(pane.driver.stats.droppedBytes)) != std::string::npos);
+        CHECK(pane.driver.carry.empty());
+    }
+    {   // 没有时钟时不根据步数放弃，避免测试夹具或计时失败把正常等待收成丢弃。
+        PumpTestLoop loop; PumpTestPane pane(loop, 1);
+        pane.inputEnded = false;
+        pane.closeTimedOut = true;
+        pane.timeoutDetail = kCloseTimeoutDetail;
+        pane.finishSession();
+        for (int i = 0; i < 40; ++i) loop.one();
+        CHECK(pane.driver.phase == DrainPhase::Draining && pane.driver.closeGrace.armed);
+        CHECK(pane.trace->terminalPublishes == 0 && !loop.timers.empty());
+    }
+    {   // 未超时：时钟跳很远也继续等传输终态；终态后尾部仍在，且不是 Failed。
+        PumpTestLoop loop; PumpTestPane pane(loop, 1);
+        pane.inputEnded = false;
+        pane.useClock = true;
+        pane.clockMs = 0;
+        pane.output.push_back({"CLEAN_TAIL"});
+        pane.finishSession();
+        loop.one();
+        pane.clockMs = 60000;
+        loop.one();
+        CHECK(pane.driver.phase == DrainPhase::Draining && !pane.driver.closeGrace.armed);
+        CHECK(pane.trace->terminalPublishes == 0);
+        pane.inputEnded = true;
+        loop.run();
+        CHECK(pane.trace->finishedInputs == 1 && !pane.trace->terminal.failed);
+        CHECK(pane.trace->terminal.error.empty());
+        CHECK(pane.trace->exported.find("CLEAN_TAIL") != std::string::npos);
+    }
+    {   // Running 期间即使已标记超时也不收尾；重连清掉宽限起点，新一轮不会立刻放弃。
+        PumpTestLoop loop; PumpTestPane pane(loop, 1);
+        pane.inputEnded = false;
+        pane.closeTimedOut = true;
+        pane.useClock = true;
+        pane.clockMs = 10;
+        pane.output.push_back({"STILL_RUNNING"});
+        pane.step();
+        pane.clockMs = 10 + kCloseTimeoutGraceMs + 1000;
+        pane.step();
+        CHECK(pane.driver.phase == DrainPhase::Running && pane.trace->terminalPublishes == 0);
+        armTimedOut(pane, 10);
+        loop.one();
+        CHECK(pane.driver.closeGrace.armed && pane.driver.closeGrace.startMs == 10);
+        pane.reconnect();
+        CHECK(!pane.driver.closeGrace.armed && pane.driver.phase == DrainPhase::Running);
+        pane.inputEnded = false;
+        pane.closeTimedOut = true;
+        pane.timeoutDetail = kCloseTimeoutDetail;
+        pane.useClock = true;
+        pane.clockMs = 10 + kCloseTimeoutGraceMs;
+        pane.output.push_back({"AFTER_RECONNECT"});
+        pane.finishSession();
+        loop.one();
+        CHECK(pane.driver.phase == DrainPhase::Draining && pane.trace->terminalPublishes == 0);
+        CHECK(pane.driver.closeGrace.startMs == pane.clockMs);
+        CHECK(pane.text().find("AFTER_RECONNECT") != std::string::npos);
+    }
 }
 static void close_timeout_waits_for_reader_and_late_tail() {
     PumpTestLoop loop; PumpTestPane pane(loop, 1);
@@ -1183,6 +1313,17 @@ static void pump_fsm_decisions_and_frame_modes() {
     in.closing = false; CHECK(classifyTerminal(in).failed);
     in.timedOut = true; in.timeoutDetail = "timeout"; in.sshFailed = true; in.sshDetail = "ssh";
     CHECK(classifyTerminal(in).error == "timeout");
+    CloseGraceState grace;
+    CHECK(decideCloseTimeoutGrace(DrainPhase::Draining, false, false, grace, true, 0) == CloseGraceAction::None);
+    CHECK(decideCloseTimeoutGrace(DrainPhase::Draining, true, true, grace, true, 5000) == CloseGraceAction::None);
+    CHECK(decideCloseTimeoutGrace(DrainPhase::Running, false, true, grace, true, 0) == CloseGraceAction::None);
+    CHECK(decideCloseTimeoutGrace(DrainPhase::Finished, false, true, grace, true, 0) == CloseGraceAction::None);
+    CHECK(decideCloseTimeoutGrace(DrainPhase::Draining, false, true, grace, true, 100) == CloseGraceAction::ArmAndWait);
+    grace.armed = true; grace.startMs = 100;
+    CHECK(decideCloseTimeoutGrace(DrainPhase::Draining, false, true, grace, true, 100 + kCloseTimeoutGraceMs - 1) == CloseGraceAction::Wait);
+    CHECK(decideCloseTimeoutGrace(DrainPhase::Draining, false, true, grace, true, 100 + kCloseTimeoutGraceMs) == CloseGraceAction::Abandon);
+    CHECK(decideCloseTimeoutGrace(DrainPhase::Draining, false, true, grace, false, 100 + kCloseTimeoutGraceMs) == CloseGraceAction::Wait);
+    CHECK(decideCloseTimeoutGrace(DrainPhase::Draining, false, true, grace, true, 50) == CloseGraceAction::Wait);
 }
 static void osc52_ping_sequence_and_split_output_hex() {
     struct Sink { std::vector<std::string> replies, logs; } sink;
@@ -1336,6 +1477,7 @@ int main(int argc, char **argv) {
     else if (w == "fsm_reconnect") pump_and_continuation_reconnect_safely();
     else if (w == "fsm_finish") finish_session_during_draining_is_idempotent();
     else if (w == "fsm_late_tail") close_timeout_waits_for_reader_and_late_tail();
+    else if (w == "fsm_close_grace") close_timeout_grace_abandons_drain();
     else if (w == "fsm_tail") final_tail_complete_without_fault();
     else if (w == "fsm_dropped") final_dropped_bytes_reported_in_terminal();
     else if (w == "fsm_fatal") draining_fatal_counts_remaining_without_fault();
@@ -1354,7 +1496,7 @@ int main(int argc, char **argv) {
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
     else if (w == "search") search_driver();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

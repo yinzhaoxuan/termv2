@@ -121,6 +121,7 @@ public:
     PumpStats stats;
     PumpCarry carry;
     bool inputFinished = false;
+    CloseGraceState closeGrace;
 
     template<class Host> void requestFinish(Host &host, PumpScheduler &sched) {
         if (phase != DrainPhase::Running) return;
@@ -130,6 +131,7 @@ public:
     template<class Host> void reset(Host &host, PumpScheduler &sched) {
         host.cancelPumpTimer(); sched.reset();
         phase = DrainPhase::Running; stats = {}; carry.clear(); inputFinished = false;
+        closeGrace = {};
     }
     template<class Host> void stop(Host &host, PumpScheduler &sched) {
         host.cancelPumpTimer(); sched.reset(); phase = DrainPhase::Finished; carry.clear();
@@ -163,8 +165,30 @@ public:
         if (decision.fault) {
             host.cancelPumpTimer(); sched.reset(); host.closePumpFault(); return;
         }
-        // 关闭线程超时结果可能早于读线程退出；等真正 Closed/Failed 才能证明队列不会再增长。
-        if (decision.complete && !host.pumpInputEnded()) {
+        // 关闭结果可能早于读线程退出。队列见空也不收尾，直到传输 Closed/Failed（pumpInputEnded）。
+        // 例外：closer 已报 timedOut。宽限 kCloseTimeoutGraceMs 内继续排空；期满按本轮预算丢弃
+        // 未喂字节并完成收尾，终态带上超时原因。未超时的关闭不走宽限。无时钟则保持等待。
+        const bool inputEnded = host.pumpInputEnded();
+        const uint64_t now = budget.nowMs ? budget.nowMs(budget.clockCtx) : 0;
+        const auto grace = decideCloseTimeoutGrace(phase, inputEnded, host.pumpCloseTimedOut(),
+                                                   closeGrace, budget.nowMs != nullptr, now);
+        if (grace == CloseGraceAction::ArmAndWait) {
+            closeGrace.armed = true;
+            closeGrace.startMs = now;
+        }
+        if (grace == CloseGraceAction::Abandon) {
+            if (!carry.empty()) stats.droppedBytes += carry.bytes.size() - carry.off;
+            carry.clear();
+            size_t discarded = 0;
+            while (discarded < budget.maxBytes) {
+                auto chunk = host.popOutput();
+                if (!chunk) break;
+                discarded += chunk->bytes.size();
+                stats.droppedBytes += chunk->bytes.size();
+            }
+            decision.complete = true;
+            decision.armTimer = false;
+        } else if (decision.complete && !inputEnded) {
             decision.complete = false;
             decision.armTimer = true;
         }
