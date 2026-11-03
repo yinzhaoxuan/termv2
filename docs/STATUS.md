@@ -1,5 +1,11 @@
 # iterm2-win 进度汇总
 
+## 2026-11-03：REVIEW A2 / GAP-02 收尾排空
+
+- 已由 [ADR-001](ADR-001-pump状态机.md) 收口，本轮不改状态机。`finishSession` 只进入 Draining 并登记续跑；`itcore_finish_input` 要等传输 Closed/Failed，且队列和 carry 都空。
+- 故障丢弃仍把字节数写进终态（「输出可能不完整」），不把剩余输出当成已经 EOF。
+- 单测 PANE-27：10×16 KiB，跨块 UTF-8（U+4F60）和尾标记。先关闭，再只走定时器排空；全部喂入后才 EOF，标记和汉字都在。丢弃路径仍报告不完整。
+
 ## 2026-11-03：REVIEW A3 / GAP-15 启动前失败
 
 - 兼容模式 `ssh.exe` 不存在时，`SshTransport::start` 只回调 `onFinished(SshNotFound)` 并返回 `nullopt`。窗格把 `nullopt` 当成已启动，而 `finishSession` 只认 Closed/Failed，于是一直停在 Starting。

@@ -915,6 +915,7 @@ struct PumpTestLoop {
 struct PumpTestTrace {
     int afterFeeds = 0, finishedInputs = 0, terminalPublishes = 0, faults = 0, steps = 0, callbacks = 0;
     bool insideStep = false;
+    size_t queuedChunksAtFinish = 0, carryBytesAtFinish = 0;
     TerminalStatus terminal;
     std::string log, exported;
     std::vector<FrameMode> frames;
@@ -935,17 +936,21 @@ struct PumpTestPane {
     bool drainEvents = true, timerWorks = true, yieldAfterSlice = false, inputEnded = true;
     bool closeTimedOut = false, useClock = false;
     uint64_t clockMs = 0;
+    uint32_t scrollbackLines = 32;
     std::string timeoutDetail;
     bool pumpInputEnded() const { return inputEnded; }
     bool pumpCloseTimedOut() const { return closeTimedOut; }
-    explicit PumpTestPane(PumpTestLoop &l, int i) : loop(l), id(i) { makeCore(); }
+    explicit PumpTestPane(PumpTestLoop &l, int i, uint32_t scrollback = 32) : loop(l), id(i) {
+        scrollbackLines = scrollback;
+        makeCore();
+    }
     ~PumpTestPane() {
         life.reset(); events.clear(); driver.stop(*this, sched); loop.cancel(id);
         itcore_destroy(core);
     }
     void makeCore() {
         itcore_options o{}; o.abi_version = ITCORE_ABI_VERSION; o.struct_size = sizeof o;
-        o.columns = 80; o.rows = 24; o.scrollback_lines = 32;
+        o.columns = 80; o.rows = 24; o.scrollback_lines = scrollbackLines;
         CHECK(itcore_create(&o, &core) == 0 && core);
     }
     bool armPumpTimer() {
@@ -974,6 +979,8 @@ struct PumpTestPane {
     }
     void finishPumpInput(itcore_core *c) {
         // 正常收尾时队列必须已空。关闭超时放弃时读侧仍未结束，允许留下未 pop 的块。
+        trace->queuedChunksAtFinish = output.size();
+        trace->carryBytesAtFinish = driver.carry.empty() ? 0 : driver.carry.bytes.size() - driver.carry.off;
         if (inputEnded) CHECK(driver.carry.empty() && output.empty());
         ++trace->finishedInputs; itcore_finish_input(c);
     }
@@ -1450,6 +1457,78 @@ static void pane_diag() {
     CHECK(shared.openCount() == 1);
 }
 
+// GAP-02 / A2：传输先关闭，队列里仍有约 10×16 KiB。finish_input 必须等定时器把队列和
+// carry 喂空；跨块切开的 UTF-8 与尾标记都要完整留下。故障丢弃仍报告输出不完整。
+static void gap02_closed_transport_drains_before_eof() {
+    constexpr size_t kChunk = 16u * 1024u;
+    const std::string head = "GAP02_HEAD";
+    const std::string marker = "GAP02_END";
+    const std::string ni = "\xE4\xBD\xA0"; // U+4F60，三字节，切在块边界上
+    CHECK(ni.size() == 3 && head.size() < kChunk && marker.size() < kChunk);
+    {
+        PumpTestLoop loop;
+        // 历史要装得下整段，尾部的「你」离末尾约 16 KiB，默认 32 行会把它滚掉。
+        PumpTestPane pane(loop, 1, 8192);
+        for (int i = 0; i < 10; ++i) {
+            std::string chunk(kChunk, 'a');
+            if (i == 0) chunk.replace(0, head.size(), head);
+            if (i == 8) { chunk[kChunk - 2] = '\xE4'; chunk[kChunk - 1] = '\xBD'; }
+            if (i == 9) {
+                chunk[0] = '\xA0';
+                chunk.replace(kChunk - marker.size(), marker.size(), marker);
+            }
+            pane.output.push_back({std::move(chunk)});
+        }
+        CHECK(pane.output.size() == 10);
+        // 传输已经 Closed（inputEnded 默认 true）。finishSession 只登记 Draining，不同步喂、不 EOF。
+        pane.finishSession();
+        CHECK(pane.driver.phase == DrainPhase::Draining);
+        CHECK(pane.trace->finishedInputs == 0 && pane.trace->afterFeeds == 0);
+        CHECK(!loop.timers.empty() && pane.output.size() == 10);
+
+        int roundsWhileQueued = 0;
+        while (pane.trace->finishedInputs == 0) {
+            CHECK(!pane.output.empty() || !pane.driver.carry.empty());
+            if (!loop.one()) break;
+            if (pane.trace->finishedInputs == 0) ++roundsWhileQueued;
+        }
+        CHECK(roundsWhileQueued >= 2); // 64 KiB 预算盖不住 160 KiB，至少再续两轮才允许 EOF
+        CHECK(pane.trace->steps >= 3 && pane.trace->finishedInputs == 1);
+        CHECK(pane.trace->queuedChunksAtFinish == 0 && pane.trace->carryBytesAtFinish == 0);
+        CHECK(pane.output.empty() && pane.driver.carry.empty());
+        CHECK(pane.driver.phase == DrainPhase::Finished && loop.timers.empty());
+        CHECK(pane.driver.stats.droppedBytes == 0 && pane.trace->faults == 0);
+        CHECK(pane.trace->terminalPublishes == 1 && !pane.trace->terminal.failed);
+        CHECK(pane.trace->terminal.droppedOutputBytes == 0 && pane.trace->terminal.error.empty());
+        CHECK(itcore_incomplete_count(pane.core) == 0);
+        const std::string &text = pane.trace->exported;
+        CHECK(text.find(head) != std::string::npos);
+        CHECK(text.find(marker) != std::string::npos);
+        CHECK(text.find(ni) != std::string::npos);
+        CHECK(text.find("\xEF\xBF\xBD") == std::string::npos);
+        pane.finishSession();
+        pane.step();
+        CHECK(pane.trace->finishedInputs == 1 && pane.trace->terminalPublishes == 1);
+    }
+    {   // 核心拒收时丢弃剩余字节，终态写明输出不完整，而不是假装 Exited。
+        PumpTestLoop loop;
+        PumpTestPane pane(loop, 1);
+        std::string bells(40000, '\a');
+        CHECK(itcore_feed(pane.core, reinterpret_cast<const uint8_t *>(bells.data()), bells.size()).status == ITCORE_NEED_DRAIN);
+        pane.drainEvents = false;
+        pane.output.push_back({"\a\aDROP_TAIL"});
+        const auto n = pane.output.front().bytes.size();
+        pane.finishSession();
+        loop.run();
+        CHECK(pane.driver.stats.droppedBytes == n && pane.driver.stats.skippedSlices == 1);
+        CHECK(pane.trace->terminal.droppedOutputBytes == n);
+        CHECK(pane.trace->terminal.error.find("输出可能不完整") != std::string::npos);
+        CHECK(pane.trace->terminal.error.find(std::to_string(n)) != std::string::npos);
+        CHECK(pane.trace->exported.find("DROP_TAIL") == std::string::npos);
+        CHECK(pane.trace->finishedInputs == 1 && pane.output.empty());
+    }
+}
+
 static void prestart_failure_leaves_starting() {
     auto launched = settleSyncStart(SyncStart::Launched, "ignored");
     CHECK(!launched.failed && launched.error.empty() && launched.reconnectAllowed);
@@ -1510,6 +1589,7 @@ int main(int argc, char **argv) {
     else if (w == "fsm_decisions") pump_fsm_decisions_and_frame_modes();
     else if (w == "osc52_diag") osc52_ping_sequence_and_split_output_hex();
     else if (w == "ssh_direct_select") ssh_direct_select();
+    else if (w == "fsm_gap02") gap02_closed_transport_drains_before_eof();
     else if (w == "prestart") prestart_failure_leaves_starting();
     else if (w == "pane_diag") pane_diag();
     else if (w == "churn") churn();
@@ -1521,7 +1601,7 @@ int main(int argc, char **argv) {
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
     else if (w == "search") search_driver();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); prestart_failure_leaves_starting(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); prestart_failure_leaves_starting(); gap02_closed_transport_drains_before_eof(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;
