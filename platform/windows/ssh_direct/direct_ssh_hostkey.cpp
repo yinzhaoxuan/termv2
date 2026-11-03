@@ -24,8 +24,8 @@ void lowerAscii(std::string &s) {
 
 void DirectSshTransport::Impl::prepareHostKey() {
     setPhase(DirectStage::KnownHosts, "known_hosts");
-    hostLower = target.hostName;
-    lowerAscii(hostLower);
+    // Same string OpenSSH uses: alias verbatim when set, otherwise put_host_port(host).
+    hostLower = directHostKeyLookup(target.hostName, target.port, target.hostKeyAlias);
     std::ifstream file(std::filesystem::path(widen(target.appKnownHostsFile)), std::ios::binary);
     if (!file) fail(DirectFailureKind::KnownHostsOpenFailed);
     // Same 16 MiB limit as the dependency probe; never load an unbounded file.
@@ -39,7 +39,8 @@ void DirectSshTransport::Impl::prepareHostKey() {
         text.append(buffer, static_cast<size_t>(file.gcount()));
     }
     if (!file.eof()) fail(DirectFailureKind::KnownHostsOpenFailed, 0, "known_hosts read failed");
-    const auto types = knownHostTypesFor(text, hostLower, target.port, hmacSha1);
+    const auto types = knownHostTypesFor(text, target.hostName, target.port, hmacSha1,
+                                          target.hostKeyAlias);
     if (types.error) fail(DirectFailureKind::KnownHostsParseFailed, 0, types.error->reason);
     knownTypes = types.types;
     knownHosts = libssh2_knownhost_init(session);
@@ -99,10 +100,10 @@ void DirectSshTransport::Impl::verifyHostKey() {
     while (!fingerprint.empty() && fingerprint.back() == '=') fingerprint.pop_back();
     std::string detail = std::string(name) + " SHA256:" + fingerprint;
     diag("ssh.direct.hostkey", 0, 0, detail);
-    const auto lookup = target.port == 22 ? hostLower :
-        "[" + hostLower + "]:" + std::to_string(target.port);
+    // hostLower is already the known_hosts name (alias, or [host]:port). Do not
+    // bracket it again: OpenSSH does not put_host_port a HostKeyAlias.
     // Explicitly type the *presented* raw key, never a preferred/known type.
-    int rc = libssh2_knownhost_check(knownHosts, lookup.c_str(), key, length,
+    int rc = libssh2_knownhost_check(knownHosts, hostLower.c_str(), key, length,
         LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW | algorithm, nullptr);
     if (rc == LIBSSH2_KNOWNHOST_CHECK_MATCH) return;
     if (rc == LIBSSH2_KNOWNHOST_CHECK_MISMATCH)

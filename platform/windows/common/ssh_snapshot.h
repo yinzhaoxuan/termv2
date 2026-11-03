@@ -14,6 +14,9 @@ enum class SshAuthMode { Agent, KeyFile, Interactive };
 struct SshTarget {
     std::string alias = "it2w-target";  // 快照内的 Host 别名，只允许 [A-Za-z0-9._-]
     std::string hostName;               // 主机名 / IPv4 / IPv6（不带方括号与端口）
+    // 非空：known_hosts 身份。快照写 HostKeyAlias，并写 CheckHostIP no。
+    // 空：省略这两项，仍按 HostName（及非 22 端口的 [host]:port）查找。Hyper-V 用 hv-<vmId>。
+    std::string hostKeyAlias;
     uint16_t port = 22;
     std::string user;
     uint32_t connectTimeoutSec = 10;

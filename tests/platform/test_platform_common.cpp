@@ -21,6 +21,8 @@ static void test_snapshot() {
     CHECK(r.text && !r.error);
     const std::string &s = *r.text;
     CHECK(s.find("\nHost it2w-target\n") != std::string::npos);
+    CHECK(s.find("HostKeyAlias") == std::string::npos);
+    CHECK(s.find("CheckHostIP") == std::string::npos);
     for (auto l : {"HostName 192.0.2.10", "Port 22", "User tester", "StrictHostKeyChecking ask",
                    "UserKnownHostsFile \"C:/Users/测试 用户/AppData/it2w/app_known_hosts\"",
                    "GlobalKnownHostsFile \"C:/ProgramData/it2w/empty_known_hosts\"", "VerifyHostKeyDNS no",
@@ -52,6 +54,18 @@ static void test_snapshot() {
         CHECK(r.text && has(*r.text, "CertificateFile none") && has(*r.text, "ControlMaster no") &&
               has(*r.text, "ControlPath none"));
     }
+
+    t = base(); t.hostName = "192.0.2.10"; t.port = 2222;
+    t.hostKeyAlias = "hv-0f3a1b2c-0000-4000-8000-00000000abcd";
+    r = buildSshSnapshot(t);
+    CHECK(r.text);
+    CHECK(r.text->find("  HostName 192.0.2.10\n  HostKeyAlias hv-0f3a1b2c-0000-4000-8000-00000000abcd\n  Port 2222\n") != std::string::npos);
+    CHECK(has(*r.text, "CheckHostIP no"));
+    CHECK(r.text->find("HostKeyAlias 192.0.2.10") == std::string::npos);
+    t.hostKeyAlias = "bad alias";
+    CHECK(buildSshSnapshot(t).error && buildSshSnapshot(t).error->field == "hostKeyAlias");
+    t.hostKeyAlias = "hv-x\n  ProxyCommand calc";
+    CHECK(buildSshSnapshot(t).error && buildSshSnapshot(t).error->field == "hostKeyAlias");
 
     t = base(); t.hostName = "2001:db8::10";
     CHECK(buildSshSnapshot(t).text && has(*buildSshSnapshot(t).text, "HostName 2001:db8::10"));

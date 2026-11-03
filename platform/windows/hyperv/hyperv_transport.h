@@ -16,7 +16,7 @@ namespace it2w {
 
 struct HyperVLaunch {
     HvPolicy policy;          // vmId 必须已规范化
-    SshLaunchOptions ssh;     // target.hostName 留空，由解析结果填入
+    SshLaunchOptions ssh;     // target.hostName 留空，由解析结果填入；HostKeyAlias 由 vmId 生成（hv-<guid>）
 };
 
 struct HyperVCallbacks : SshCallbacks {

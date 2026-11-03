@@ -91,8 +91,17 @@ void DirectSizes::completeSend() {
     if (inflight) { sent = inflight; inflight.reset(); }
 }
 
+std::string directHostKeyLookup(std::string_view hostName, uint16_t port,
+                                std::string_view hostKeyAlias) {
+    if (!hostKeyAlias.empty()) return asciiLower(hostKeyAlias);
+    const std::string host = asciiLower(hostName);
+    if (port == 22) return host;
+    return "[" + host + "]:" + std::to_string(port);
+}
+
 KnownHostTypesResult knownHostTypesFor(std::string_view text, std::string_view host,
-                                      uint16_t port, const DirectHmacSha1 &hmac) {
+                                      uint16_t port, const DirectHmacSha1 &hmac,
+                                      std::string_view hostKeyAlias) {
     KnownHostTypesResult result;
     size_t lineNumber = 0;
     auto fail = [&](std::string reason) {
@@ -101,9 +110,8 @@ KnownHostTypesResult knownHostTypesFor(std::string_view text, std::string_view h
             "known_hosts line " + std::to_string(lineNumber) + ": " + reason}};
     };
     if (host.empty() || !port) return fail("invalid host/port");
-    const std::string lowerHost = asciiLower(host);
-    const std::string lookup = port == 22 ? lowerHost :
-        "[" + lowerHost + "]:" + std::to_string(port);
+    // Alias wins over the address. OpenSSH stores HostKeyAlias without :port.
+    const std::string lookup = directHostKeyLookup(host, port, hostKeyAlias);
     while (!text.empty()) {
         size_t end = text.find('\n');
         auto line = text.substr(0, end);

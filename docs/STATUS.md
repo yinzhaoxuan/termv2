@@ -1,5 +1,15 @@
 # iterm2-win 进度汇总
 
+## 2026-11-03：REVIEW 增补二 D-3（HostKeyAlias 管道）
+
+- Hyper-V 的主机密钥身份改为 `hv-<规范化 VM GUID>`，不再只用解析出的 IP。
+  DHCP 换地址后原先两种模式都会 `HostKeyUnknown`：Direct 按 IP 查找只读的 `known_hosts`，兼容模式快照又不写 `HostKeyAlias`，重新信任只记住新 IP。
+- `HyperVTransport` 在启动内层 SSH 前写入 `SshTarget::hostKeyAlias`（手动回退地址同样用 VM 别名）。
+  兼容模式 `-F` 快照包含 `HostKeyAlias`，`HostName` 仍是当前地址，并写 `CheckHostIP no`。
+  Direct 的 `knownHostTypesFor` 与 `libssh2_knownhost_check` 使用同一查找串：有别名时为别名原文（不加端口），否则维持 `[host]:port`。
+- 不改 `ui/`，不开启 accept-new。首次信任界面（展示指纹并确认后写入）仍是 Direct 转为默认的前置条件，留在本变更之外。
+  已按 IP 信任的虚拟机需在兼容模式再确认一次。见 [ADR-003](ADR-003-ssh-direct.md)、[ssh-direct.md](ssh-direct.md)。
+
 ## 2026-11-03：REVIEW A′ GAP-14 / GAP-16
 
 - GAP-14：SGR 38/48/58 的冒号形式在子参数不少于 5 个时跳过色彩空间（`38:2::R:G:B` 与 `38:2:0:R:G:B` 都是红，不再读成绿或丢掉）。分号形式的 58 与 38 一样消费 `;5;N` 和 `;2;R;G;B`；分量被截断时吃掉已有数字，不再漏成 SGR 2/0。59 清下划线色。`4:0..5`、21、53/55 写入样式位与上划线位；D2D 按这些位画双线、波浪、点线、虚线和上划线。`ITCORE_ABI_VERSION` 仍是 0（`flags` 里原本空着的位，结构没变）。
@@ -151,7 +161,7 @@
 
 ### T09 Hyper-V 辅助（实现）
 - `platform/windows/common/hyperv_resolve.*`（平台无关）：VM ID 规范化（仅 GUID）、查询 JSON 解析（v=1，标量/数组、BOM）、地址筛选（排除 0.0.0.0、127/8、169.254/16、::、::1、无 scope 的 fe80::/10）、候选选择、`HyperVResolver` 状态机与 `runHyperVResolution`（轮询 2 s、单次查询 5 s、预算 60 s；只在策略允许时启动一次；多候选不盲选；VmNotFound 不回退，AccessDenied/模块缺失/启动失败可回退手动地址）。
-- `platform/windows/hyperv/`：固定 PowerShell 脚本（-EncodedCommand，VM ID 走环境变量）+ Job/超时/取消；`HyperVTransport` 后台解析后启动内层 SshTransport。
+- `platform/windows/hyperv/`：固定 PowerShell 脚本（-EncodedCommand，VM ID 走环境变量）+ Job/超时/取消；`HyperVTransport` 后台解析后启动内层 SshTransport，并写入 `HostKeyAlias=hv-<vmId>`（D-3；首次信任界面仍未做）。
 - 后端：`PaneBackendConfig::resolveHyperV`，失败文本为 `<类别>: <说明>` 写进 errorText；连接后标题为 “Hyper-V <地址>” 或 “手动地址 <地址>”。
 - 测试 HV-01.resolve_policy。实机（VM-01）未跑。
 

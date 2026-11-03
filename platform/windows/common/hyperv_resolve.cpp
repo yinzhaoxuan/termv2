@@ -18,6 +18,12 @@ std::optional<std::string> normalizeVmId(std::string_view id) {
     return out;
 }
 
+std::optional<std::string> hyperVHostKeyAlias(std::string_view vmId) {
+    auto id = normalizeVmId(vmId);
+    if (!id) return std::nullopt;
+    return "hv-" + *id;
+}
+
 const char *hvQueryErrorName(HvQueryError e) {
     switch (e) {
     case HvQueryError::None: return "None";

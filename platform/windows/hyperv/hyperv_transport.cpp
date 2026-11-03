@@ -39,6 +39,19 @@ void HyperVTransport::worker(SessionId s, AttemptId a, HyperVLaunch l) {
     };
     HvAction res = runHyperVResolution(r, d);
     if (closing_) { state_ = TransportState::Closed; if (cb_.onStateChanged) cb_.onStateChanged(s, a, TransportState::Closed, std::nullopt); return; }
+    if (res.kind == HvAction::Connect) {
+        // 身份是 VM，不是这次解析到的地址。两种内层 SSH 都读这个字段。
+        auto alias = hyperVHostKeyAlias(l.policy.vmId);
+        if (!alias) {
+            res.kind = HvAction::Fail;
+            res.failure = HvFailure::VmNotFound;
+            res.fallback = false;
+            res.text = "VM ID 不是合法 GUID，无法固定 HostKeyAlias";
+        } else {
+            l.ssh.target.hostName = res.host;
+            l.ssh.target.hostKeyAlias = std::move(*alias);
+        }
+    }
     if (cb_.onDiagnostic && res.fallback) cb_.onDiagnostic(s, a, DiagRecord{"hyperv.fallback", 0, 0, res.text});
     if (cb_.onResolved) cb_.onResolved(s, a, res);
     if (res.kind != HvAction::Connect) {
@@ -46,7 +59,6 @@ void HyperVTransport::worker(SessionId s, AttemptId a, HyperVLaunch l) {
         if (cb_.onStateChanged) cb_.onStateChanged(s, a, TransportState::Failed, TransportFault::StartFailed);
         return;
     }
-    l.ssh.target.hostName = res.host;
     uint64_t launchGeneration;
     {
         std::lock_guard g(mu_);
