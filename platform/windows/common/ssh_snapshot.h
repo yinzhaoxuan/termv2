@@ -43,6 +43,13 @@ std::string buildWindowsCommandLine(const std::vector<std::string> &argv);
 // CommandLineToArgvW 的参考解析（仅用于测试往返；不处理 argv[0] 的特殊规则）。
 std::vector<std::string> parseWindowsCommandLine(const std::string &cmd);
 
+// GAP-01：快照叶子名带进程号，避免崩溃留下的 ssh-1-1.conf 挡住下次启动，也避免多窗格互撞。
+// 形式 ssh-<pid>-<sid>-<aid>.conf。这里不删残留；启动时清理仍待配置目录锁接入。
+inline std::string sshSnapshotLeafName(uint64_t processId, uint64_t sessionId, uint64_t attemptId) {
+    return "ssh-" + std::to_string(processId) + "-" + std::to_string(sessionId) + "-" +
+           std::to_string(attemptId) + ".conf";
+}
+
 // ssh 参数：ssh.exe -F <snapshot> <alias>（不经 shell 拼接）
 std::vector<std::string> sshArguments(const std::string &sshExe, const std::string &snapshotPath,
                                       const std::string &alias);

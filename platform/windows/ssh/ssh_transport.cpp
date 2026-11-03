@@ -47,9 +47,10 @@ std::optional<SnapshotError> SshTransport::start(SessionId sid, AttemptId aid, c
     }
 
     // 快照落盘：UTF-8 无 BOM；CREATE_NEW 防止覆盖；仅当前用户可读由目录 ACL 保证（T03A §3.3）
-    wchar_t name[96];
-    swprintf(name, 96, L"\\ssh-%llu-%llu.conf", (unsigned long long)sid.value, (unsigned long long)aid.value);
-    std::wstring path = o.snapshotDir + name;
+    // GAP-01：叶子名含 pid 与本窗格 SessionId。不覆盖已有文件，也不在这里清残留。
+    std::wstring path = o.snapshotDir;
+    if (path.empty() || (path.back() != L'\\' && path.back() != L'/')) path.push_back(L'\\');
+    path += widen(sshSnapshotLeafName(GetCurrentProcessId(), sid.value, aid.value));
     HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, nullptr);
     if (h == INVALID_HANDLE_VALUE) return SnapshotError{"snapshotDir", "无法创建快照文件"};
     DWORD wr = 0;

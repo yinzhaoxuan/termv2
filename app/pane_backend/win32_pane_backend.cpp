@@ -63,22 +63,31 @@ void pumpLog(void *, const char *msg) {
     OutputDebugStringA("\n");
 }
 
-void appendPaneDiag(const char *line) {
-    // Shared by all panes and transport/UI threads; no persistent file handle.
-    static std::mutex mutex;
-    std::lock_guard lock(mutex);
+// 未设置 PaneBackendConfig::configDir 时的配置目录。与 shell 的默认 configDir 相同：
+// roaming AppData\it2w。SHGetFolderPath 失败才退回 APPDATA 环境变量。都失败则返回空，诊断不落盘。
+std::filesystem::path windowsFallbackConfigDir() {
     wchar_t appData[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA | CSIDL_FLAG_CREATE, nullptr,
-                                SHGFP_TYPE_CURRENT, appData))) return;
-    const auto dir = std::filesystem::path(appData) / L"it2w" / L"logs";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    if (ec) return;
-    if (FILE *file = _wfopen((dir / L"pane-diag.log").c_str(), L"a")) {
-        std::fprintf(file, "%s\n", line);
-        std::fclose(file);
-    }
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA | CSIDL_FLAG_CREATE, nullptr,
+                                   SHGFP_TYPE_CURRENT, appData)))
+        return std::filesystem::path(appData) / L"it2w";
+    if (const wchar_t *env = _wgetenv(L"APPDATA"); env && *env)
+        return std::filesystem::path(env) / L"it2w";
+    return {};
 }
+
+PaneDiagLog &sharedPaneDiag() {
+    static PaneDiagLog log;
+    return log;
+}
+
+void bindPaneDiagConfigDir(const std::wstring &configDir) {
+    std::filesystem::path explicitDir;
+    if (!configDir.empty()) explicitDir = configDir;
+    const auto logs = paneDiagDirectory(explicitDir, windowsFallbackConfigDir());
+    if (!logs.empty()) sharedPaneDiag().setDirectory(logs);
+}
+
+void appendPaneDiag(std::string_view line) { sharedPaneDiag().append(line); }
 
 std::string toUtf8(std::wstring_view w) {
     if (w.empty()) return {};
@@ -326,6 +335,7 @@ private:
     bool focused_ = false, closing_ = false, finished_ = false, skipChar_ = false;
     bool pendingStart_ = false;             // M17：网格仍是 20×5 下限时推迟 startSession（ConPTY 过小会丢启动输出）
     int downCol_ = -1, downRow_ = -1;
+    const std::uint64_t sessionId_ = allocateSessionId();  // GAP-01：每个窗格一个，重连不变
     std::uint64_t attempt_ = 1;          // 当前 attempt；reconnect +1
     std::uint64_t prevAttemptId_ = 0;    // 0 = 无旧归档
     std::string prevAttemptText_;        // 旧 attempt 只读逻辑文本（≤ kPrevAttemptTextBytes）
@@ -428,13 +438,12 @@ bool Win32PaneBackend::startSession() {
         if (sh && sh->sched.readerShouldPost())
             postTo<P>(*sh->queue, [](P &p) { if (p.shared_->sched.postedShouldRun()) p.pump(); });
     };
-    auto onDiag = [](SessionId, AttemptId, const DiagRecord &d) {
-        // Keep the space after "ms" even when detail is empty, as on stderr.
-        const std::string line = "[pane] diag " + std::string(d.stage.c_str()) + " " +
-                                 std::to_string(d.elapsedMs) + "ms " + d.detail.c_str();
-        std::fprintf(stderr, "%s\n", line.c_str());
-        pumpLog(nullptr, line.c_str());
-        appendPaneDiag(line.c_str());
+    auto onDiag = [](SessionId sid, AttemptId aid, const DiagRecord &d) {
+        const std::string line = formatPaneDiagLine(sid.value, aid.value, d.stage, d.elapsedMs, d.errorCode,
+                                                    d.bytes, d.detail);
+        std::fprintf(stderr, "[pane] %s\n", line.c_str());
+        pumpLog(nullptr, ("[pane] " + line).c_str());
+        appendPaneDiag(line);
     };
     std::function<void(SessionId, AttemptId, std::string_view)> outputTap;
     if (osc52Ping_) {
@@ -471,7 +480,7 @@ bool Win32PaneBackend::startSession() {
         auto *raw = lt->t.get();
         transport_ = std::move(lt);
         shared_->transport = transport_;
-        if (!raw->start(SessionId{1}, AttemptId{attempt_}, spec)) { fail("本地 shell 启动失败"); return false; }
+        if (!raw->start(SessionId{sessionId_}, AttemptId{attempt_}, spec)) { fail("本地 shell 启动失败"); return false; }
     } else if (std::string herr; cfg_->resolveHyperV && [&] {
                    auto h = cfg_->resolveHyperV(connId_, &herr);
                    if (!h) return !herr.empty();   // 有错误文本：是 Hyper-V 连接但配置无效
@@ -508,7 +517,7 @@ bool Win32PaneBackend::startSession() {
                    auto *raw = ht->t.get();
                    transport_ = std::move(ht);
                    shared_->transport = transport_;
-                   raw->start(SessionId{1}, AttemptId{attempt_}, std::move(*h));
+                   raw->start(SessionId{sessionId_}, AttemptId{attempt_}, std::move(*h));
                    herr.clear();
                    return true;
                }()) {
@@ -533,7 +542,7 @@ bool Win32PaneBackend::startSession() {
         auto *raw = st->t.get();
         transport_ = std::move(st);
         shared_->transport = transport_;
-        if (auto se = raw->start(SessionId{1}, AttemptId{attempt_}, *o)) {
+        if (auto se = raw->start(SessionId{sessionId_}, AttemptId{attempt_}, *o)) {
             const std::string prefix = raw->mode() == SshTransportMode::Direct ? "SSH 配置无效（直连）：" : "SSH 配置快照无效：";
             fail(prefix + se->field + " " + se->reason);
             return false;
@@ -595,7 +604,11 @@ void Win32PaneBackend::completePump(uint64_t dropped) {
         status_.exitCode = terminal_.exitCode;
         status_.hasForegroundJob = false;
     }
-    pumpLog(nullptr, terminalLog(attempt_, terminal_, dropped, in.queueDropped).c_str());
+    const std::string endLine = formatPaneDiagLine(
+        sessionId_, attempt_, "session.end", 0, std::nullopt, terminal_.droppedOutputBytes,
+        terminalLog(attempt_, terminal_, dropped, in.queueDropped));
+    pumpLog(nullptr, endLine.c_str());
+    appendPaneDiag(endLine);
     publishStatus(); // phase 已是 Finished；只排队，回调不出现在 pump 栈中。
 }
 
@@ -1505,6 +1518,7 @@ bool shutdownPaneBackends(unsigned timeoutMs) {
 }
 
 uishell::PaneBackendFactory makeWin32PaneBackendFactory(PaneBackendConfig cfg) {
+    bindPaneDiagConfigDir(cfg.configDir);
     auto shared = std::make_shared<const PaneBackendConfig>(std::move(cfg));
     auto commandTaken = std::make_shared<bool>(false);  // 工厂只在 UI 线程调用
     return [shared, commandTaken](const std::string &connectionId, uishell::PaneEvents ev) -> std::unique_ptr<uishell::PaneBackend> {

@@ -34,7 +34,13 @@ struct LaunchSpec {
     std::optional<std::wstring> sshSnapshotFile;  // attempt 结束时删除
 };
 
-struct DiagRecord { std::string stage; uint64_t elapsedMs = 0; uint64_t bytes = 0; std::string detail; };
+struct DiagRecord {
+    std::string stage;
+    uint64_t elapsedMs = 0;
+    uint64_t bytes = 0;
+    std::string detail;
+    std::optional<int64_t> errorCode;  // 无错误码时为空；pane-diag 写成 err=-
+};
 
 struct TransportCallbacks {  // 均从传输内部线程调用；接收方须比对 attempt
     std::function<void(SessionId, AttemptId, TransportState, std::optional<TransportFault>)> onStateChanged;
@@ -81,7 +87,8 @@ private:
     void monitorLoop();
     void doClose();
     void setState(TransportState, std::optional<TransportFault> = std::nullopt);
-    void diag(const char *stage, uint64_t ms, uint64_t bytes = 0, std::string detail = {});
+    void diag(const char *stage, uint64_t ms, uint64_t bytes = 0, std::string detail = {},
+              std::optional<int64_t> errorCode = std::nullopt);
     void failStart(TransportFault, const char *stage, DWORD err);
     void closePseudoConsoleOnce();
 

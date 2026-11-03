@@ -15,11 +15,14 @@
 #include <chrono>
 #include <memory>
 #include <cstdio>
+#include <fstream>
+#include <set>
 #include <thread>
 #include <string>
 #include <cstring>
 #include <functional>
 #include <vector>
+#include <filesystem>
 using namespace it2app;
 static int fails = 0;
 #define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
@@ -1208,6 +1211,104 @@ static void osc52_ping_sequence_and_split_output_hex() {
     CHECK(envFlagOn("1"));
 }
 
+static std::string readFile(const std::filesystem::path &path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+static void pane_diag() {
+    const auto line = formatPaneDiagLine(7, 2, "ssh.direct.size", 15, 5, 9, "window-change");
+    CHECK(line.find("v=1") != std::string::npos);
+    CHECK(line.find("sid=7") != std::string::npos);
+    CHECK(line.find("attempt=2") != std::string::npos);
+    CHECK(line.find("phase=ssh.direct.size") != std::string::npos);
+    CHECK(line.find("elapsed_ms=15") != std::string::npos);
+    CHECK(line.find("err=5") != std::string::npos);
+    CHECK(line.find("bytes=9") != std::string::npos);
+    CHECK(line.find("msg=window-change") != std::string::npos);
+    const auto missing = formatPaneDiagLine(1, 1, "a b", 0, std::nullopt, 0, "host\nkey");
+    CHECK(missing.find("phase=a_b") != std::string::npos);
+    CHECK(missing.find("err=-") != std::string::npos);
+    CHECK(missing.find('\n') == std::string::npos);
+    CHECK(missing.find("msg=host key") != std::string::npos);
+
+    namespace fs = std::filesystem;
+    CHECK(paneDiagDirectory(fs::path("cfg"), fs::path("fallback")) == fs::path("cfg") / "logs");
+    CHECK(paneDiagDirectory({}, fs::path("fallback")) == fs::path("fallback") / "logs");
+    CHECK(paneDiagDirectory({}, {}).empty());
+
+    const auto id1 = allocateSessionId();
+    const auto id2 = allocateSessionId();
+    CHECK(id1 != 0 && id2 == id1 + 1);
+    std::vector<uint64_t> ids(400);
+    std::vector<std::thread> allocators;
+    for (int t = 0; t < 4; ++t) {
+        allocators.emplace_back([&, t] {
+            for (int i = 0; i < 100; ++i) ids[static_cast<size_t>(t * 100 + i)] = allocateSessionId();
+        });
+    }
+    for (auto &t : allocators) t.join();
+    CHECK(std::set<uint64_t>(ids.begin(), ids.end()).size() == ids.size());
+    CHECK(std::none_of(ids.begin(), ids.end(), [](uint64_t id) { return id == 0; }));
+
+    const fs::path dir = fs::temp_directory_path() / ("it2w-pane-diag-" + std::to_string(id1));
+    fs::remove_all(dir);
+    struct Clean {
+        fs::path path;
+        ~Clean() { std::error_code ec; std::filesystem::remove_all(path, ec); }
+    } clean{dir};
+
+    PaneDiagLog steady;
+    steady.setMaxBytes(1 << 20);
+    steady.setDirectory(dir / "steady");
+    for (int i = 0; i < 30; ++i) steady.append("sid=1 attempt=1 phase=keep");
+    CHECK(steady.openCount() == 1);
+    CHECK(fs::exists(dir / "steady" / "pane-diag.log"));
+    CHECK(!fs::exists(dir / "steady" / "pane-diag.log.1"));
+
+    PaneDiagLog log;
+    log.setMaxBytes(30);
+    log.setDirectory(dir / "roll");
+    const fs::path roll = dir / "roll";
+    auto body = [](int n) {
+        std::string s = "L" + std::to_string(n);
+        s.resize(10, 'x');
+        return s;
+    };
+    for (int i = 0; i < 6; ++i) log.append(body(i));
+    CHECK(log.openCount() == 3);
+    CHECK(readFile(roll / "pane-diag.log.2") == body(0) + "\n" + body(1) + "\n");
+    CHECK(readFile(roll / "pane-diag.log.1") == body(2) + "\n" + body(3) + "\n");
+    CHECK(readFile(roll / "pane-diag.log") == body(4) + "\n" + body(5) + "\n");
+    log.append(body(6));
+    log.append(body(7));
+    CHECK(log.openCount() == 4);
+    CHECK(readFile(roll / "pane-diag.log.2").find(body(0)) == std::string::npos);
+    CHECK(readFile(roll / "pane-diag.log.2") == body(2) + "\n" + body(3) + "\n");
+    CHECK(readFile(roll / "pane-diag.log.1") == body(4) + "\n" + body(5) + "\n");
+    CHECK(readFile(roll / "pane-diag.log") == body(6) + "\n" + body(7) + "\n");
+    int files = 0;
+    for (auto &ent : fs::directory_iterator(roll)) { (void)ent; ++files; }
+    CHECK(files == 3);
+    CHECK(fs::file_size(roll / "pane-diag.log") <= 30);
+
+    PaneDiagLog shared;
+    shared.setMaxBytes(1 << 20);
+    shared.setDirectory(dir / "shared");
+    std::vector<std::thread> writers;
+    for (int t = 0; t < 4; ++t) {
+        writers.emplace_back([&, t] {
+            for (int i = 0; i < 50; ++i)
+                shared.append(formatPaneDiagLine(static_cast<uint64_t>(t + 1), 1, "phase", 0, std::nullopt, 0, "m"));
+        });
+    }
+    for (auto &t : writers) t.join();
+    const auto joined = readFile(dir / "shared" / "pane-diag.log");
+    CHECK(std::count(joined.begin(), joined.end(), '\n') == 200);
+    CHECK(joined.find("sid=1") != std::string::npos && joined.find("sid=4") != std::string::npos);
+    CHECK(shared.openCount() == 1);
+}
+
 static void ssh_direct_select() {
     for (bool buildHasDirect : {false, true}) {
         for (const char *value : std::vector<const char *>{nullptr, "", "0", "true", "on", "yes", "01", " 1", "1 ", "1\n", "11"}) {
@@ -1243,6 +1344,7 @@ int main(int argc, char **argv) {
     else if (w == "fsm_decisions") pump_fsm_decisions_and_frame_modes();
     else if (w == "osc52_diag") osc52_ping_sequence_and_split_output_hex();
     else if (w == "ssh_direct_select") ssh_direct_select();
+    else if (w == "pane_diag") pane_diag();
     else if (w == "churn") churn();
     else if (w == "viewport") viewport();
     else if (w == "keys") keys();
@@ -1252,7 +1354,7 @@ int main(int argc, char **argv) {
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
     else if (w == "search") search_driver();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

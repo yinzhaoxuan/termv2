@@ -153,8 +153,15 @@ static void test_output() {
     CHECK(q.incomplete() && q.discardedBytes() == pushed - kCloseDrainExtra);
 }
 
+static void test_snapshot_leaf() {
+    CHECK(sshSnapshotLeafName(4242, 3, 1) == "ssh-4242-3-1.conf");
+    CHECK(sshSnapshotLeafName(4242, 3, 2) == "ssh-4242-3-2.conf");
+    CHECK(sshSnapshotLeafName(7, 1, 1) != "ssh-1-1.conf");
+    CHECK(sshSnapshotLeafName(7, 1, 1) != sshSnapshotLeafName(8, 1, 1));
+}
+
 int main() {
-    test_snapshot(); test_cmdline(); test_env(); test_input(); test_output();
+    test_snapshot(); test_cmdline(); test_env(); test_input(); test_output(); test_snapshot_leaf();
     std::printf(failures ? "FAILED %d\n" : "OK\n", failures);
     return failures ? 1 : 0;
 }
