@@ -1,5 +1,6 @@
 // HV-01（T09 平台无关逻辑）：VM ID 校验、查询 JSON 解析、地址筛选/选择、解析状态机（VM-01 场景的逻辑部分）。
 #include "hyperv_resolve.h"
+#include "ssh_snapshot.h"
 #include <cstdio>
 #include <deque>
 using namespace it2w;
@@ -36,6 +37,23 @@ static void ids() {
     CHECK(!normalizeVmId("0f3a1b2c00000-4000-8000-00000000abcd"));
     CHECK(!normalizeVmId("';Stop-VM *;'"));          // 注入内容直接被拒
     CHECK(!normalizeVmId(""));
+    CHECK(hyperVHostKeyAlias(kId) == std::string("hv-") + kId);
+    CHECK(hyperVHostKeyAlias("{0F3A1B2C-0000-4000-8000-00000000ABCD}") == std::string("hv-") + kId);
+    CHECK(!hyperVHostKeyAlias("not-a-guid"));
+    CHECK(!hyperVHostKeyAlias(""));
+    CHECK(!hyperVHostKeyAlias("';Stop-VM *;'"));
+    SshTarget t;
+    t.hostName = "203.0.113.8";
+    t.port = 2222;
+    t.user = "vm";
+    t.appKnownHostsFile = "C:/cfg/known_hosts";
+    t.emptyKnownHostsFile = "C:/cfg/empty";
+    t.hostKeyAlias = *hyperVHostKeyAlias("{0F3A1B2C-0000-4000-8000-00000000ABCD}");
+    auto snap = buildSshSnapshot(t);
+    CHECK(snap.text);
+    CHECK(snap.text->find("\n  HostName 203.0.113.8\n  HostKeyAlias hv-" + std::string(kId) + "\n  Port 2222\n") != std::string::npos);
+    CHECK(snap.text->find("HostKeyAlias 203.0.113.8") == std::string::npos);
+    CHECK(snap.text->find("\n  CheckHostIP no\n") != std::string::npos);
 }
 
 static void parse() {

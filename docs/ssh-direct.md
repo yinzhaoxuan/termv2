@@ -45,6 +45,12 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
 - 握手偏好为**已知类型在前，其余支持的类型在后**；握手后按服务器实际出示的类型核对密钥。
   支持普通和哈希条目；`@cert-authority` / `@revoked` 标记报配置错误。
   未知类型/主机报 `HostKeyUnknown`，密钥变化报 `HostKeyChanged`，均失败关闭；按受信渠道核实后再更新信任。
+- **Hyper-V 地址会变（D-3）**。来宾 DHCP 换地址后，若主机密钥按解析出的 IP 查找，下一次就是 `HostKeyUnknown`；兼容模式快照以前也不写 `HostKeyAlias`，重新信任只是把新 IP 记下来，下次再变仍然失败。
+  Hyper-V 现在用稳定别名 `hv-<规范化 VM GUID>`（小写，花括号会去掉）。两种模式都按这个别名核对，不按当时的地址。
+  兼容模式的 `-F` 快照包含 `HostKeyAlias`，`HostName` 仍是当前地址，并设 `CheckHostIP no`，避免 OpenSSH 再把瞬时 IP 写进 `known_hosts`。OpenSSH 按别名原文查找和保存，不附加端口。
+  直连用同一字符串调用 `libssh2_knownhost_check`（别名不做 `[别名]:端口`）。普通 SSH 不设别名，仍按主机名或 `[主机]:端口` 查找。
+  已经按 IP 信任过的虚拟机需要在兼容模式里再确认一次，之后换地址不用重做。手动回退地址也用这台 VM 的别名。
+- **首次信任界面仍未做**，并且仍是 Direct 改为默认传输的前置条件：展示指纹、用户确认、再写入 `known_hosts`。本次不改 `ui/`，Direct 继续只读、不 accept-new。新虚拟机要先用兼容模式确认一次指纹。
 
 ## 能力与限制
 

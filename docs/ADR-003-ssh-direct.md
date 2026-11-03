@@ -23,6 +23,18 @@ B（纯管道 ssh.exe）仅完成控制序列透明性的对照验证；其远�
 5. **agent 选择**：仅接受以 `\\.\pipe\` 开头的 `SSH_AUTH_SOCK`，否则使用 Windows OpenSSH 默认管道；
    永不使用 Pageant，保留 `cmake/ssh_a_openssh_only.cmake` 构建补丁。
 
+## Hyper-V 主机密钥身份（REVIEW 增补二 D-3）
+
+Direct 的 `known_hosts` 只读，不 accept-new。查找名原来是解析出的地址（22 端口为地址本身，其它端口为 `[地址]:端口`）。Hyper-V 来宾常用 DHCP，地址一变就是 `HostKeyUnknown`。兼容模式的快照以前没有 `HostKeyAlias`，切回去确认指纹时 OpenSSH 把密钥记在新 IP 上，下次地址再变，两种模式一起失效。
+
+Hyper-V 连接的身份改为稳定别名 `hv-<规范化 VM GUID>`（`normalizeVmId`：小写，可去掉花括号）。`HyperVTransport` 在启动内层 SSH 前写入 `SshTarget::hostKeyAlias`；快照里的 `HostName` 仍是当前地址。普通 SSH 不设别名，查找方式不变。
+
+- **兼容模式**：`-F` 快照写出 `HostKeyAlias`，并写 `CheckHostIP no`。OpenSSH 用别名原文查找，用户确认后也按这个原文写入 `known_hosts`（`HostKeyAlias` 不再套 `put_host_port`，因此不加 `[别名]:端口`）。`CheckHostIP no` 避免再把当时的 IP 记进去：旧版 OpenSSH 默认检查 IP，新地址若曾属于别的机器，别名已经命中仍会失败。
+- **直连**：`knownHostTypesFor` 与 `libssh2_knownhost_check` 使用同一查找串（`directHostKeyLookup`）。有别名时就是该别名的 ASCII 小写，不看 IP，也不加端口括号。没有别名时与原来的 `put_host_port` 相同。
+- 仍然不写入 `known_hosts`，不开启 accept-new。以前按 IP 信任过的虚拟机，要在兼容模式里再确认一次；之后地址变化不用重新信任。手动回退地址同样用 VM 别名，不用那次填的主机名。
+
+首次信任界面（展示指纹、确认后写入 `known_hosts`）仍是把 Direct 做成默认传输的前置条件。本次不实现：`ui/` 不改，Direct 继续只读预信任文件。
+
 ## 能力与边界
 
 Direct 暂声明 `supportsOsc52Read=false`（REVIEW 增补二 D-1：逐次确认 UI 之前不开放读），

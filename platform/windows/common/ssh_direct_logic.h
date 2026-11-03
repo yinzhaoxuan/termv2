@@ -43,8 +43,16 @@ struct KnownHostTypesResult {
     std::vector<std::string> types; // Unique key types, in file order.
     std::optional<SnapshotError> error;
 };
+// known_hosts name. A non-empty hostKeyAlias is used verbatim (ASCII-lowercased)
+// and is not port-qualified: OpenSSH copies HostKeyAlias as-is and does not call
+// put_host_port. With no alias, port 22 is the lowercased host and any other port
+// is [host]:port, matching put_host_port and libssh2_knownhost_check.
+std::string directHostKeyLookup(std::string_view hostName, uint16_t port,
+                                std::string_view hostKeyAlias = {});
+// hostKeyAlias, when non-empty, replaces host for matching and for HMAC input.
 KnownHostTypesResult knownHostTypesFor(std::string_view text, std::string_view host,
-                                      uint16_t port, const DirectHmacSha1 &hmac);
+                                      uint16_t port, const DirectHmacSha1 &hmac,
+                                      std::string_view hostKeyAlias = {});
 // Defaults to raw Ed25519/ECDSA/RSA-SHA2. ssh-rsa records select both RSA SHA-2
 // signatures. The overload accepts an adapter's available algorithms so all
 // remaining supported methods are retained, without adding unavailable ones.

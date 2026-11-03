@@ -54,6 +54,7 @@ struct DirectSshTransport::Impl {
     LIBSSH2_AGENT *agent = nullptr;
     LIBSSH2_KNOWNHOSTS *knownHosts = nullptr;
     std::vector<std::string> knownTypes;
+    // known_hosts lookup already lowercased: HostKeyAlias verbatim, else [host]:port.
     std::string hostLower, writePending;
     OutputTail tail;
     std::optional<SshExitInfo> remoteExit;

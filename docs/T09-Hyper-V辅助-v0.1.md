@@ -45,10 +45,10 @@
 
 ### 2.4 Windows 集成
 - `platform/windows/hyperv/hyperv_query.*`：`runHyperVQuery(vmId, timeout, cancelEvent)`、`runHyperVStart(...)`、`listHyperVVms(...)`。
-- 传输：`HyperVTransport` 实现后端的 `Transport` 抽象。`start` 立即返回，后台线程跑解析状态机（状态 `Starting`，窗格标题显示"正在解析 Hyper-V 地址"）；得到地址后把 `hostName` 填入 `SshLaunchOptions` 再启动内部 `SshTransport`，之后所有调用转发给它。解析期间输入与粘贴丢弃（返回 `Closed` 以外的 Ok，不排队），`close` 设置取消事件并等待线程。
+- 传输：`HyperVTransport` 实现后端的 `Transport` 抽象。`start` 立即返回，后台线程跑解析状态机（状态 `Starting`，窗格标题显示"正在解析 Hyper-V 地址"）；得到地址后把 `hostName` 填入 `SshLaunchOptions`，并把 `hostKeyAlias` 设为 `hv-<规范化 vmId>`，再启动内部 `SshTransport`，之后所有调用转发给它。解析期间输入与粘贴丢弃（返回 `Closed` 以外的 Ok，不排队），`close` 设置取消事件并等待线程。
 - `PaneBackendConfig::resolveHyperV(connectionId, *error)` 返回 `HyperVLaunch{policy, ssh}`；后端 resolve 路径先问 `resolveHyperV`，非空走 Hyper-V，否则走原有 `resolveSsh`。`policy.startIfOff`（默认 false）由 UI 在用户点击"启动并连接"后置 true 重新创建窗格。
 
 ## 3. 不做 / 待 UI
 - "启动并连接"按钮、多地址选择器、"等待地址"提示：头文件没有交互回调，首版以 Failed 文本表达，记入 STATUS 接口问题。
-- 远程宿主机、HostKeyAlias 稳定映射（待决项）、PowerShell Direct、`hvc.exe`、`vmconnect`。
+- 远程宿主机、PowerShell Direct、`hvc.exe`、`vmconnect`。HostKeyAlias 已定为 `hv-<vmId>`（D-3，见 [ADR-003](ADR-003-ssh-direct.md)）；首次信任界面仍不做。
 - 实机验证（VM-01：关机、无地址、多地址、改名、无权限、取消）须在装有 Hyper-V 的 Win11 上进行；Linux 只验证纯逻辑与 mingw 编译。

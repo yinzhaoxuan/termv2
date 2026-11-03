@@ -48,6 +48,9 @@ std::optional<SnapshotError> validateSshTarget(const SshTarget &t) {
     auto err = [](const char *f, std::string why) { return SnapshotError{f, std::move(why)}; };
     if (!valid_alias(t.alias)) return err("alias", "只允许字母数字 . _ -");
     if (!valid_host(t.hostName)) return err("hostName", "非法主机名");
+    // 与 Host 别名同一字符集，避免把换行或空格写进快照。空表示不使用别名。
+    if (!t.hostKeyAlias.empty() && !valid_alias(t.hostKeyAlias))
+        return err("hostKeyAlias", "只允许字母数字 . _ -");
     if (t.port == 0) return err("port", "端口为 0");
     if (!valid_user(t.user)) return err("user", "非法用户名");
     if (t.connectTimeoutSec == 0 || t.connectTimeoutSec > 600) return err("connectTimeoutSec", "超出 1..600");
@@ -73,12 +76,17 @@ SnapshotResult buildSshSnapshot(const SshTarget &t) {
     s += "# iTerm2-Windows 生成的 SSH 配置快照；每个连接尝试独立一份，结束后删除\n";
     s += "Host " + t.alias + "\n";
     kv("HostName", t.hostName);
+    // HostKeyAlias 是 known_hosts 的身份，HostName 仍是这次要连的地址。
+    // OpenSSH 按别名原文查找和写入，不附加端口。CheckHostIP no 避免再把瞬时 IP
+    // 记进 known_hosts（旧版默认 yes 时，地址曾属于别的机器会让别名命中仍失败）。
+    if (!t.hostKeyAlias.empty()) kv("HostKeyAlias", t.hostKeyAlias);
     kv("Port", std::to_string(t.port));
     kv("User", t.user);
     kv("StrictHostKeyChecking", "ask");
     kv("UserKnownHostsFile", *known);
     kv("GlobalKnownHostsFile", *empty);
     kv("VerifyHostKeyDNS", "no");
+    if (!t.hostKeyAlias.empty()) kv("CheckHostIP", "no");
     kv("UpdateHostKeys", "no");
     kv("RequestTTY", "force");
     kv("ConnectTimeout", std::to_string(t.connectTimeoutSec));

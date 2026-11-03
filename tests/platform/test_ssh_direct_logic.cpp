@@ -94,6 +94,20 @@ static void test_validation_and_snapshots() {
         t = target(); t.auth = mode; t.keyFile = "relative\ninvalid";
         CHECK(!validateSshTarget(t) && buildSshSnapshot(t).text);
     }
+    t = target();
+    t.hostName = "192.0.2.10";
+    t.port = 2222;
+    t.hostKeyAlias = "hv-0f3a1b2c-0000-4000-8000-00000000abcd";
+    auto aliased = buildSshSnapshot(t);
+    CHECK(aliased.text);
+    CHECK(aliased.text->find(
+        "  HostName 192.0.2.10\n"
+        "  HostKeyAlias hv-0f3a1b2c-0000-4000-8000-00000000abcd\n"
+        "  Port 2222\n") != std::string::npos);
+    CHECK(aliased.text->find(
+        "  VerifyHostKeyDNS no\n  CheckHostIP no\n  UpdateHostKeys no\n") != std::string::npos);
+    t.hostKeyAlias = "bad alias";
+    invalid(t, "hostKeyAlias", "只允许字母数字 . _ -");
 }
 
 static void test_sizes() {
@@ -230,6 +244,35 @@ static void test_known_hosts() {
     }
     CHECK(knownHostTypesFor(plain, "", 22, {}).error);
     CHECK(knownHostTypesFor(plain, "example.com", 0, {}).error);
+
+    // Hyper-V: the alias is the identity. The transient address, and a
+    // port-qualified copy of the alias, must not win. OpenSSH stores
+    // HostKeyAlias verbatim (no put_host_port).
+    const char *alias = "HV-0F3A1B2C-0000-4000-8000-00000000ABCD";
+    const char *canon = "hv-0f3a1b2c-0000-4000-8000-00000000abcd";
+    CHECK(directHostKeyLookup("192.0.2.10", 22, "") == "192.0.2.10");
+    CHECK(directHostKeyLookup("192.0.2.10", 2222, "") == "[192.0.2.10]:2222");
+    CHECK(directHostKeyLookup("192.0.2.10", 22, alias) == canon);
+    CHECK(directHostKeyLookup("192.0.2.10", 2222, alias) == canon);
+    const std::string mixed =
+        "192.0.2.10 ssh-rsa AAAA\n"
+        "[192.0.2.10]:2222 ecdsa-sha2-nistp256 AAAA\n"
+        "hv-0f3a1b2c-0000-4000-8000-00000000abcd ssh-ed25519 AAAA\n"
+        "[hv-0f3a1b2c-0000-4000-8000-00000000abcd]:2222 ssh-rsa AAAA\n";
+    r = knownHostTypesFor(mixed, "192.0.2.10", 2222, {}, alias);
+    CHECK(!r.error && r.types == std::vector<std::string>{"ssh-ed25519"});
+    r = knownHostTypesFor(mixed, "192.0.2.10", 22, {});
+    CHECK(!r.error && r.types == std::vector<std::string>{"ssh-rsa"});
+    r = knownHostTypesFor(mixed, "192.0.2.10", 2222, {});
+    CHECK(!r.error && r.types == std::vector<std::string>{"ecdsa-sha2-nistp256"});
+    std::string hashedHost;
+    auto watch = [&](std::string_view hmacSalt, std::string_view host) -> std::optional<DirectSha1> {
+        hashedHost = std::string(host);
+        return testHmac(hmacSalt, host);
+    };
+    r = knownHostTypesFor(salt + "nnUK16ANsXd3hL31YfAkGOluSjU= ssh-ed25519 AAAA\n",
+                          "192.0.2.10", 2222, watch, alias);
+    CHECK(!r.error && hashedHost == canon && r.types.empty());
 }
 
 static void test_preferences_and_auth() {

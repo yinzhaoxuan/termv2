@@ -23,6 +23,7 @@ HvQueryResult runHyperVScript(const std::string &id, bool, DWORD, HANDLE) {
 namespace {
 struct FakeSsh final : SshSessionTransport {
     GridSize initial;
+    SshTarget startedTarget;
     std::vector<std::pair<GridSize, uint64_t>> sizes;
     std::function<void()> duringStart;
     std::promise<void> started;
@@ -31,6 +32,7 @@ struct FakeSsh final : SshSessionTransport {
 
     std::optional<SnapshotError> start(SessionId, AttemptId, const SshLaunchOptions &o) override {
         initial = o.initialSize;
+        startedTarget = o.target;
         if (duringStart) duringStart();
         started.set_value();
         return std::nullopt;
@@ -78,6 +80,8 @@ void handoff(bool pendingResize, bool liveResize) {
     if (liveResize) hv.resize({150, 50}, 10);
     hv.close(CloseReason::User);  // Joins worker before inspecting the fake.
     assert(ssh->initial.cols == 100 && ssh->initial.rows == 30);
+    assert(ssh->startedTarget.hostName == "192.0.2.1");
+    assert(ssh->startedTarget.hostKeyAlias == "hv-01234567-89ab-cdef-0123-456789abcdef");
     assert(hv.supportsOsc52Read() == pendingResize);
     assert(ssh->closed);
     if (liveResize) {

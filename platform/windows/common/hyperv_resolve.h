@@ -28,6 +28,9 @@ struct HvQueryResult { HvQueryError err = HvQueryError::None; std::string msg; s
 
 // 8-4-4-4-12 十六进制，可带花括号；返回规范化小写形式，非法返回 nullopt
 std::optional<std::string> normalizeVmId(std::string_view id);
+// known_hosts 身份：hv- + 规范化 GUID（小写）。非法 ID 返回 nullopt。
+// OpenSSH 的 HostKeyAlias 按这个字符串原文查找和写入，不附加端口。
+std::optional<std::string> hyperVHostKeyAlias(std::string_view vmId);
 // 解析固定脚本输出（单个 JSON 对象，见 hyperv_query.cpp）；前后空白与 BOM 忽略
 HvQueryResult parseHyperVQueryJson(std::string_view text);
 const char *hvQueryErrorName(HvQueryError);

@@ -125,7 +125,7 @@
 
 | 能力 | 设计要点 | 状态 |
 |---|---|---|
-| Direct SSH 补齐 | 密钥文件、密码、keyboard-interactive；首次信任主机密钥界面；Hyper-V 固定 HostKeyAlias（REVIEW 增补二 D-3）；按连接选择传输；MSVC 构建 | [~]（v0 只支持 agent） |
+| Direct SSH 补齐 | 密钥文件、密码、keyboard-interactive；首次信任主机密钥界面（Direct 转正门槛，D-3 未做 UI）；Hyper-V `HostKeyAlias=hv-<vmId>` 已接入两种模式（D-3 管道）；按连接选择传输；MSVC 构建 | [~]（v0 只支持 agent） |
 | WSL 连接类型 | 能否绕过 ConPTY 直接对接 WSL 以获得序列透明，需要单独评估 | [ ] |
 | SFTP / 文件浏览 | iTerm2 本身没有，可选 | — |
 
