@@ -405,3 +405,19 @@ Draining 期间 `status_.state` 仍然是 Running（终态还没发布），所�
 - 未超时的关闭不武装宽限。没有注入时钟时只等待，避免用步数冒充时间。
 - `PumpDriver::reset`（重连）清掉宽限起点，新 attempt 重新计时。
 - 放弃那一轮仍然不无界 `pop`：读线程可能还在写。没被这轮取走的字节留在传输队列里，由仍在等 `waitClosed(INFINITE)` 的关闭线程随后释放。
+
+---
+
+## 11. GAP-15 启动前失败不进 Draining（2026-11-03）
+
+§2.2 的收尾假设传输已经启动：`onTransportState(Closed/Failed)` → `finishSession` → Draining → 排空 → `classifyTerminal`。缺 `ssh.exe` 时兼容模式只发 `onFinished` 并让 `start` 返回 `nullopt`，窗格把它当成已启动，状态永远停在 Starting。
+
+补充规则：
+
+- `SshSessionTransport::start` 在会话拉起之前失败必须**同步返回** `SnapshotError`。`nullopt` 只表示已启动。直连的配置/线程错误仍是 `Kind::Snapshot`，不检查 `ssh.exe`。
+- 窗格在 `start` 返回的同一轮调用 `fail()`：`SessionState::Failed`、`phase=Finished`，不进入 Draining（没有输出可排）。`publishStatus` 仍走 `WM_PANE_EVENTS`。`reconnect()` 不看 `finished_`，Failed 之后可以重连。
+- `start` 返回前 ConPTY 若已经同步发过 Failed，传输把这次 Failed 吞掉，避免和返回值各报一次。已经 Running 之后的失败仍异步转发。
+- 兼容模式在 `ssh.exe` 缺失或快照写失败时，内层 ConPTY 停在 Idle，`closedEvent_` 没有信号。`reconnect()` 仍会 `startCloser`。`ConPtyTransport::close` 对 Idle 直接标成 Closed 并置位 `closedEvent_`，`waitClosed` 立刻返回。已经 Failed（`failStart`）或正在 Running 的关闭路径不变。直连本来就在没有 owner 线程时于 `close` 里置位。
+- 迟到的 Running/Closed/Failed 若状态已是 Failed 或 Exited，忽略，不能把 `fail()` 的文案覆盖掉，也不能把窗格拉回 Running。
+- Hyper-V 内层 `start` 失败同样同步返回。解析线程接着发 `HvAction::Fail` 和 `Failed`。窗格仍是 Starting 时，这一轮回调直接 `fail()`，不等 8 ms 续跑。Direct 在进入 Running 之前的失败没有这条 `HvAction::Fail`，继续走 §2.2 的 `finishSession`，文案和退出码不变。
+- 用户可见句子在 `formatSshPreStartError`。`ClientMissing` 为「未找到 ssh.exe」加可选功能安装提示，不加「SSH 配置快照无效」前缀。

@@ -174,8 +174,29 @@ static void test_snapshot_leaf() {
     CHECK(sshSnapshotLeafName(7, 1, 1) != sshSnapshotLeafName(8, 1, 1));
 }
 
+static void test_prestart_error_text() {
+    const std::string missing = formatSshPreStartError(false, SnapshotError::Kind::ClientMissing, "sshExe",
+                                                       "C:/Windows/System32/OpenSSH/ssh.exe");
+    CHECK(missing.find("未找到 ssh.exe") != std::string::npos);
+    CHECK(missing.find("C:/Windows/System32/OpenSSH/ssh.exe") != std::string::npos);
+    CHECK(missing.find("可选功能") != std::string::npos);
+    CHECK(missing.find("SSH 配置快照无效") == std::string::npos);
+    CHECK(formatSshPreStartError(true, SnapshotError::Kind::ClientMissing, "sshExe", "D:/ssh.exe") ==
+          formatSshPreStartError(false, SnapshotError::Kind::ClientMissing, "sshExe", "D:/ssh.exe"));
+    const std::string launch = formatSshPreStartError(false, SnapshotError::Kind::Launch, "sshExe", "D:/ssh.exe");
+    CHECK(launch.find("ssh.exe 启动失败") != std::string::npos && launch.find("D:/ssh.exe") != std::string::npos);
+    const std::string snap = formatSshPreStartError(false, SnapshotError::Kind::Launch, "snapshotDir", "无法创建快照文件");
+    CHECK(snap.find("无法写入 SSH 配置快照") != std::string::npos && snap.find("无法创建快照文件") != std::string::npos);
+    CHECK(formatSshPreStartError(false, SnapshotError::Kind::Snapshot, "hostName", "非法主机名") ==
+          "SSH 配置快照无效：hostName 非法主机名");
+    CHECK(formatSshPreStartError(true, SnapshotError::Kind::Snapshot, "auth", "直连 v0 仅支持 agent") ==
+          "SSH 配置无效（直连）：auth 直连 v0 仅支持 agent");
+    SnapshotError legacy{"hostName", "非法主机名"};
+    CHECK(legacy.kind == SnapshotError::Kind::Snapshot);
+}
+
 int main() {
-    test_snapshot(); test_cmdline(); test_env(); test_input(); test_output(); test_snapshot_leaf();
+    test_snapshot(); test_cmdline(); test_env(); test_input(); test_output(); test_prestart_error_text(); test_snapshot_leaf();
     std::printf(failures ? "FAILED %d\n" : "OK\n", failures);
     return failures ? 1 : 0;
 }

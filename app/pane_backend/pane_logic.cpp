@@ -49,6 +49,31 @@ TerminalStatus classifyTerminal(const TerminalInputs &in) {
     }
     return out;
 }
+SyncStartOutcome settleSyncStart(SyncStart result, std::string error) {
+    SyncStartOutcome out;
+    out.reconnectAllowed = true;
+    if (result == SyncStart::PreStartFailed) {
+        out.failed = true;
+        out.error = std::move(error);
+    }
+    return out;
+}
+std::optional<std::string> immediatePreStartFailure(bool sessionStillStarting, bool transportFailed,
+                                                    bool hvFailed, std::string hvError) {
+    if (!sessionStillStarting || !transportFailed || !hvFailed) return std::nullopt;
+    if (hvError.empty()) hvError = "会话启动失败";
+    return hvError;
+}
+std::string formatTransportFailure(std::string_view category, std::string_view text) {
+    if (category.empty() || category == "None")
+        return text.empty() ? std::string("会话传输故障") : std::string(text);
+    if (text.empty()) return std::string(category);
+    return std::string(category) + ": " + std::string(text);
+}
+std::string formatLocalShellStartError(std::string_view exeUtf8) {
+    const std::string path = exeUtf8.empty() ? std::string("cmd.exe") : std::string(exeUtf8);
+    return "本地 shell 启动失败：" + path + "。请确认该程序存在且可执行。";
+}
 std::string terminalLog(uint64_t attempt, const TerminalStatus &s, uint64_t coreDropped, uint64_t queueDropped) {
     return "[pane] session end attempt=" + std::to_string(attempt) + " state=" + (s.failed ? "Failed" : "Exited") +
            " dropped=" + std::to_string(s.droppedOutputBytes) + " (core=" + std::to_string(coreDropped) +

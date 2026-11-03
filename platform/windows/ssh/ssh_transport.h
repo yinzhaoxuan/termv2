@@ -17,7 +17,8 @@ public:
     SshTransport(const SshTransport &) = delete;
     SshTransport &operator=(const SshTransport &) = delete;
 
-    // 快照非法 → SnapshotError（不启动）；ssh.exe 缺失/启动失败 → onFinished(SshNotFound)
+    // 快照非法、ssh.exe 缺失、快照写失败、ConPTY 没拉起 → SnapshotError（不把会话算作已启动）。
+    // 已经跑起来之后的退出仍是 onFinished。
     std::optional<SnapshotError> start(SessionId, AttemptId, const SshLaunchOptions &) override;
 
     EnqueueResult enqueueUserInput(std::string_view b) override { return pty_->enqueueUserInput(b); }
@@ -44,6 +45,8 @@ private:
     std::mutex tailMu_;
     OutputTail tail_;
     bool finished_ = false;
+    // start() 返回前吞掉 Failed，改由返回值交给调用方立刻 fail()。Running 仍转发。
+    bool muteStartFailure_ = false;
 };
 
 }  // namespace it2w

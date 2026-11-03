@@ -329,7 +329,18 @@ void ConPtyTransport::closePseudoConsoleOnce() {
 
 // ---- 关闭（§1.4）----
 void ConPtyTransport::close(CloseReason why) {
-    TransportState s = state_;
+    TransportState s = state_.load();
+    // 从未 start：没有进程，doClose/failStart 也不会给 closedEvent_ 发信号。
+    // 窗格在启动前失败后重连仍会 startCloser→waitClosed；不在这里收口的话，
+    // 关闭线程 5s 超时后再 waitClosed(INFINITE)，一直占着这条线程。
+    if (s == TransportState::Idle &&
+        state_.compare_exchange_strong(s, TransportState::Closed)) {
+        closeReason_ = why;
+        if (cb_.onStateChanged) cb_.onStateChanged(sid_, aid_, TransportState::Closed, std::nullopt);
+        SetEvent(closedEvent_);
+        return;
+    }
+    // CAS 失败时 s 已是当前状态。Idle 只在被别的 close 抢先收口时再次出现。
     if (s == TransportState::Idle || s == TransportState::Closed || s == TransportState::Failed) return;
     if (s == TransportState::Starting) { closeReason_ = why; closeRequested_ = true; return; }
     if (closeStarted_.exchange(true)) return;  // 幂等

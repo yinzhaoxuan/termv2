@@ -1450,6 +1450,30 @@ static void pane_diag() {
     CHECK(shared.openCount() == 1);
 }
 
+static void prestart_failure_leaves_starting() {
+    auto launched = settleSyncStart(SyncStart::Launched, "ignored");
+    CHECK(!launched.failed && launched.error.empty() && launched.reconnectAllowed);
+    const std::string msg = "未找到 ssh.exe：C:/missing/ssh.exe。请在 Windows「可选功能」中安装 OpenSSH 客户端，或在连接设置中填写 ssh.exe 的完整路径。";
+    auto failed = settleSyncStart(SyncStart::PreStartFailed, msg);
+    CHECK(failed.failed && failed.reconnectAllowed && failed.error == msg);
+    CHECK(failed.error.find("未找到 ssh.exe") != std::string::npos);
+    CHECK(!immediatePreStartFailure(true, true, false, msg));
+    CHECK(!immediatePreStartFailure(false, true, true, msg));
+    CHECK(!immediatePreStartFailure(true, false, true, msg));
+    auto now = immediatePreStartFailure(true, true, true, msg);
+    CHECK(now && *now == msg && now->find("未找到 ssh.exe") != std::string::npos);
+    auto generic = immediatePreStartFailure(true, true, true, "");
+    CHECK(generic && *generic == "会话启动失败");
+    CHECK(formatTransportFailure("VmNotFound", "虚拟机已移除") == "VmNotFound: 虚拟机已移除");
+    CHECK(formatTransportFailure("", msg) == msg);
+    CHECK(formatTransportFailure("None", msg) == msg);
+    CHECK(formatTransportFailure("", "") == "会话传输故障");
+    const std::string local = formatLocalShellStartError("C:\\Windows\\System32\\cmd.exe");
+    CHECK(local.find("本地 shell 启动失败") != std::string::npos);
+    CHECK(local.find("C:\\Windows\\System32\\cmd.exe") != std::string::npos);
+    CHECK(formatLocalShellStartError("").find("cmd.exe") != std::string::npos);
+}
+
 static void ssh_direct_select() {
     for (bool buildHasDirect : {false, true}) {
         for (const char *value : std::vector<const char *>{nullptr, "", "0", "true", "on", "yes", "01", " 1", "1 ", "1\n", "11"}) {
@@ -1486,6 +1510,7 @@ int main(int argc, char **argv) {
     else if (w == "fsm_decisions") pump_fsm_decisions_and_frame_modes();
     else if (w == "osc52_diag") osc52_ping_sequence_and_split_output_hex();
     else if (w == "ssh_direct_select") ssh_direct_select();
+    else if (w == "prestart") prestart_failure_leaves_starting();
     else if (w == "pane_diag") pane_diag();
     else if (w == "churn") churn();
     else if (w == "viewport") viewport();
@@ -1496,7 +1521,7 @@ int main(int argc, char **argv) {
     else if (w == "pump") pump_budget();
     else if (w == "command") local_command();
     else if (w == "search") search_driver();
-    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); } }
+    else { limits(); grid(); queue(); closer(); drag(); capture_loss(); swap_config(); if (w == "all") { churn(); viewport(); keys(); syncfocus(); font(); wordchars(); pump_budget(); local_command(); search_driver(); flood_close_destroys_continuation_target(); pump_callback_destroys_owner_safely(); pump_and_continuation_reconnect_safely(); finish_session_during_draining_is_idempotent(); final_tail_complete_without_fault(); final_dropped_bytes_reported_in_terminal(); draining_fatal_counts_remaining_without_fault(); draining_and_finished_reconnect_reset_attempt(); close_timeout_waits_for_reader_and_late_tail(); running_fatal_closes_once_then_discards_by_budget(); pump_fsm_decisions_and_frame_modes(); osc52_ping_sequence_and_split_output_hex(); ssh_direct_select(); pane_diag(); close_timeout_grace_abandons_drain(); prestart_failure_leaves_starting(); } }
     if (fails) return 1;
     std::printf("PANE %s ok\n", w.c_str());
     return 0;

@@ -208,6 +208,24 @@ struct TerminalStatus { bool failed = false; int exitCode = 0; std::string error
 TerminalStatus classifyTerminal(const TerminalInputs &in);
 std::string terminalLog(uint64_t attempt, const TerminalStatus &, uint64_t coreDropped, uint64_t queueDropped);
 
+// GAP-15：同步 start() 的失败必须在调用返回前进入 Failed。把它当成已启动再等 Closed/Failed，
+// 窗格会停在 Starting。Launched 保持 Starting。PreStartFailed 不进 Draining（没有会话输出）。
+// reconnectAllowed 恒为 true：Failed 之后重连仍然可用。
+enum class SyncStart { Launched, PreStartFailed };
+struct SyncStartOutcome {
+    bool failed = false;
+    bool reconnectAllowed = true;
+    std::string error;
+};
+SyncStartOutcome settleSyncStart(SyncStart result, std::string error);
+// 窗格仍是 Starting、传输 Failed、且已有 Hyper-V Fail：同一轮回调里发布 Failed。
+// 没有 HvAction::Fail（Direct 在进入 Running 之前失败）返回 nullopt，继续异步 finishSession。
+std::optional<std::string> immediatePreStartFailure(bool sessionStillStarting, bool transportFailed,
+                                                    bool hvFailed, std::string hvError);
+// category 空或 None：text 已是完整句子。否则「类别: 说明」。
+std::string formatTransportFailure(std::string_view category, std::string_view text);
+std::string formatLocalShellStartError(std::string_view exeUtf8);
+
 // DS-11 / D-2：pane-diag 一行。phase 压成单个字段；没有错误码时 err=-。msg 里的换行换成空格。
 // v 是日志格式版本，不是产品版本。
 std::string formatPaneDiagLine(uint64_t sessionId, uint64_t attemptId, std::string_view phase,

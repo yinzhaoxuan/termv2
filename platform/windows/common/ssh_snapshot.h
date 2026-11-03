@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -26,7 +27,17 @@ struct SshTarget {
     std::string emptyKnownHostsFile;    // 应用拥有的空文件，用作 GlobalKnownHostsFile
 };
 
-struct SnapshotError { std::string field, reason; };
+// Snapshot：配置/快照字段非法，调用方加模式前缀。
+// ClientMissing / Launch：会话还没拉起。reason 是路径或短原因，用户可见句子见 formatSshPreStartError。
+// 两字段的旧初始化保持 Kind::Snapshot。
+struct SnapshotError {
+    std::string field, reason;
+    enum class Kind { Snapshot, ClientMissing, Launch } kind = Kind::Snapshot;
+};
+
+// direct：直连前缀「SSH 配置无效（直连）：」。兼容模式前缀「SSH 配置快照无效：」。
+// ClientMissing / Launch 不使用这两条前缀，句子本身已经说明原因。
+std::string formatSshPreStartError(bool direct, SnapshotError::Kind kind, std::string_view field, std::string_view detail);
 
 // 与快照生成共用的字段校验；保留原有校验顺序与错误文本。
 std::optional<SnapshotError> validateSshTarget(const SshTarget &t);

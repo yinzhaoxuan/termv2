@@ -193,6 +193,31 @@ std::vector<std::string> sshArguments(const std::string &sshExe, const std::stri
     return {sshExe, "-F", snapshotPath, alias};
 }
 
+std::string formatSshPreStartError(bool direct, SnapshotError::Kind kind, std::string_view field, std::string_view detail) {
+    switch (kind) {
+    case SnapshotError::Kind::ClientMissing: {
+        const std::string path(detail.empty() ? field : detail);
+        return "未找到 ssh.exe：" + path +
+               "。请在 Windows「可选功能」中安装 OpenSSH 客户端，或在连接设置中填写 ssh.exe 的完整路径。";
+    }
+    case SnapshotError::Kind::Launch:
+        if (field == "snapshotDir")
+            return "无法写入 SSH 配置快照（" + std::string(detail) + "）。请检查应用数据目录是否可写。";
+        if (field == "sshExe" || field == "launch")
+            return "ssh.exe 启动失败：" + std::string(detail.empty() ? field : detail) + "。请确认该文件存在且可执行。";
+        if (!detail.empty()) return std::string(detail);
+        return std::string(field);
+    case SnapshotError::Kind::Snapshot:
+        break;
+    }
+    const char *prefix = direct ? "SSH 配置无效（直连）：" : "SSH 配置快照无效：";
+    std::string out = prefix;
+    out.append(field);
+    out.push_back(' ');
+    out.append(detail);
+    return out;
+}
+
 EnvList filterChildEnvironment(const EnvList &in) {
     EnvList out;
     for (auto &kv : in) {

@@ -67,7 +67,12 @@ void HyperVTransport::worker(SessionId s, AttemptId a, HyperVLaunch l) {
     }
     if (auto e = ssh_->start(s, a, l.ssh)) {
         state_ = TransportState::Failed;
-        if (cb_.onResolved) { HvAction f; f.kind = HvAction::Fail; f.text = "SSH 配置快照无效：" + e->field + " " + e->reason; cb_.onResolved(s, a, f); }
+        if (cb_.onResolved) {
+            HvAction f;
+            f.kind = HvAction::Fail;
+            f.text = formatSshPreStartError(ssh_->mode() == SshTransportMode::Direct, e->kind, e->field, e->reason);
+            cb_.onResolved(s, a, f);
+        }
         if (cb_.onStateChanged) cb_.onStateChanged(s, a, TransportState::Failed, TransportFault::StartFailed);
         return;
     }
