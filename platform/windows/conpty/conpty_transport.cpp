@@ -2,12 +2,20 @@
 #include "conpty_transport.h"
 #include "ssh_snapshot.h"
 
+#include <cstdlib>
+#include <string_view>
+
 namespace it2w {
 namespace {
 constexpr DWORD kReadChunk = 64 * 1024;
 constexpr DWORD kCloseBudgetMs = 3000;
 constexpr int kResizeFailLimit = 3;
 uint64_t nowMs() { return GetTickCount64(); }
+// 与 pane_logic::envFlagOn 同一规则，复用 ITERM2WIN_OSC52_PING，不另设开关。
+bool osc52PingEnabled() {
+    const char *v = std::getenv("ITERM2WIN_OSC52_PING");
+    return v && std::string_view(v) == "1";
+}
 struct Lock {
     SRWLOCK &l;
     explicit Lock(SRWLOCK &x) : l(x) { AcquireSRWLockExclusive(&l); }
@@ -215,6 +223,8 @@ void ConPtyTransport::cancelPasteBody() {
 
 DWORD WINAPI ConPtyTransport::writerMain(LPVOID p) { static_cast<ConPtyTransport *>(p)->writerLoop(); return 0; }
 void ConPtyTransport::writerLoop() {
+    // D-5：入口读一次。默认关闭，Reply 写成功不再刷 OutputDebugString。
+    const bool logReply = osc52PingEnabled();
     std::string buf;
     while (!writerStop_) {
         bool isReply = false;
@@ -236,7 +246,7 @@ void ConPtyTransport::writerLoop() {
             close(CloseReason::Fault);
             break;
         }
-        if (isReply && written) { // 锁外诊断：只有协议 Reply 写成功才记录。
+        if (logReply && isReply && written) { // 锁外：仅 OSC52 诊断开关打开时记录协议 Reply。
             const std::string msg = "[conpty] reply written=" + std::to_string(written) + "\n";
             OutputDebugStringA(msg.c_str());
         }

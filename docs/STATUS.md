@@ -1,5 +1,12 @@
 # iterm2-win 进度汇总
 
+## 2026-11-03：REVIEW 增补二 D-5
+
+- ConPTY 写线程在协议 Reply 写成功后不再无条件调用 `OutputDebugStringA`。
+  只在既有 OSC 52 诊断开关 `ITERM2WIN_OSC52_PING=1` 时记录 `[conpty] reply written=N`
+  （与窗格 `envFlagOn` 相同：值恰好为 `1`，写线程入口读一次）。默认关闭，vim 一类查询不再刷满 DebugView。
+  开关打开时这段日志仍在，便于对照 OSC 52 的 Reply 写入。未另设环境变量。
+
 ## 2026-11-03：REVIEW A4 NEED_DRAIN 零进展
 
 - `itcore_feed` 返回 `NEED_DRAIN` 且 `accepted==0` 时，pump 先 `afterFeed` 排空事件，再重喂同一段未读字节，偏移不前进。

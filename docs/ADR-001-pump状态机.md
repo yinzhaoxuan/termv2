@@ -300,9 +300,10 @@ Draining 期间 `status_.state` 仍然是 Running（终态还没发布），所�
 - 日志：`[pane] osc52 read reply ok len=N`
 - 位置：`:562` 改为传 `logSuccess=true`，文案已经在 `pane_logic.cpp:45-49` 里。
 
-**D5 写线程（常开，只在写应答时输出）**
+**D5 写线程（仅 `ITERM2WIN_OSC52_PING=1`，只在写应答时输出）**
 - 日志：`[conpty] reply written=N`
-- 位置：`writerLoop`（`conpty_transport.cpp:215-239`）。
+- 2026-11-03 D-5：原先常开。写线程入口按 `envFlagOn` 的规则读一次该环境变量；不是 `"1"` 时不调用 `OutputDebugStringA`。D6 打开同一开关时，期望的 `written=` 行仍会出现。
+- 位置：`writerLoop`（`conpty_transport.cpp`）。
   1. 在 `:218-222` 的锁内，用新访问器 `InputScheduler::currentIsReply()` 取 `isReply`（访问器内容是 `cur_ && cur_->kind == Reply`，参考 `io_queues.cpp:78-89`）。
   2. `WriteFile` 成功（`:226-234`）之后、`:235` 重新加锁之前，在**锁外**输出日志。
 - SSH 和 Hyper-V 都经 `pty_` 走同一个写线程，一处改动全覆盖。
