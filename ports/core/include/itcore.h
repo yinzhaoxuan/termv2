@@ -165,7 +165,8 @@ int itcore_snapshot_hyperlink(const itcore_snapshot *s, uint32_t hyperlink_id,
    是两个独立编号空间，分别用两个函数查询；同一编号互不影响（如 DEC ?4 DECSCLM 与 ANSI 4 IRM）。
    为保持 C ABI 稳定，itcore_mode_query 的签名与语义（仅 DEC）不变，ANSI 另立新函数。 */
 typedef enum { ITCORE_MODE_NOT_RECOGNIZED = 0, ITCORE_MODE_SET = 1, ITCORE_MODE_RESET = 2 } itcore_mode_state;
-/* DEC 私有模式：至少覆盖 1 4 5 7 9 25 47 1000 1002 1003 1006 1047 1049 1004 2004 2026；core 为空返回 NOT_RECOGNIZED */
+/* DEC 私有模式：至少覆盖 1 4 5 7 9 25 47 1000 1002 1003 1006 1007 1047 1049 1004 2004 2026。
+   ?1007（Alternate Scroll）初始复位。core 为空返回 NOT_RECOGNIZED */
 itcore_mode_state itcore_mode_query(const itcore_core *c, uint32_t dec_private_mode);
 /* ?2026 同步输出由开变关的累计次数（?2026l、DECSTR、RIS 各计一次；只增不减）。
    后端在一批 feed 之后比较：计数变化说明本批内有同步结束（即使批尾又重新打开），应出一帧。 */

@@ -1033,6 +1033,7 @@ void Screen::soft_reset() {
     if (modes_.sync_output) ++sync_ends_;
     modes_.sync_output = false;   // 关 ?2026，避免画面冻结
     modes_.focus_events = false;  // 关 ?1004
+    modes_.alternate_scroll = false;  // 上游 softReset 清 alternateScrollMode（?1007）
     grid().set_origin(false);
     grid().set_scroll(0, grid().rows() - 1);
     pen_ = Pen{};
@@ -1195,6 +1196,7 @@ void Screen::set_mode(const Token &t, bool set) {
                 if (set) modes_.mouse_mode |= ITCORE_MOUSE_MODE_SGR;
                 else modes_.mouse_mode &= ~ITCORE_MOUSE_MODE_SGR;
                 break;
+            case 1007: modes_.alternate_scroll = set; break;  // Alternate Scroll：备用屏滚轮→方向键
             default: break;
             }
         } else {
@@ -1591,6 +1593,7 @@ int Screen::dec_mode_state(int mode) const {
     case 1002: return st(mm & ITCORE_MOUSE_MODE_BUTTON);
     case 1003: return st(mm & ITCORE_MOUSE_MODE_ANY);
     case 1006: return st(mm & ITCORE_MOUSE_MODE_SGR);
+    case 1007: return st(modes_.alternate_scroll);
     case 2004: return st(modes_.bracketed_paste);
     case 5: return st(modes_.reverse_screen);
     case 1004: return st(modes_.focus_events);

@@ -7,6 +7,13 @@
   超过上限仍拒收才把这一片计入 `droppedBytes` 并跳过；会话结束时沿用「输出可能不完整，丢弃字节数=N」。
   `accepted>0` 仍只前进已接收的部分。见 [ADR-001](ADR-001-pump状态机.md) §12。单测在 PANE-08 与 PANE-28。
 
+## 2026-11-03：REVIEW A′4（?1007 Alternate Scroll）
+
+- `CSI ? 1007 $ p` 按真实状态回答 `CSI ? 1007 ; Pm $ y`（1 置位 / 2 复位），不再回 0。
+- DECSET/DECRST `?1007` 控制备用屏滚轮是否合成上/下方向键。鼠标报告（9/1000/1002/1003；Shift 仍强制本地）优先于 1007。
+- **初始复位。** xterm 的 `alternateScroll` 资源默认 false；iTerm2 的 `alternateScrollMode` 在 `commonReset` / `softReset` 里是 NO（3.6.9 的 DECRPM 也是 reset）。iTerm2 另有“自动打开备用屏滚轮”的配置项，默认同样是关。这里没有那项配置，所以模式位跟上游一样从复位开始，不再把翻译写死为开。程序用 `?1007h` 打开。DECSTR 与 RIS 回到复位。复位后备用屏滚轮走原来的视口滚动，不合成方向键。
+- 单测 CORE-11、PANE-03。
+
 ## 2026-11-03：REVIEW A2 / GAP-02 收尾排空
 
 - 已由 [ADR-001](ADR-001-pump状态机.md) 收口，本轮不改状态机。`finishSession` 只进入 Draining 并登记续跑；`itcore_finish_input` 要等传输 Closed/Failed，且队列和 carry 都空。
@@ -44,7 +51,7 @@
 
 - GAP-14：SGR 38/48/58 的冒号形式在子参数不少于 5 个时跳过色彩空间（`38:2::R:G:B` 与 `38:2:0:R:G:B` 都是红，不再读成绿或丢掉）。分号形式的 58 与 38 一样消费 `;5;N` 和 `;2;R;G;B`；分量被截断时吃掉已有数字，不再漏成 SGR 2/0。59 清下划线色。`4:0..5`、21、53/55 写入样式位与上划线位；D2D 按这些位画双线、波浪、点线、虚线和上划线。`ITCORE_ABI_VERSION` 仍是 0（`flags` 里原本空着的位，结构没变）。
 - GAP-16：DA1/DA2 统一为 VT220（`CSI ? 62 ; 22 c`、`CSI > 1 ; 0 ; 0 c`），不再宣告 VT520 / xterm 2500。XTVERSION 是 `termv2 0.1`。DA3 回固定单元号，不抬高级别。DECRQSS（`m` / `r` / `"q` / `SP q`）和 XTGETTCAP 未知项都有应答，不再沉默。选择记在 [identity-14.3.md](identity-14.3.md)。
-- Linux：CORE-22、CORE-23。实机 `vim -u NONE` 的 `v:termresponse` 还没跑。DECSLRM / ?1007（A′4）没做。
+- Linux：CORE-22、CORE-23。实机 `vim -u NONE` 的 `v:termresponse` 还没跑。DECSLRM 没做。?1007 见文首 A′4。
 
 ## 2026-11-03：REVIEW 增补二 D-2 / GAP-01
 
@@ -160,7 +167,7 @@
 ### T08 评审修复（R1–R4，对齐 UI 头 783435d）
 1. **关闭不阻塞 UI**：`requestClose` 把关闭交给本会话的关闭线程后立即返回。该线程调 `transport.close(User)`，由传输层 closer 执行 T03A §1.4 的 9 步和 3 s 强杀，再 `waitClosed(5 s)`。结果 post 到 UI 队列，UI 线程 `finishSession`（排空输出、finish_input、最终快照）后发 `onStatus(Exited)`，超时发 `onStatus(Failed, "关闭超时，已强制结束")`。传输若在 `waitClosed` 超时后仍停在 Closing，D-4 再给 1s 排空宽限，期满结束 Draining 并发布这条 Failed（见文首）。超时后线程继续等传输真正结束，并在该线程上析构。析构函数先 close 队列，再把传输交给关闭线程（若尚未开始），只释放自己的引用，**不 join、不等待**。多窗格各自一条线程，并行关闭。单测 PANE-01：立即返回、只经 drain 送达、8 个会话并行（≈单个耗时）、超时路径、关闭中销毁不回调。
 2. **粘贴**：直接 `itcore_encode_paste`，由核心按 DECSET 2004 加标记并清洗 NUL 与内嵌起止标记（7 位 / C1，循环删除），已删除 `bracketedFromProbe`/`buildPaste`/`sanitizePasteBody`。核心返回 -2 或传输返回 TooLarge 时调 `onPasteRejected(bytes, 32768)`。单测 ENC-02。
-3. **`itcore_mode_query(core, mode)`** → `ITCORE_MODE_NOT_RECOGNIZED/SET/RESET`（0/1/2，与 DECRPM Pm 一致），仅 DEC 私有模式，覆盖 1 4（DECSCLM，仅记录） 7 9 25 47 1000 1002 1003 1006 1047 1049 2004。`CSI ? Ps $ p` → `CSI ? Ps ; Pm $ y`。单测 CORE-11。ANSI 模式另用 `itcore_ansi_mode_query(core, mode)`（4 IRM、20 LNM），保持原函数签名以稳定 C ABI；DEC ?4 与 ANSI 4 互不影响，CORE-13 覆盖。
+3. **`itcore_mode_query(core, mode)`** → `ITCORE_MODE_NOT_RECOGNIZED/SET/RESET`（0/1/2，与 DECRPM Pm 一致），仅 DEC 私有模式，覆盖 1 4（DECSCLM，仅记录） 7 9 25 47 1000 1002 1003 1006 1007（Alternate Scroll，初始复位） 1047 1049 2004。`CSI ? Ps $ p` → `CSI ? Ps ; Pm $ y`。单测 CORE-11。ANSI 模式另用 `itcore_ansi_mode_query(core, mode)`（4 IRM、20 LNM），保持原函数签名以稳定 C ABI；DEC ?4 与 ANSI 4 互不影响，CORE-13 覆盖。
 4. **选区在核心**：`itcore_selection_start/extend/clear/active/text`。端点存为 (逻辑段 id, 字符序号)，跟随滚动进历史、历史按宽度重排和 resize。起点被历史裁掉时夹到最早一行；切主/备用屏、RIS、ED 3 时清除。复制规则：软换行拼接，硬换行出 `\n`，行尾空白去掉，宽字符只出一次，WIDE 换行补的空格不算内容。快照里选中格带 `ITCORE_CELL_SELECTED` 并翻转 INVERSE，选区变化会 touch 全部行，触发脏行重绘。后端：本地模式（无鼠标报告或按住 Shift）下，移到另一格才开始拖选；单击清除选区并检查链接。`selectedText()`/`clearSelection()` 已实现；选区有/无变化（含被输出清掉）时发 `onSelectionChanged`。单测 CORE-12。
 - 剩余 UI 接口需求：见下“接口问题”。
 
@@ -182,7 +189,7 @@
    - 新 ABI `itcore_history_rows`。
    - `onRedrawRequested` 相关代码已删除。
 4. **鼠标**：
-   - 滚轮每格 3 行。鼠标模式下转发 WHEEL_UP/DOWN（Shift 强制本地）；备用屏无鼠标模式时发上/下方向键；否则滚动视口。
+   - 滚轮每格 3 行。鼠标模式下转发 WHEEL_UP/DOWN（Shift 强制本地）；备用屏且 ?1007 置位、无鼠标模式时发上/下方向键；否则滚动视口。
    - 双击选词：词字符为字母数字、非 ASCII 以及 `/-+\~_.`（上游默认），其余标点单独成词。
    - 三击选逻辑行（跨软换行）。双击/三击之后的拖动按同一单位扩展，新 ABI 为 `itcore_selection_start_unit`。
    - 拖出上下边缘时，每 50ms tick 自动滚动 1 行。

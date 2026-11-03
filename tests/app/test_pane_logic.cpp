@@ -244,10 +244,34 @@ static void viewport() {
     CHECK(!vp.updateHistory(INT_MAX) && vp.offset() == INT_MAX);
     CHECK(vp.scroll(INT_MAX) && vp.offset() == 0);
     vp.updateHistory(2);
-    CHECK(routeWheel(true, false) == WheelRoute::Forward);
-    CHECK(routeWheel(true, true) == WheelRoute::Forward);
-    CHECK(routeWheel(false, true) == WheelRoute::Arrows);
-    CHECK(routeWheel(false, false) == WheelRoute::Scroll);
+    // 鼠标报告优先于 ?1007；只有备用屏且 1007 置位才合成方向键
+    CHECK(routeWheel(true, false, false) == WheelRoute::Forward);
+    CHECK(routeWheel(true, true, false) == WheelRoute::Forward);
+    CHECK(routeWheel(true, true, true) == WheelRoute::Forward);
+    CHECK(routeWheel(false, true, true) == WheelRoute::Arrows);
+    CHECK(routeWheel(false, true, false) == WheelRoute::Scroll);
+    CHECK(routeWheel(false, false, true) == WheelRoute::Scroll);
+    CHECK(routeWheel(false, false, false) == WheelRoute::Scroll);
+    // SET/RESET ?1007 改变备用屏滚轮是否合成方向键（视口滚动是复位后的原路径）
+    {
+        itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 10, 3, 100, 1ull << 20};
+        itcore_core *c = nullptr;
+        CHECK(itcore_create(&o, &c) == 0 && c);
+        auto scrollOn = [&] { return itcore_mode_query(c, 1007) == ITCORE_MODE_SET; };
+        auto feedMode = [&](const char *s) {
+            itcore_feed(c, reinterpret_cast<const uint8_t *>(s), std::strlen(s));
+        };
+        CHECK(!scrollOn());
+        CHECK(routeWheel(false, true, scrollOn()) == WheelRoute::Scroll);
+        feedMode("\x1b[?1007h");
+        CHECK(scrollOn());
+        CHECK(routeWheel(false, true, scrollOn()) == WheelRoute::Arrows);
+        CHECK(routeWheel(true, true, scrollOn()) == WheelRoute::Forward);
+        feedMode("\x1b[?1007l");
+        CHECK(!scrollOn());
+        CHECK(routeWheel(false, true, scrollOn()) == WheelRoute::Scroll);
+        itcore_destroy(c);
+    }
     CHECK(applyNewlineMode("\r", true) == "\r\n");
     CHECK(applyNewlineMode("\x1b\r", true) == "\x1b\r\n");
     CHECK(applyNewlineMode("\r", false) == "\r");

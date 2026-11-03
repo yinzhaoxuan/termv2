@@ -46,10 +46,10 @@ static bool selected(itcore_core *c, int32_t first, uint16_t rows, uint16_t r, u
 
 static void test_modes() {
     itcore_core *c = make();
-    const int modes[] = {1, 25, 1000, 1002, 1003, 1006, 1049, 2004, 7, 9, 47, 1047};
+    const int modes[] = {1, 25, 1000, 1002, 1003, 1006, 1007, 1049, 2004, 7, 9, 47, 1047};
     CHECK(itcore_mode_query(c, 25) == ITCORE_MODE_SET);
     CHECK(itcore_mode_query(c, 7) == ITCORE_MODE_SET);
-    for (int m : {1, 1000, 1002, 1003, 1006, 1049, 2004, 9}) CHECK(itcore_mode_query(c, uint32_t(m)) == ITCORE_MODE_RESET);
+    for (int m : {1, 1000, 1002, 1003, 1006, 1007, 1049, 2004, 9}) CHECK(itcore_mode_query(c, uint32_t(m)) == ITCORE_MODE_RESET);
     for (int m : modes) {
         std::string ms = std::to_string(m);
         if (m == 47 || m == 1047) continue;
@@ -63,6 +63,18 @@ static void test_modes() {
     CHECK(itcore_mode_query(c, 4242) == ITCORE_MODE_NOT_RECOGNIZED);
     CHECK(feed(c, "\x1b[?4242$p") == "\x1b[?4242;0$y");
     CHECK(itcore_mode_query(nullptr, 1) == ITCORE_MODE_NOT_RECOGNIZED);
+    // ?1007：上面的循环已覆盖 DECSET/DECRST 与 DECRPM；DECSTR 与 RIS 再清回复位（iTerm2 softReset / commonReset）
+    CHECK(itcore_mode_query(c, 1007) == ITCORE_MODE_RESET);
+    CHECK(feed(c, "\x1b[?1007$p") == "\x1b[?1007;2$y");
+    feed(c, "\x1b[?1007h");
+    CHECK(itcore_mode_query(c, 1007) == ITCORE_MODE_SET);
+    CHECK(feed(c, "\x1b[?1007$p") == "\x1b[?1007;1$y");
+    feed(c, "\x1b[!p");
+    CHECK(itcore_mode_query(c, 1007) == ITCORE_MODE_RESET);
+    CHECK(feed(c, "\x1b[?1007$p") == "\x1b[?1007;2$y");
+    feed(c, "\x1b[?1007h\x1b" "c");
+    CHECK(itcore_mode_query(c, 1007) == ITCORE_MODE_RESET);
+    CHECK(feed(c, "\x1b[?1007$p") == "\x1b[?1007;2$y");
     itcore_destroy(c);
 }
 
