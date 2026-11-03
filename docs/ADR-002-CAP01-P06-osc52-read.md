@@ -10,8 +10,10 @@
 v0.1 **接受**「经 ConPTY 的会话不支持 OSC 52 剪贴板读取；写入仍可用」。
 
 实际是否允许读 = `osc52.allowRead`（默认关，隐藏字段保留）**且**当前传输声明 `supportsOsc52Read`。
-本地、兼容 SSH / Hyper-V 的 ConPTY 路径仍声明 false；构建包含且选中 Direct SSH 时声明
-`supportsOsc52Read=true`，Hyper-V 随内层 SSH 传输。能力门与策略门继续组合，不能绕过 settings。
+本地与兼容 SSH / Hyper-V 的 ConPTY 路径声明 false。Direct SSH（含以其为内层的 Hyper-V）
+对读查询字节透明，但 REVIEW 增补二 **D-1** 起同样声明 `supportsOsc52Read=false`，
+直到逐次确认 UI 存在；否则 `osc52.allowRead=true` 时远端可静默读走本机剪贴板。
+Hyper-V 随内层 SSH 传输。能力门与策略门继续组合，不能绕过 settings。
 Direct 已落地，决策与启用方式见 [ADR-003](ADR-003-ssh-direct.md) / [ssh-direct.md](ssh-direct.md)。
 经 ConPTY 的会话仍**不做**逐次确认（查询到不了应用层，确认框无意义）。
 
@@ -28,8 +30,9 @@ Direct 已落地，决策与启用方式见 [ADR-003](ADR-003-ssh-direct.md) / [
 | OSC 52 写剪贴板 | ✅ 受 `osc52.allowWrite` 控制，默认关 | ✅ 同左 | ✅ 同左 | conhost 透传写序列（已实测） |
 | OSC 52 读剪贴板 | ❌ 不支持 | ❌ 不支持 | ❌ 不支持 | CAP-01 P06：conhost 输出侧吞掉 `52;c;?` |
 
-Direct SSH（含以 Direct 为内层的 Hyper-V）支持传输 OSC 52 读查询并声明读能力；是否应答仍由
-`osc52.allowRead` 决定。写入仍受 `osc52.allowWrite` 控制。上表仅列 ConPTY 路径。
+Direct SSH（含以 Direct 为内层的 Hyper-V）对 OSC 52 读查询字节透明，但 D-1 起不声明读能力
+（`supportsOsc52Read=false`），即使 `osc52.allowRead=true` 也不应答。写入仍受
+`osc52.allowWrite` 控制。上表仅列 ConPTY 路径。
 
 ## 已知限制原文
 
@@ -83,7 +86,7 @@ Direct SSH（含以 Direct 为内层的 Hyper-V）支持传输 OSC 52 读查询�
 ## 实现要点
 
 - `Transport::supportsOsc52Read()` 默认 `false`；LocalT 仍为 false，SshT / HyperVT 转发内层能力。
-  构建包含且选中 Direct 时为 true，ConPTY 实现始终为 false；每个 attempt 的能力固定。
+  ConPTY 与 Direct 目前都为 false（D-1，待逐次确认 UI）；每个 attempt 的能力固定。
 - `ITCORE_EV_CLIPBOARD_READ` 路径：`osc52ReadEffective(allowRead, supportsOsc52Read())` 为假则不交付；策略关记 `read denied`，策略开但传输不支持记 `read unsupported (transport)`。
 - 单元测试：`osc52ReadEffective` 四象限。
 

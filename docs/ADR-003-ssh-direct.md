@@ -25,8 +25,8 @@ B（纯管道 ssh.exe）仅完成控制序列透明性的对照验证；其远�
 
 ## 能力与边界
 
-Direct 声明 `supportsOsc52Read=true`，与默认关闭的 `osc52.allowRead` 策略门组合；
-ConPTY 路径仍声明 false。Hyper-V 转发内层 SSH 能力，整个 attempt 模式固定。
+Direct 暂声明 `supportsOsc52Read=false`（REVIEW 增补二 D-1：逐次确认 UI 之前不开放读），
+与 ConPTY 相同；`osc52.allowRead` 策略门仍保留。Hyper-V 转发内层 SSH 能力，整个 attempt 模式固定。
 关闭预算 ≤3 秒；v0 不增加 DCS/Sixel 旗标，像素尺寸为 0，不将序列透明性等同于渲染能力。
 静态依赖许可随包及 GPLv3 对应源码要求见 [THIRD-PARTY-NOTICES](../THIRD-PARTY-NOTICES.md)
 和 [UPSTREAM](../UPSTREAM.md#第三方静态依赖)。

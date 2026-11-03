@@ -439,8 +439,8 @@ static void wordchars() {
     // CAP-01 P06：能力门 — 读生效 = allowRead ∧ transportSupports
     CHECK(!osc52ReadEffective(false, false));
     CHECK(!osc52ReadEffective(false, true));
-    CHECK(!osc52ReadEffective(true, false));   // ConPTY：策略开也不交付
-    CHECK(osc52ReadEffective(true, true));     // 将来直连传输
+    CHECK(!osc52ReadEffective(true, false));   // 策略开但传输不支持（ConPTY 与 D-1 后的 Direct）
+    CHECK(osc52ReadEffective(true, true));     // 策略与能力都开才交付（确认 UI 之后）
 
     // OSC52-04：deliverOsc52ReadReply — encode 失败记日志；reply 回调被调用；reply 失败也记日志
     {

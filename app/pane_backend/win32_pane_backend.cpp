@@ -128,7 +128,7 @@ struct Transport {
     virtual uint32_t processes() = 0;
     virtual bool isSsh() const = 0;
     virtual uint64_t discardedBytes() const = 0;
-    // CAP-01 P06：经 ConPTY 的传输不支持 OSC 52 读；直连传输将来可覆盖为 true。
+    // CAP-01 P06 / D-1：默认不支持 OSC 52 读。Direct 同样返回 false，直到逐次确认 UI。
     virtual bool supportsOsc52Read() const { return false; }
 };
 struct LocalT final : Transport {
@@ -669,7 +669,7 @@ void Win32PaneBackend::drainCoreEvents() {
             if (!transport_) {
                 pumpLog(nullptr, "[pane] osc52 read skipped (no transport)");
             } else if (!osc52ReadEffective(cfg_->osc52.allowRead, transport_->supportsOsc52Read())) {
-                // CAP-01 P06：策略关，或传输（当前均为 ConPTY）不支持读 → 不交付应答。
+                // CAP-01 P06 / D-1：策略关，或传输不支持读（ConPTY 与 Direct 目前均为 false）→ 不交付应答。
                 if (!cfg_->osc52.allowRead)
                     pumpLog(nullptr, "[pane] osc52 read denied");
                 else

@@ -1,5 +1,12 @@
 # iterm2-win 进度汇总
 
+## 2026-11-03：REVIEW 增补二 D-1
+
+- Direct SSH `DirectSshTransport::supportsOsc52Read()` 改为 `false`，与 ConPTY 相同。
+  逐次读确认 UI 做出之前，即使 `osc52.allowRead=true` 也不应答 OSC 52 读。
+  Hyper-V 转发内层能力，因此走 Direct 时一并关闭。
+  见 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)、[ADR-003](ADR-003-ssh-direct.md)、[ssh-direct.md](ssh-direct.md)。
+
 ## 2026-11-02：Direct SSH S6 产品手测收口（Asia/Shanghai）
 
 - 基线：`fde8e99`（窗格诊断含 `ssh.direct.*` 追加写入 `%APPDATA%\it2w\logs\pane-diag.log`）。
@@ -16,7 +23,7 @@
 - S6：`ssh_direct_accept.exe` 验收用例此前 PASS；`it2w_shell` 产品手测见上方 **2026-11-02** 收口。
 - S7：本次变更补齐 `it2w_third_party_notices` 默认构建目标、exe 旁 `licenses/`、
   [第三方声明](../THIRD-PARTY-NOTICES.md) / 对应源码说明和 [使用文档](ssh-direct.md)。
-- Direct 的 OSC 52 读能力仍与 `osc52.allowRead` 策略门组合；ConPTY 路径不支持读，证据保持见 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)。
+- Direct 的 OSC 52 读当时与 `osc52.allowRead` 策略门组合；2026-11-03 D-1 起改为 `supportsOsc52Read=false`（见文首）。ConPTY 路径不支持读，证据保持见 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)。
 
 
 ## 2026-10-31：NEW-01 / NEW-05 / OSC52-05
