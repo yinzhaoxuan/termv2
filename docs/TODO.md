@@ -1,6 +1,6 @@
 # termv2 剩余工作
 
-更新：2026-11-05，DS-17（E3）之后。
+更新：2026-11-05，手测清单与文档回写之后。
 读者：接手开发的人或 agent。先读 [HANDOFF.md](HANDOFF.md)（目录、构建、架构），再读本文决定做什么。现状与逐日进度在 [STATUS.md](STATUS.md)，与 iTerm2 的差距清单在根目录 [REVIEW.md](../REVIEW.md) §8（已回写到 2026-11-04）。
 
 ## 0. 先知道这些
@@ -47,7 +47,7 @@
 
 [ROADMAP-iTerm2-parity.md](ROADMAP-iTerm2-parity.md) 的 F-0..F-5 与 REVIEW §8 F1–F13：Shell Integration、通知、Kitty 键盘、内联图片与 Sixel、tmux -CC、完整 Profile、触发器、广播输入、WSL 等。依赖 DCS / Sixel 的功能只能放在 Direct 上，本地 ConPTY 会吞掉这些序列（ADR-002）。
 
-## 4. 本轮已完成（2026-11-04，供核对）
+## 4. 本轮已完成（2026-11-04 至 11-05，供核对）
 
 | 提交 | 内容 | 设计 / 说明 |
 |---|---|---|
@@ -68,3 +68,5 @@
 | `376408e` | E6：GPL-3.0-or-later、LICENSE、SPDX、上游文件清单、依赖审计、所有构建附带许可 | [LICENSE-AUDIT.md](LICENSE-AUDIT.md) |
 | `398f799` | DS-8 余项：ABI 版本规则 + ABI-02 布局测试 | [ADR-005-itcore-ABI版本规则.md](ADR-005-itcore-ABI版本规则.md) |
 | `ce2c79d` | DS-17 会话 / 应用两级内存账本（E3） | [DS-17-内存账本.md](DS-17-内存账本.md) |
+| `89e5f52` | Windows 实机手测清单；CI 上传 `it2w_shell.exe` | [WINDOWS-手测清单.md](WINDOWS-手测清单.md) |
+| （待提交） | 文档回写：HANDOFF、README、REVIEW、ROADMAP | STATUS 2026-11-05 |

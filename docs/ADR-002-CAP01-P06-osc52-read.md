@@ -87,7 +87,7 @@ DS-10（2026-11-04）加了逐次确认后，Direct 声明 `supportsOsc52Read=tr
 ## 实现要点
 
 - `Transport::supportsOsc52Read()` 默认 `false`；LocalT 仍为 false，SshT / HyperVT 转发内层能力。
-  ConPTY 与 Direct 目前都为 false（D-1，待逐次确认 UI）；每个 attempt 的能力固定。
+  ConPTY 为 false；Direct 自 DS-10 起为 true，读请求经 `ClipboardReadGate` 逐次确认（D-1 时曾临时为 false）；每个 attempt 的能力固定。
 - `ITCORE_EV_CLIPBOARD_READ` 路径：`osc52ReadEffective(allowRead, supportsOsc52Read())` 为假则不交付；策略关记 `read denied`，策略开但传输不支持记 `read unsupported (transport)`。
 - 单元测试：`osc52ReadEffective` 四象限。
 

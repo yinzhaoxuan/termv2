@@ -354,7 +354,7 @@ A/A′/B 的最小可测路径一具备，就应立即开始 C，不要等 D/E �
 - [x] B5 多行粘贴预览和确认，取消时发送零字节（GAP-06）——`uicfg::pastePreview`；隐藏设置 `confirmMultilinePaste`。
 
 ### C. Windows 实机验证（P1 门槛）
-C 批全部仍开放。C1 有第 16–18 轮的文字记录（ADR-002 / STATUS），证据文件没入仓。待手测清单汇总在 `docs/TODO.md`。
+C 批全部仍开放。C1 有第 16–18 轮的文字记录（ADR-002 / STATUS），证据文件没入仓。按优先级排好的手测清单见 `docs/WINDOWS-手测清单.md`（CI 会上传 `it2w_shell.exe`）。
 - [~] C1 CAP-01：ConPTY 前后字节、TERM 实际值、terminfo、应答归属
 - [ ] C2 SSH-CFG-01 / T07 在 Windows OpenSSH 上实连：未知主机、密钥变化、密码、口令、拒绝连接
 - [ ] C3 WIN-01/02/03：vim/top/tmux、中文 IME、混合 DPI、设备丢失、四窗格持续输出时的延迟分位数

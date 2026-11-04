@@ -17,6 +17,12 @@
 - **许可**：GPL-3.0-or-later（[LICENSE-AUDIT.md](LICENSE-AUDIT.md)）。
 - **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认待 ADR（TODO §2.1）。OSC 52 读写默认全关。
 
+## 2026-11-05：Windows 实机手测清单与文档回写
+
+- [WINDOWS-手测清单.md](WINDOWS-手测清单.md)：把各设计文档、STATUS B 批、HANDOFF §4.6、REVIEW C 批的手测项合并，按 P0–P3 排好，写明期望、出处与回报格式。CI 的 mingw / mingw-direct 任务改为上传 `it2w_shell.exe` 与 `licenses/`（`89e5f52`，首个 artifact 已生成）。
+- 文档回写到 11-05：HANDOFF（11-05 更新说明、环境变量语义、第 4–6 节）、README 文档索引、REVIEW §8 C 批指向清单、REVIEW 增补 10-31 回写表、ROADMAP（OSC 52 读、F-1、F-4、Direct 补齐）。
+- CI：`89e5f52` 全绿（linux / asan / tsan / mingw）。`mingw-direct` 仍待手动触发。
+
 ## 2026-11-05：DS-17 会话与应用两级内存账本（E3）
 
 设计：[DS-17-内存账本.md](DS-17-内存账本.md)。

@@ -1,6 +1,6 @@
 # termv2 交接说明
 
-日期：2026-11-03  
+日期：2026-11-03（2026-11-05 更新第 2、4、5、6 节）  
 读者：仓库所有者，以及之后不再经过协调助手、直接改这个仓库的人。  
 写入时 main 顶端：`87cdf84ab18a4fa8cf7cf7e0abfef4e46437b79c`（`fix(conpty): D-5 gate Reply ODS on OSC52 ping`）。本文只追加文档，不改行为。
 
@@ -8,9 +8,9 @@ termv2 是从 iTerm2 派生的 Windows 终端。本地会话走 ConPTY；SSH 默
 
 先读本文，再按需要打开文末索引里的原文。进度流水在 [STATUS.md](STATUS.md)。设计决策在 `docs/ADR-*.md`。与 iTerm2 的差距和 v0.1 待办在仓库根的 `REVIEW.md` 与两份 `REVIEW-增补-*.md`（不在 `docs/` 下）。v0.1 之后的能力提纲在 [ROADMAP-iTerm2-parity.md](ROADMAP-iTerm2-parity.md)。
 
-**2026-11-04 更新：** 第 4.1 节 A5、第 4.2 节 B1–B5、第 4.3 节 A1 余量 / E4 / E5 / NEW-02 / NEW-03、第 4.5 节 Direct 首次信任界面都已在 main 上实现（设计见 [DS-2-启动描述与B批.md](DS-2-启动描述与B批.md)、[DS-12-Direct首次信任.md](DS-12-Direct首次信任.md)）。Windows 代码由 CI 的 mingw 任务编译，Windows 实机手测仍待做。进度与待手测项见 STATUS 2026-11-04，**剩余工作与推荐顺序见 [TODO.md](TODO.md)**。下文第 4、6 节保留原样，读到这些项时以 STATUS 为准。
+**2026-11-05 更新（先读这段）：** 11-04 至 11-05 又落地了 DS-9（外观 Profile）、DS-13（按连接选择传输）、DS-14（连接编辑器）、ADR-004（Ctrl+C）、DS-15（诊断包导出）、DS-16（快捷键展示）、DS-10（OSC 52 读逐次确认）、NEW-05 余项、E7、E6（许可改为 GPL-3.0-or-later）、ADR-005（ABI 规则）、DS-17（内存账本）。现状看 [STATUS.md](STATUS.md) 顶部「当前状态」，剩余工作看 [TODO.md](TODO.md)，Windows 实机手测按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 做（CI 会上传 `it2w_shell.exe`）。第 2 节环境变量、第 4、5、6 节已按 11-05 改写；第 3 节是 11-03 之前的落地记录，保留原样。
 
-**勾选框已经过时。** `REVIEW-增补-2026-11-02.md` 写于 `c1d475d..06497a0`，当时 GAP-01/14/15/16、A2–A4、A′、D-1–D-4 以及 D-5 的 ODS 门控都还没落地。那些项在 2026-11-03 的 PR #1–#10 里进了 main。根目录 REVIEW 的 `[ ]` 没有回写。以本文第 3 节和 `git log` 为准，不要按旧勾选重做。
+**两份增补里的勾选是当时的状态。** `REVIEW-增补-2026-11-02.md` 写于 `c1d475d..06497a0`，当时 GAP-01/14/15/16、A2–A4、A′、D-1–D-4 都还没落地。增补正文不改，文首的回写表与根目录 `REVIEW.md` §8 的勾选已经回写到 2026-11-05，以它们和 `git log` 为准。
 
 哈希都来自 `git log` / `gh pr view` 的 merge commit，对应 main 上的那一笔提交。
 
@@ -25,13 +25,13 @@ C++20，CMake ≥ 3.24（`CMakeLists.txt`）。产品名在工程里是 `iterm2_
 | `ports/core/` | 终端核 **itcore**：VT 解析（`src/vt_parser.cpp`）、屏幕与 SGR（`src/screen.cpp`）、键盘/粘贴/鼠标编码（`src/encode.cpp`）、Unicode 宽度、搜索。C ABI 在 `include/`。上游对照在 `ports/core/SOURCE_MAP.md`（iTerm2 `f29420ae`）。 |
 | `app/pane_backend/` | **窗格后端**。`pane_logic.*` 是平台无关逻辑（会话、滚轮、粘贴、关闭、环境变量开关）。`frame_pump.h` 是 pump / 收尾状态机。`win32_pane_backend.*` 把传输、itcore、D2D 接到 UI 线程。`pane_search.*` 是历史搜索。 |
 | `platform/windows/` | **Windows 传输**。`common/` 快照、队列、SSH 会话映射、Hyper-V 解析、Direct 纯逻辑。`conpty/` ConPTY。`ssh/` 兼容模式（`ssh.exe` + 快照）。`ssh_direct/` 进程内 libssh2。`hyperv/` 解析后启动内层 SSH。`probe/` 是 `t03a_probe`、`ssh_a_probe`、`ssh_direct_accept`。 |
-| `ui/` | **主界面与配置**，本轮 PR #1–#10 故意没改这里。`shell_win32/main.cpp` 是 `it2w_shell`。`src/` 是 store、设置、工作区、校验。`include/uicfg`、`include/uishell` 是配置模型和窗格接口。单独 `cmake -S ui` 时用占位后端。 |
+| `ui/` | **主界面与配置**。`shell_win32/main.cpp` 是 `it2w_shell`。`src/` 是 store、设置、工作区、校验。`include/uicfg`、`include/uishell` 是配置模型和窗格接口。单独 `cmake -S ui` 时用占位后端。 |
 | `renderer/` | D2D/DWrite 渲染、布局、字形度量。静态库不链 itcore；实验窗和窗格后端再链真实核心。 |
 | `app/win32_term/` | 最小 HWND 实验窗（itcore + ConPTY + D2D），不是产品壳。Linux 配置会跳过。 |
 | `tests/` | 按层分：`tests/core`、`tests/app`（窗格逻辑）、`tests/platform`、`tests/renderer`，外加 `tests/golden`、`tests/vectors`。`ui/tests/` 是另一组 uicfg 单测，由 `ui/CMakeLists.txt` 登记。 |
 | `docs/` | 状态、ADR、路线、身份、Direct SSH / A 探针、T03A 与 T09 规格。 |
 | `cmake/` | `mingw-w64.cmake`、Direct 依赖（`SshDirectDeps.cmake`）、A 探针、许可拷贝、去掉 Pageant 的补丁。 |
-| 仓库根 | `REVIEW.md`、`REVIEW-增补-2026-10-31.md`、`REVIEW-增补-2026-11-02.md`、`THIRD-PARTY-NOTICES.md`、`UPSTREAM.md`。没有项目 README。 |
+| 仓库根 | `README.md`（构建入口）、`LICENSE`（GPL-3.0-or-later）、`REVIEW.md` 与两份 `REVIEW-增补-*.md`、`THIRD-PARTY-NOTICES.md`、`UPSTREAM.md`、`CMakePresets.json`、`.github/workflows/ci.yml`。 |
 
 数据流：UI 选连接 → `PaneBackend` 选传输（空 connectionId 走本地 ConPTY；否则 SSH 或 Hyper-V）→ 字节进 `itcore_feed` → 快照交给 D2D。pump 在 UI 线程，状态是 Running → Draining → Finished（[ADR-001](ADR-001-pump状态机.md)）。
 
@@ -96,7 +96,7 @@ Linux 上只跑探针的可移植自测：`-DIT2W_SSH_A_PROBE_ONLY=ON -DIT2W_SSH
 
 | 变量 | 作用 |
 |---|---|
-| `ITERM2WIN_SSH_DIRECT` | `1` 时选择 `DirectSshTransport`。构建没编进 Direct 就明确报错（「此构建未包含直连 SSH」），**不回落**到 `ssh.exe`。未设置则走兼容传输。改模式要改环境变量后重新启动产品。 |
+| `ITERM2WIN_SSH_DIRECT` | 只作**全局默认**：connections.json 里没写 `ssh.transport` 的连接，值为 `1` 时走 `DirectSshTransport`，否则走兼容传输。写了 `"direct"` / `"compatible"` 的连接以连接为准（DS-13）。选中 Direct 而构建没编进它就明确报错（「此构建未包含直连 SSH」），**不回落**到 `ssh.exe`。 |
 | `ITERM2WIN_OSC52_PING` | `1` 时打开 OSC 52 诊断：Reply 路径先发三段诊断再发真实应答；原始输出里 `]52;` 至多记 64 字节 hex。D-5 之后，ConPTY 写线程也只在这个开关下打 `OutputDebugStringA`（`[conpty] reply written=N`）。默认关。没有单独的 ODS 变量。 |
 | `SSH_AUTH_SOCK` | Direct 只接受以 `\\.\pipe\` 开头的值，否则用 `\\.\pipe\openssh-ssh-agent`。不用 Pageant。 |
 | `APPDATA` | 诊断目录。shell 未把 `configDir` 传进窗格时，用 `SHGetFolderPath(CSIDL_APPDATA)`，失败再读 `APPDATA`，得到 `%APPDATA%\it2w\logs\pane-diag.log`。两者都失败则不写。 |
@@ -110,7 +110,7 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
 .\it2w_shell.exe
 ```
 
-诊断日志约 5 MiB × 3（`pane-diag.log`、`.1`、`.2`）。行里有主机名、主机密钥指纹和 agent 管道路径，导出前自行脱敏（`docs/ssh-direct.md`、STATUS 2026-11-03 D-2）。
+诊断日志约 5 MiB × 3（`pane-diag.log`、`.1`、`.2`）。行里有主机名、主机密钥指纹和 agent 管道路径；要发给别人时用系统菜单「导出诊断包…」，自动脱敏并先预览（DS-15）。
 
 ---
 
@@ -225,60 +225,29 @@ B 批退出标准（REVIEW §7）：从主程序走通本地 PowerShell、手动
 
 相关设计项还没写完：DS-2 统一启动描述（`resolve(connId) → variant<Local, Ssh, HyperV, Error>`）、DS-5 未连接占位态。出处：`REVIEW-增补-2026-10-31.md` §3。
 
-### 4.3 其他仍未勾上的项
+### 4.3 其他项（2026-11-05 状态）
 
-下面按 REVIEW §8 和增补的原编号。已经在第 3 节落地的 A1（SessionId 部分）、A2、A3、A4、A′1–A′5、D-1、D-2、D-3 的别名、D-4、D-5 的 ODS，不再列入。
+逐项勾选以根目录 `REVIEW.md` §8 为准（已回写到 2026-11-05），剩余工作与推荐顺序以 [TODO.md](TODO.md) 为准。概括：
 
-**A1 余量**（STATUS 2026-11-03 D-2；`ssh_snapshot.h`）：启动时按目录锁清理过期快照，仍在 `ui/`。文件名已带 pid，旧的 `ssh-1-1.conf` 不会再挡住新会话；残留文件本身不会被扫掉。
-
-**C. Windows 实机验证**（REVIEW §8 C1–C6）。C1 有第 16–18 轮的文字记录，证据文件没进仓库。C2–C6 没有新的入仓报告：Windows OpenSSH 实连（未知主机、密钥变化、密码、口令、拒绝连接）、vim/top/tmux、中文 IME、混合 DPI、设备丢失、四窗格延迟、VM-01、100 次关闭/重连的进程与句柄趋势、每份报告绑定 SHA 与环境版本。
-
-**D. 日常操作**（REVIEW §8；增补 10-31 更新过 D2/D5/D7）：
-
-- D1 连接的新建、编辑、删除和分组（GAP-07）。
-- D2 历史搜索：纯文本已有；正则、大历史单步耗时、输出期间 RESTARTED、软换行跨行命中（NEW-03）未收口。
-- D3 配色：`PaneBackendConfig.colors`、`.itermcolors`、`appearanceProfileId`。
-- D4 回滚行数和内存可配置。核心默认 10000 行 / 64 MiB，后端覆盖成 5000 行 / 32 MiB，用户不能改（GAP-09）。
-- D5 快捷键展示。Ctrl+Shift+F 已接到搜索，不再吞键。
-- D6 Ctrl+C 默认是 `copyOrInterrupt`，没有写成设计决策，也没有改回设计默认。
-- D7 OSC 52 开关在 settings.json 里是隐藏字段，没有界面。逐次读确认没有（NEW-04）。D-1 先把传输能力关掉，策略门还在。
-- D8 诊断包导出仍缺。滚动文件已有。
-
-**E. 资源与交付**：
-
-- E1 会话执行器，或用实测把 UI 线程模型写成 ADR。ADR-001 把执行器明确推迟（备选 A2）。
-- E2 / NEW-02：`itcore_history_rows` 有缓存，但按 scrollback 代号失效，持续输出时每行失效，洪峰下仍是每轮 O(历史)。出处：增补 10-31 NEW-02；增补二 §2 仍写未动。
-- E3 会话和应用两级内存账本。
-- E4 根 CMake 默认用仓库内 nlohmann；把 `core01_02.json` 放进仓库；缺向量时让必需测试失败。现在仍是告警跳过，原生 ui 仍 `find_package`。
-- E5 CMakePresets、根 README、GitHub Actions（Linux plain/ASan/TSan + Windows MSVC）。仓库里现在没有这些。
-- E6 统一许可。Direct 的第三方声明随 S7 落地了；根 LICENSE、SPDX 清单、依赖审计按 GAP-12 仍缺。
-- E7 STATUS / SOURCE_MAP 去掉陈旧句子，变更历史单独存放。STATUS 顶部现在指向本文，正文里仍混着 10 月的「最近提交」表。
-- E8 GlyphCache 图集与 glyph run。STATUS 写当前走 DrawText，连字的前提。
-
-**NEW-03**（增补 10-31，待确认）：搜索绝对行号可能混用逻辑行和显示行。增补二仍列为未动。
-
-**DS-1..DS-11**（增补 10-31 §3）里已经被 ADR 或 PR 盖住的：DS-1 的状态机（ADR-001，洪峰实测仍缺）、DS-3 的 SessionId（目录锁清理仍缺）、DS-4 启动失败契约（ADR-001 §11）、DS-7 的 DA 级别（identity-14.3；TERM 仍未与 terminfo 对齐，ROADMAP §2.1）、DS-8 的样式位（用了 `flags` 里原有的空位，ABI 版本没加）、DS-11 的滚动字段（诊断包和 ODS 迁移只做了门控）。没盖住的是 DS-2、DS-5、DS-6、DS-9、DS-10。
+- **已落地**：A 批全部（含 A5、A1 目录锁清理）、A′、B1–B5、D1 连接编辑器、D3 / D4 外观 Profile、D5 快捷键展示（只读）、D6（ADR-004）、D8 诊断包、E2 / NEW-02、E3 内存账本、E4 / E5（CI、预设、README）、E6 许可、E7 文档整理、NEW-03、NEW-04（DS-10）、NEW-05、DS-8 的 ABI 规则（ADR-005）。设计文档都在 `docs/DS-*.md` / `docs/ADR-*.md`。
+- **仍开放**：C1–C6 全部实机验证（[WINDOWS-手测清单.md](WINDOWS-手测清单.md)）；D2 搜索的正则与大历史耗时；D7 OSC 52 开关仍是 settings.json 隐藏字段、没有界面；E1 执行器 / UI 线程模型 ADR（需实测）；E8 GlyphCache 与连字；DS-7 的 TERM / terminfo 对齐（需实机）；E6 余项（MinGW 运行时许可文本打包）；D-5 的 QA 证据入仓。
 
 ### 4.4 D-5 余项
 
 出处：`REVIEW-增补-2026-11-02.md` §1 D-5 三条。ODS 那条已由 PR #10 落地。剩下两条原文是：
 
-- Direct 只能用 MinGW 构建，MSVC 产物里没有它。开关是全进程环境变量。产品化前要在 **DS-2（统一启动描述）** 里改成按连接选择。
+- Direct 只能用 MinGW 构建，MSVC 产物里没有它。按连接选择传输已由 DS-13 完成（`ssh.transport`，环境变量降为全局默认）。
 - CAP-01 第 16–18 轮和 S6 手测的证据都「留在本机 QA 目录，未入仓」。C6 要求结果绑定提交号和环境。建议至少把结果表（不含原始输出）入仓。
 
 路径在 ADR-002 / STATUS 里写过、但不在 git 中：`/workspace/qa/realmachine-results-r16/`、`/workspace/qa/realmachine-results-r18/manual-r18.md`，以及 S6 的本机 QA 目录。A 探针产物同样不入仓。
 
-### 4.5 Direct 首次信任界面（改默认之前的门槛）
+### 4.5 Direct 改成默认传输之前
 
-出处：ADR-003「Hyper-V 主机密钥身份」末段、`docs/ssh-direct.md`「认证与主机信任」、STATUS 2026-11-03 D-3、增补二 D-3。
-
-要做的是：展示指纹，用户确认，再写入 `known_hosts`。这是把 Direct **改成默认传输**的前置条件。现在 Direct 继续只读、不 accept-new。新主机（含新的 Hyper-V 虚拟机）要先在兼容模式里确认一次指纹。已经按 IP 信任过的虚拟机，也要在兼容模式里按 `hv-<vm guid>` 再确认一次，之后换 DHCP 地址不用重做。
-
-不要在这个界面落地之前把 `IT2W_SSH_DIRECT` 的默认值改成 ON，也不要在未设置环境变量时默认走 Direct。
+两个前置条件都已落地：首次信任界面（DS-12，`22ee722`）与按连接选择传输（DS-13）。还缺的是 Windows 实机记录（DS-12 §6、DS-13 §6）和一次 `mingw-direct` 编译。是否把 Direct 改成默认、全局默认放在哪里，按 TODO §2.1 先写 ADR 再动代码。在那之前不要把 `IT2W_SSH_DIRECT` 或运行时默认改成 Direct。
 
 ### 4.6 Windows 实机待验
 
-代码已在 main，下面这些还没有实机记录。出处写在每条后面。
+代码已在 main，下面这些还没有实机记录。完整的、按优先级排好的手测清单见 [WINDOWS-手测清单.md](WINDOWS-手测清单.md)，本表只留 11-03 之前就开着的几项。
 
 | 待验 | 出处 | 期望 |
 |---|---|---|
@@ -333,7 +302,7 @@ REVIEW §8.F1–F13 是同一批能力的另一份清单（Shell Integration、�
 
 | 节 | 内容 |
 |---|---|
-| 决策 | ConPTY 路径不支持读。Direct 从 D-1 起也不声明读能力，直到有逐次确认 UI。`osc52.allowRead` 与 `supportsOsc52Read` 必须同时为真才应答。 |
+| 决策 | ConPTY 路径不支持读。Direct 曾从 D-1 起不声明读能力；DS-10 加了逐次确认后改为声明支持，每个读请求都要用户确认。`osc52.allowRead`（默认关）与 `supportsOsc52Read` 必须同时为真才会询问。 |
 | 能力矩阵 | 写：三种 ConPTY 路径都受 `allowWrite` 控制，默认关。读：ConPTY 上 conhost 在输出侧吞掉 `52;c;?`。 |
 | 第 16 轮 / 何时重评 | DCS 与 Sixel 被吞，直连重评已经触发。本地不做直连。 |
 | 第 18 轮 | B 透明但没有尺寸；A 探针六项 PASS；产品已按 A 落地。 |
@@ -345,30 +314,32 @@ REVIEW §8.F1–F13 是同一批能力的另一份清单（Shell Integration、�
 
 | 节 | 内容 |
 |---|---|
-| 决策 | 方案 A；构建默认 OFF；运行时 `ITERM2WIN_SSH_DIRECT=1`；v0 仅 agent；known_hosts 只读；不做 POSIX 实连；agent 只用 OpenSSH 管道。 |
+| 决策 | 方案 A；构建默认 OFF；运行时按连接 `ssh.transport` 选择，`ITERM2WIN_SSH_DIRECT=1` 为全局默认（DS-13）；v0 仅 agent；未知主机经首次信任界面写入 known_hosts（DS-12），不 accept-new；不做 POSIX 实连；agent 只用 OpenSSH 管道。 |
 | Hyper-V 主机密钥身份 | `hv-<规范化 VM GUID>`；兼容模式 `HostKeyAlias` + `CheckHostIP no`；Direct 查找串与 OpenSSH 一致，别名不加端口。 |
-| 能力与边界 | `supportsOsc52Read=false`；关闭 ≤3s；不增加 DCS/Sixel 旗标；像素尺寸 0；序列透明不等于渲染能力。GPLv3 对应源码见 `UPSTREAM.md`。 |
+| 能力与边界 | `supportsOsc52Read=true`，读请求逐次确认（DS-10）；关闭 ≤3s；不增加 DCS/Sixel 旗标；像素尺寸 0；序列透明不等于渲染能力。对应源码见 `UPSTREAM.md`。 |
+
+### ADR-004 Ctrl+C / ADR-005 ABI 规则
+
+- ADR-004：Ctrl+C 默认「有选区复制并清除，否则发 0x03」，与 Windows Terminal 一致；settings.json 里 `"copyOrInterrupt": ""` 退回纯中断。
+- ADR-005：`ITCORE_ABI_VERSION` 只在不兼容变化时加 1（当前 0）；`ABI-02.layout` 用编译期断言锁住公开结构体布局与枚举值，改动它们时测试会失败，提交信息要写明兼容性。
 
 ### 使用时会碰到的行为
 
-- 选了 Direct 又连不上时，不会自动改走 `ssh.exe`。要兼容模式就去掉环境变量再启动（`ssh-direct.md`）。
-- Direct 的 OSC 52 读查询字节能到应用，但应用不应答。远端 nvim/vim 若把粘贴寄托在 OSC 52 读上，会超时。粘贴用终端自己的粘贴（ADR-002 替代做法：Ctrl+Shift+V 或右键）。
+- 选了 Direct 又连不上时，不会自动改走 `ssh.exe`。要兼容模式就在编辑器里把该连接的传输改成「兼容」，或去掉环境变量后重启（`ssh-direct.md`）。
+- OSC 52 读只在 Direct 上能收到，`osc52.allowRead=true` 时每次弹框确认；ConPTY 路径收不到请求，远端 nvim / vim 若靠 OSC 52 读粘贴会超时，请用终端自己的粘贴（Ctrl+Shift+V 或右键）。
 - `ITERM2WIN_OSC52_PING=1` 会把诊断序列写进远端 stdin（ADR-001 R8）。默认关着。
-- 诊断日志含主机名、指纹、agent 路径。
-- `SessionStatus.droppedOutputBytes` 还没进 UI 头文件的对外字段；丢弃字节目前在 `errorText` 里（ADR-001 §9.5）。
+- 诊断日志含主机名、指纹、agent 路径；对外发送用「导出诊断包…」（DS-15）。
+- 输出被丢弃时，`SessionStatus.droppedOutputBytes` 有值，状态栏显示「输出不完整」；`errorText` 里的文字仍保留。
+- 内存：单会话超过 128 MiB 或合计超过 512 MiB 时自动压低回滚历史；合计接近 512 MiB 时拒绝新建窗格（DS-17）。
 - TERM：本地会话继承父进程环境，SSH 取决于 Windows OpenSSH 默认值。代码里没有统一设置 `TERM`。Direct 的 PTY 类型是 `xterm-256color`。DA 身份、TERM、terminfo 三者还没在实机上对齐（REVIEW GAP-10，DS-7）。
 
 ---
 
 ## 6. 接手建议
 
-按这个顺序做。v0.1 的 A/A′ 代码批（除 A5 和 A1 的目录锁清理）已经在 main 上，不要从 D-1 或 GAP-14 重做。
+1. **先做 Windows 实机验证。** 11-04 以来的功能都还没在 Windows 上跑过，`mingw-direct` 也一次没编译。按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 从 P0 做起，结果写进 STATUS，绑定提交号与 Windows 版本（诊断包里有）。
+2. **不要把 Direct 改成默认**，直到上一步的 Direct 相关项通过，并按 TODO §2.1 写了 ADR。
+3. **剩下的开发项**见 TODO §2.2：E1、E8、DS-7 需要实机；E6 余项依赖构建机。F-0..F-5 只写设计（ROADMAP）。
+4. **工作方式**：先在 `docs/DS-*.md` 写设计，再实现；平台无关的逻辑放 `ui/src`（uicfg）、`app/pane_backend/pane_logic.*`、`renderer/layout/` 并单测，Win32 文件只做薄胶水；CI 的 mingw 是唯一的 Windows 编译检查。改完回写 STATUS 顶部与 TODO，提交信息写清行为、测试结果与「未验证」项；动了 itcore 公开头文件要按 ADR-005 写明兼容性。
 
-1. **A5。** 只动 `ui/` 的加载和启动前校验：端口、超时、唯一 ID、引用。越界要报错。这是 REVIEW A 批里还开着的 P1，改动面比 B 小，而且现在会连错端口。
-2. **B1 和 B2，最好先有一份短的 DS-2。** 把「空 connectionId → 本地 cmd，其它都叫 resolveSsh」换成 Local / SSH / Hyper-V 三种启动描述，再注入已有的 `resolveHyperV`，并让保存的 PowerShell 真的拉起。B3 跟 B2 一起做，否则环境字段存不住。B4、B5 接着做：恢复不要自动连接，多行粘贴要确认。
-3. **不要把 Direct 改成默认。** 先做首次信任界面（展示指纹、确认、写入 `known_hosts`）。在那之前，Direct 保持只读预信任 + 环境变量开关。按连接选择传输（DS-2 的另一半，D-5 余项）可以和 B 批的启动描述一起设计，但不是现在就要去掉环境变量。
-4. **实机和证据并行，不必等 B 全部做完。** REVIEW §7 写明：A/A′/B 的最小可测路径一具备就做 C。现在 A/A′ 已经够跑一轮。优先四项：DebugView 确认 ODS 默认安静、`vim -u NONE` 的 `v:termresponse`、备用屏上的波浪下划线、洪峰关闭（ADR-001 §6）。把结果表（提交 SHA、Windows/conhost 版本、结论，不含原始输出）放进仓库，补上 C6。S6 和 CAP-01 第 16–18 轮的表同样补进仓库，原始 hex 继续留在本机。
-5. **F-0..F-5 只写设计。** A/B/C 没收口之前不实现 Profile、Shell Integration、Sixel、tmux -CC。若要记一笔传输能力，写 F-0 的设计笔记即可：现在只有 `supportsOsc52Read`，而且 Direct 和 ConPTY 都是 false。
-6. **改完记得回写两处。** STATUS 顶部加一条，绑定提交号；若某条 REVIEW 勾选已经过时，在 STATUS 或本文加一句「已由 `<hash>` 关闭」，避免下一轮按 11 月 2 日的勾选重做。`ui/` 早期的接口需求列在 [HISTORY-2026-10](HISTORY-2026-10.md)「接口问题」（部分已解决）：退出时调用 `it2app::shutdownPaneBackends(3000)`、Shift+PgUp 由 UI 滚、SSH 上看不到远端前台作业。
-
-构建自检：Linux 上 `ctest`（注意 nlohmann 和 CORE-01/02 向量）；要给 Windows 用的包用 MinGW 交叉编译；要手测 Direct 再开 `IT2W_SSH_DIRECT=ON`，运行时设 `ITERM2WIN_SSH_DIRECT=1`。
+构建自检：Linux 上 `ctest`（注意 nlohmann 和 CORE-01/02 向量）；要给 Windows 用的包用 MinGW 交叉编译；要手测 Direct 用 `mingw-direct` 预设（或 CI 手动触发的 `mingw-direct` 产物），在连接里写 `"transport": "direct"` 或运行时设 `ITERM2WIN_SSH_DIRECT=1`。

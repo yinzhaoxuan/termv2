@@ -58,7 +58,7 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
   兼容模式的 `-F` 快照包含 `HostKeyAlias`，`HostName` 仍是当前地址，并设 `CheckHostIP no`，避免 OpenSSH 再把瞬时 IP 写进 `known_hosts`。OpenSSH 按别名原文查找和保存，不附加端口。
   直连用同一字符串调用 `libssh2_knownhost_check`（别名不做 `[别名]:端口`）。普通 SSH 不设别名，仍按主机名或 `[主机]:端口` 查找。
   已经按 IP 信任过的虚拟机需要在兼容模式里再确认一次，之后换地址不用重做。手动回退地址也用这台 VM 的别名。
-- **首次信任界面仍未做**，并且仍是 Direct 改为默认传输的前置条件：展示指纹、用户确认、再写入 `known_hosts`。本次不改 `ui/`，Direct 继续只读、不 accept-new。新虚拟机要先用兼容模式确认一次指纹。
+- **首次信任**（DS-12）：未知主机（含新的 Hyper-V 虚拟机）在窗格上给出「核对指纹…」，用户确认后写入 `known_hosts` 并重连；不 accept-new，密钥变化不提供信任按钮。是否把 Direct 改为默认传输另行决定（TODO §2.1）。
 
 ## 能力与限制
 
