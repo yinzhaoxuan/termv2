@@ -367,7 +367,7 @@ C 批全部仍开放。C1 有第 16–18 轮的文字记录（ADR-002 / STATUS�
 - [~] D2 历史搜索：快捷键已定义，需实现搜索、跳转、软换行映射、取消和限额（GAP-07）——纯文本搜索已有（SRCH-01..03）；淘汰后高亮回归 `2fcaac3`（NEW-03）。正则留 v0.2，大历史单步耗时待实测。
 - [x] D3 配色方案：传入 `PaneBackendConfig.colors`，支持导入 .itermcolors，让 appearanceProfileId 生效（GAP-07、§3.2）——DS-9：settings.json `appearanceProfiles`、`.itermcolors` 导入到默认 Profile、渲染改读核心生效色。Profile 编辑界面等 D1。
 - [x] D4 回滚行数和内存可配置；统一后端与核心的默认值（GAP-09）——DS-9：Profile 的 `scrollbackLines` / `memoryLimitMiB`，默认统一为 10000 行 / 64 MiB。会话账本仍是 E3。
-- [~] D5 快捷键展示（编辑放 v0.2+）；实现搜索之前，Ctrl+Shift+F 不分配默认值（§6）——Ctrl+Shift+F 已接搜索、不再吞键；展示仍无。
+- [x] D5 快捷键展示（编辑放 v0.2+）；实现搜索之前，Ctrl+Shift+F 不分配默认值（§6）——Ctrl+Shift+F 已接搜索、不再吞键；DS-16：系统菜单「快捷键…」只读列表（状态、冲突、固定按键）。
 - [x] D6 Ctrl+C 默认行为写入设计决策或恢复为设计默认（GAP-07）——ADR-004：保留 copyOrInterrupt，`""` 退回纯中断；同时修正空快捷键导致 settings.json 保存失败。
 - [~] D7 OSC 52 读/写开关（默认关闭）——settings.json 隐藏字段 `osc52`；Direct 的读能力已关（`43850d0`）；无界面、无逐次读确认（NEW-04）。
 - [x] D8 元数据滚动日志（5 MiB × 3）、诊断包导出（GAP-13）——滚动日志与字段 `48e0a06`；DS-15：系统菜单「导出诊断包…」，自动脱敏 + 预览 + 原子保存，含配置时提交号与 Windows 版本。Windows 实机待验。

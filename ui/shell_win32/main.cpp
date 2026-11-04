@@ -33,6 +33,7 @@
 
 #include "connection_dialog.h"
 #include "diag_dialog.h"
+#include "keybinding_dialog.h"
 #include "uicfg/diag_bundle.h"
 #include "resource.h"
 #include "win32_text.h"
@@ -80,6 +81,7 @@ constexpr UINT kSysCmdFont = 0x0100;  // 系统菜单「字体…」（低 4 位
 // 系统菜单「导入 iTerm2 配色…」「恢复默认配色」，低 4 位须为 0。
 constexpr UINT kSysCmdImportColors = 0x0110, kSysCmdResetColors = 0x0120;
 constexpr UINT kSysCmdExportDiagnostics = 0x0130;
+constexpr UINT kSysCmdKeybindings = 0x0140;
 constexpr UINT kIdFontPreset = 0x1000, kIdFontOther = 0x10FF;  // 字体弹出菜单项
 constexpr UINT_PTR kIdSearch = 101, kIdTree = 102, kIdTabs = 103, kIdStatus = 104, kIdReconnect = 200;
 constexpr UINT_PTR kIdHistSearch = 105, kIdHistStatus = 106;  // 历史搜索条（searchHistory）
@@ -1486,12 +1488,17 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         AppendMenuW(sys, MF_STRING, kSysCmdFont, L"字体…");
         AppendMenuW(sys, MF_STRING, kSysCmdImportColors, L"导入 iTerm2 配色…");
         AppendMenuW(sys, MF_STRING, kSysCmdResetColors, L"恢复默认配色");
+        AppendMenuW(sys, MF_STRING, kSysCmdKeybindings, L"快捷键…");
         AppendMenuW(sys, MF_STRING, kSysCmdExportDiagnostics, L"导出诊断包…");
       }
       for (HWND c : {g->search, g->tree, g->tabs, g->statusBar, g->histEdit, g->histStatus}) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
       return 0;
     }
     case WM_SYSCOMMAND:
+      if ((w & 0xFFF0) == kSysCmdKeybindings) {
+        runKeybindingDialog(g->main, g->inst, keybindingRows(g->settings), fixedKeys(), g->configDir);
+        return 0;
+      }
       if ((w & 0xFFF0) == kSysCmdExportDiagnostics) { exportDiagnostics(); return 0; }
       if ((w & 0xFFF0) == kSysCmdImportColors) { importColors(); return 0; }
       if ((w & 0xFFF0) == kSysCmdResetColors) { resetColors(); return 0; }
@@ -1722,7 +1729,7 @@ uishell::PaneBackendFactory makeFactory() {
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);  // manifest 之外的兜底
-  INITCOMMONCONTROLSEX icc{sizeof icc, ICC_TAB_CLASSES | ICC_STANDARD_CLASSES | ICC_TREEVIEW_CLASSES | ICC_BAR_CLASSES};
+  INITCOMMONCONTROLSEX icc{sizeof icc, ICC_TAB_CLASSES | ICC_STANDARD_CLASSES | ICC_TREEVIEW_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES};
   InitCommonControlsEx(&icc);
   App app; g = &app; app.inst = inst;
 

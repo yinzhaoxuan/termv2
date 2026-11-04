@@ -1,11 +1,11 @@
 # termv2 剩余工作
 
-更新：2026-11-04，DS-15（D8）之后。
+更新：2026-11-04，DS-16（D5）之后。
 读者：接手开发的人或 agent。先读 [HANDOFF.md](HANDOFF.md)（目录、构建、架构），再读本文决定做什么。逐日进度在 [STATUS.md](STATUS.md)，与 iTerm2 的差距清单在根目录 [REVIEW.md](../REVIEW.md) §8（已回写到 2026-11-04）。
 
 ## 0. 先知道这些
 
-- **构建与测试**：`cmake --preset dev && cmake --build --preset dev -j8 && ctest --preset dev -j8`。macOS 和 Linux 上能跑全部可移植测试（146 项）；`asan`、`tsan` 预设同理。见根 [README](../README.md)。
+- **构建与测试**：`cmake --preset dev && cmake --build --preset dev -j8 && ctest --preset dev -j8`。macOS 和 Linux 上能跑全部可移植测试（154 项）；`asan`、`tsan` 预设同理。见根 [README](../README.md)。
 - **Windows 代码在本地编不了**（`ui/shell_win32/main.cpp`、`app/pane_backend/win32_pane_backend.cpp`、`platform/windows/{conpty,ssh,ssh_direct,hyperv}`）。开发机没有 MinGW。靠 GitHub Actions 的 `mingw` 任务做编译检查：每次推送到 main 自动跑。
 - **Direct SSH 代码**只在 `IT2W_SSH_DIRECT=ON` 时编译。CI 的 `mingw-direct` 任务**只能手动触发**（Actions → CI → Run workflow），改了 `platform/windows/ssh_direct/` 就要手动跑一次。
 - **写法约定**：平台无关的决策逻辑放在 `ui/src`（uicfg）、`app/pane_backend/pane_logic.*` 或 `platform/windows/common/`，并加单测；Win32 文件只做薄胶水。设计先写进 `docs/DS-*.md`，再写代码。提交信息用 `type(scope): 中文说明`，正文写清行为、测试结果和「未验证」项。改完回写 STATUS 顶部。
@@ -16,6 +16,7 @@
 1. **手动触发一次 CI 的 `mingw-direct`**，验证 DS-12、DS-13 的 Direct 构建能编译链接。
 2. **Windows 实机手测**。代码都在 main 上，只缺实机记录。结果写进 STATUS，并绑定提交号和 Windows / conhost 版本（REVIEW C6）：
    - `986cdf7` 的清单：STATUS 2026-11-04「A5、A1 余量、DS-2、B1–B5」一节末尾（PowerShell 本地连接、Hyper-V 各分支、恢复不自动连接、多行粘贴确认、启动清理快照）。
+   - DS-16 的清单：[DS-16-快捷键展示.md](DS-16-快捷键展示.md) §4。
    - DS-15 的清单：[DS-15-诊断包导出.md](DS-15-诊断包导出.md) §7。实机手测时可直接用「导出诊断包…」附上提交号与 Windows 版本（REVIEW C6）。
    - DS-14 的清单：[DS-14-连接编辑器.md](DS-14-连接编辑器.md) §7（含 GAP-07 验收路径）。
    - DS-13 的清单：[DS-13-按连接选择传输.md](DS-13-按连接选择传输.md) §6。
@@ -35,7 +36,6 @@
 
 ### 2.2 小项
 
-- **D5**：快捷键展示。
 - **NEW-04 / DS-10**：OSC 52 读的逐次确认界面。做完之前 ConPTY 与 Direct 都保持 `supportsOsc52Read=false`。
 - **`droppedOutputBytes`**：丢弃字节目前只在 errorText 里，UI 头文件没有这个字段（NEW-05 余项，ADR-001 §9.5）。
 
@@ -67,3 +67,4 @@
 | `1fdee54` | DS-14 连接编辑器（D1） | [DS-14-连接编辑器.md](DS-14-连接编辑器.md) |
 | `0b72f82` | ADR-004 Ctrl+C 默认（D6）+ 空快捷键保存修复 | [ADR-004-Ctrl+C默认行为.md](ADR-004-Ctrl+C默认行为.md) |
 | `96f8abd` | DS-15 诊断包导出与脱敏（D8） | [DS-15-诊断包导出.md](DS-15-诊断包导出.md) |
+| （待提交） | DS-16 快捷键展示（D5） | [DS-16-快捷键展示.md](DS-16-快捷键展示.md) |

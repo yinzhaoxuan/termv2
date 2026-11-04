@@ -2,6 +2,15 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
+## 2026-11-04：DS-16 快捷键展示（D5）
+
+设计：[DS-16-快捷键展示.md](DS-16-快捷键展示.md)。
+
+- 系统菜单「快捷键…」：只读列表，26 个可配置动作（中文名 / 当前快捷键 / 状态：默认、已修改（附默认值）、未绑定、冲突（指出对方）、无法识别、未知动作），下方列出会话树 F2 / Delete / 菜单键等固定按键；「打开配置目录」按钮。编辑仍放 v0.2+。
+- 模型 `uicfg::keybindingRows` / `fixedKeys` 可移植并单测；冲突规则与 `validateSettings` 一致。ListView 的样式在代码里设置，`.rc` 保持只引 `<windows.h>`。
+- macOS ctest 154/154（新增 uicfg_keybinding_* 8 项）。
+- **未验证**：`keybinding_dialog.cpp`、`main.cpp`、`.rc` 等 CI `mingw`；Windows 手测见 DS-16 §4。
+
 ## 2026-11-04：DS-15 诊断包导出与脱敏（D8）
 
 设计：[DS-15-诊断包导出.md](DS-15-诊断包导出.md)。基线 `0b72f82`。

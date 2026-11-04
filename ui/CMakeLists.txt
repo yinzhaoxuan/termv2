@@ -9,7 +9,7 @@ set(UICFG_NLOHMANN_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohm
 if(UICFG_USE_SYSTEM_NLOHMANN)
   find_package(nlohmann_json 3.11 REQUIRED)
 endif()
-add_library(uicfg src/diag_bundle.cpp src/validate.cpp src/store.cpp src/connection_form.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/appearance.cpp src/itermcolors.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
+add_library(uicfg src/diag_bundle.cpp src/validate.cpp src/store.cpp src/connection_form.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/keybinding_view.cpp src/appearance.cpp src/itermcolors.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
 target_include_directories(uicfg PUBLIC include)
 target_include_directories(uicfg PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../app/common)
 if(UICFG_USE_SYSTEM_NLOHMANN)
@@ -62,6 +62,13 @@ foreach(mode known fingerprint guid ipv4 ipv6 pipe home context logs summary bun
   add_test(NAME uicfg_diag_${mode} COMMAND diag_bundle_tests ${mode})
 endforeach()
 
+# DS-16：快捷键展示的状态、顺序与名称覆盖。
+add_executable(keybinding_view_tests tests/keybinding_view_tests.cpp)
+target_link_libraries(keybinding_view_tests PRIVATE uicfg)
+foreach(mode defaults changed unbound invalid conflicts unknown coverage fixed)
+  add_test(NAME uicfg_keybinding_${mode} COMMAND keybinding_view_tests ${mode})
+endforeach()
+
 # T08 Win32 主外壳（仅 WIN32 / mingw）。在仓库顶层构建时链接 it2w_pane_backend（目标在 app/pane_backend 定义，
 # 生成阶段解析，无需顶层改动）；单独 cmake -S ui 时用占位后端，只验证外壳本身。
 if(WIN32)
@@ -71,7 +78,7 @@ if(WIN32)
     set(IT2W_BUILD_COMMIT "unknown")
   endif()
   enable_language(RC)
-  add_executable(it2w_shell WIN32 shell_win32/main.cpp shell_win32/connection_dialog.cpp shell_win32/diag_dialog.cpp shell_win32/it2w_shell.rc)
+  add_executable(it2w_shell WIN32 shell_win32/main.cpp shell_win32/connection_dialog.cpp shell_win32/diag_dialog.cpp shell_win32/keybinding_dialog.cpp shell_win32/it2w_shell.rc)
   target_compile_definitions(it2w_shell PRIVATE UNICODE _UNICODE NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
   target_compile_definitions(it2w_shell PRIVATE IT2W_BUILD_COMMIT="${IT2W_BUILD_COMMIT}")
   if(IT2W_SSH_DIRECT AND NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
