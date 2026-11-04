@@ -66,7 +66,7 @@ cmake -S . -B build-mingw -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake
 cmake --build build-mingw -j
 ```
 
-产物包括 `it2w_shell.exe`。实验窗是 `win32_term`，默认拉起 `C:\Windows\System32\cmd.exe`（STATUS「构建提示」）。交叉编译配置阶段会跳过多数 `add_test`（`if(NOT CMAKE_CROSSCOMPILING)`），所以 MinGW 树不是跑 Linux ctest 的地方。
+产物包括 `it2w_shell.exe`。实验窗是 `win32_term`，默认拉起 `C:\Windows\System32\cmd.exe`（[HISTORY-2026-10](HISTORY-2026-10.md)「构建提示」）。交叉编译配置阶段会跳过多数 `add_test`（`if(NOT CMAKE_CROSSCOMPILING)`），所以 MinGW 树不是跑 Linux ctest 的地方。
 
 ### Direct SSH 开关
 
@@ -193,7 +193,7 @@ S6 手测（STATUS 2026-11-02，证据在本机 QA 目录，**未入仓**）：
 - **D8 的滚动日志**随 D-2 做了落盘和 5 MiB × 3。诊断包导出、脱敏工具没有。
 - **搜索（REVIEW D2）**在更早的提交里就有纯文本搜索（SRCH-01..03）。正则留到 v0.2。Windows 上的大历史性能没测（ROADMAP §2.6）。
 
-更早的 T05–T09（屏幕、编码、ConPTY、D2D、SSH 快照、PaneBackend、Hyper-V 后台）在 STATUS「模块状态」里，这里不逐条重抄。Hyper-V **后台**在 `platform/windows/hyperv/`，主界面没有注入，见第 4 节 B1。
+更早的 T05–T09（屏幕、编码、ConPTY、D2D、SSH 快照、PaneBackend、Hyper-V 后台）在 [HISTORY-2026-10](HISTORY-2026-10.md)「模块状态」里（10 月快照，部分已过时），这里不逐条重抄。Hyper-V **后台**在 `platform/windows/hyperv/`，主界面没有注入，见第 4 节 B1。
 
 ---
 
@@ -287,7 +287,7 @@ B 批退出标准（REVIEW §7）：从主程序走通本地 PowerShell、手动
 | 波浪下划线等样式 | ROADMAP §2.1（状态 `[~]`）；STATUS GAP-14 | D2D 按样式位画双线、波浪、点线、虚线、上划线。Linux CORE-22 过了。实机还没画过波浪线。 |
 | 洪峰 | ADR-001 §6 落地顺序第 5 步、§7 R1/R2、§9 第 2 条；增补二 §2「NEW-01 待 Windows 洪峰实测」 | PERF-01：洪峰中 MessageBox 约 0.25 s 弹出（验收目标，第 15 轮测，不作为已测项）。`cat 50MB; exit` 时打开链接确认框，尾部完整且终态 Exited。`yes` 洪峰中 Ctrl+Shift+W 确认关闭 100 次，不崩溃。结果写进 STATUS。 |
 | pane-diag 的 Windows 路径 | STATUS D-2 | PANE-24 在 Linux 覆盖了滚动和字段。`%APPDATA%\it2w\logs` 没在写文档的环境里跑过。S6 手测证明当时有 `ssh.direct.*` 落盘，那是滚动字段改版之前的基线 `fde8e99`。 |
-| 其余未实机清单 | STATUS「未实机项」「T08 未实机项」「T09」 | ConPTY 全路径、IME、DPI、设备丢失、鼠标命中、窗体粘贴、Job 进程计数、关闭顺序、VM-01。Linux ctest 和 MinGW 交叉编译不能代替这些。 |
+| 其余未实机清单 | [HISTORY-2026-10](HISTORY-2026-10.md)「未实机项」「T08 未实机项」「T09」 | ConPTY 全路径、IME、DPI、设备丢失、鼠标命中、窗体粘贴、Job 进程计数、关闭顺序、VM-01。Linux ctest 和 MinGW 交叉编译不能代替这些。 |
 
 第 15 轮计划写在 STATUS 里的路径是 `/workspace/qa/r15-plan-draft.md`，不在仓库中。
 
@@ -369,6 +369,6 @@ REVIEW §8.F1–F13 是同一批能力的另一份清单（Shell Integration、�
 3. **不要把 Direct 改成默认。** 先做首次信任界面（展示指纹、确认、写入 `known_hosts`）。在那之前，Direct 保持只读预信任 + 环境变量开关。按连接选择传输（DS-2 的另一半，D-5 余项）可以和 B 批的启动描述一起设计，但不是现在就要去掉环境变量。
 4. **实机和证据并行，不必等 B 全部做完。** REVIEW §7 写明：A/A′/B 的最小可测路径一具备就做 C。现在 A/A′ 已经够跑一轮。优先四项：DebugView 确认 ODS 默认安静、`vim -u NONE` 的 `v:termresponse`、备用屏上的波浪下划线、洪峰关闭（ADR-001 §6）。把结果表（提交 SHA、Windows/conhost 版本、结论，不含原始输出）放进仓库，补上 C6。S6 和 CAP-01 第 16–18 轮的表同样补进仓库，原始 hex 继续留在本机。
 5. **F-0..F-5 只写设计。** A/B/C 没收口之前不实现 Profile、Shell Integration、Sixel、tmux -CC。若要记一笔传输能力，写 F-0 的设计笔记即可：现在只有 `supportsOsc52Read`，而且 Direct 和 ConPTY 都是 false。
-6. **改完记得回写两处。** STATUS 顶部加一条，绑定提交号；若某条 REVIEW 勾选已经过时，在 STATUS 或本文加一句「已由 `<hash>` 关闭」，避免下一轮按 11 月 2 日的勾选重做。`ui/` 的接口需求仍列在 STATUS「接口问题」：退出时调用 `it2app::shutdownPaneBackends(3000)`、Shift+PgUp 由 UI 滚、SSH 上看不到远端前台作业。
+6. **改完记得回写两处。** STATUS 顶部加一条，绑定提交号；若某条 REVIEW 勾选已经过时，在 STATUS 或本文加一句「已由 `<hash>` 关闭」，避免下一轮按 11 月 2 日的勾选重做。`ui/` 早期的接口需求列在 [HISTORY-2026-10](HISTORY-2026-10.md)「接口问题」（部分已解决）：退出时调用 `it2app::shutdownPaneBackends(3000)`、Shift+PgUp 由 UI 滚、SSH 上看不到远端前台作业。
 
 构建自检：Linux 上 `ctest`（注意 nlohmann 和 CORE-01/02 向量）；要给 Windows 用的包用 MinGW 交叉编译；要手测 Direct 再开 `IT2W_SSH_DIRECT=ON`，运行时设 `ITERM2WIN_SSH_DIRECT=1`。

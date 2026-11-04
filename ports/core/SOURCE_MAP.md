@@ -1,6 +1,8 @@
 # ports/core 上游来源对照（SOURCE_MAP）
 
-上游：https://github.com/gnachman/iTerm2 固定提交 `f29420ae4d3e0f986ee24ea286885d32af58175a`（本地 `/workspace/iterm2-upstream`）。
+上游：https://github.com/gnachman/iTerm2 固定提交 `f29420ae4d3e0f986ee24ea286885d32af58175a`。
+
+本文描述**当前代码**与上游的对应关系；与代码不符时以代码为准并修正本文。各批次的开发过程见 `docs/HISTORY-2026-10.md` 与 `docs/STATUS.md`。
 许可：iTerm2 为 GNU GPL v2；派生文件保留来源声明并按 GPL v2 发布（`SPDX-License-Identifier: GPL-2.0-only`）。
 
 ## T04：CSI / Parser
@@ -41,13 +43,13 @@
 | `src/screen.h` `Scrollback` | `sources/LineBuffer/LineBuffer.h` | 未包装逻辑行 + 按宽重排 | 双重限额（行数与字节，设计 15.4：默认 10000 / 64MiB）；重排合并连续 soft 逻辑行；无 LineBlock 分块/搜索索引（P1 子集）。 |
 | `src/screen.cpp` `apply_csi_defaults` | `sources/VT100/VT100CSIParser.m` `SetCSITypeAndDefaultParameters` | CUP/HVP→1,1；ED/EL/DSR/DA/SGR→0；CU*/ICH/DCH/IL/DL/…→1 | 仅实现 P1 网格/模式/查询相关命令；返回命令标签供应用层分派；其余 CSI 仍由解析器消费、无副作用。 |
 | `src/screen.cpp` `Screen::do_sgr` / `set_mode` | `sources/VT100/VT100Terminal.m` `executeSGR` / DECSET/DECRST | 粗体/斜体/下划线/反色、16/256/真彩（分号与冒号子参数，含色彩空间与 58/59）、下划线样式、上划线、DECAWM/DECOM/IRM/DECTCEM、47/1047/1048/1049、2004 | 无 SGR 栈、无图片/鼠标扩展。DA1/DA2/DA3/XTVERSION 见 `docs/identity-14.3.md`（VT220，`?62;22c` / `>1;0;0c`）。上划线 53/55 不在该提交的 `executeSGR` 里，按 ECMA-48 补。 |
-| `src/screen.cpp` `cell_width` | `sources/ScreenChar/ScreenChar.m` 宽字符逻辑 | 东亚宽≈2、组合/ZWJ=0 | **差异**：未移植完整 UCD/emoji ZWJ 序列宽度；默认策略固定为精简区间表（设计 14.2）。 |
-| `src/core.cpp` 快照 ABI | 设计 14.1 / 14.2 `Snapshot` | `acquire_snapshot` / grapheme / cursor | 快照自持字素池拷贝；`first_row` 相对视口顶（负=历史）；销毁 core 后快照仍可读至 release。 |
+| `src/ucd_width.cpp`、`src/ucd_width_table.inc` | `sources/ScreenChar/ScreenChar.m`、`iTermCharacterWidth.c`、`StringToScreenChars` | EAW W/F、组合符、Default_Ignorable、Extended_Pictographic、emoji 修饰、VS16（仅主屏）、RI 对、ZWJ 序列 | 表由 `tools/gen_width_table.py` 从 UCD 16.0.0 生成（可 `--ucd-dir` 离线）。Unicode 版本固定，不可选（ROADMAP F-1）。 |
+| `src/core.cpp` 快照 ABI | 设计 14.1 / 14.2 `Snapshot` | `acquire_snapshot` / grapheme / cursor | 快照经 `PoolRef{store, limit, epoch}` 共享字素池（分块追加，不拷贝；清池换新 store 并推进 epoch）；`first_row` 相对视口顶（负=历史）；销毁 core 后快照仍可读至 release。 |
 
 ### T05 已知差异（相对上游完整 VT100Screen）
-- 未移植：标记/提示符状态机、DVR、完整 bidirectional、OSC 8 写入超链接池、六进制/图像、鼠标报告编码、bracketed paste 的 encode 路径（`encode_*` 仍 -100）。
+- 未移植：标记/提示符状态机（OSC 133）、DVR、完整 bidirectional、Sixel / 图像。（OSC 8 超链接、鼠标报告编码、bracketed paste 编码已在后续批次实现，见下文。）
 - 滚动历史：按显示行驱逐并标记 hard/soft；软换行合并在重排阶段完成，不保留上游 LineBlock 元数据。
-- 宽度重排在快照读取时按当前列宽计算，不维护持久 wrapped 索引缓存。
+- 宽度重排在快照读取时按当前列宽计算；历史显示行数按 hard 边界分组增量计数（NEW-02，`split_and_count_groups` 等），不维护完整的 wrapped 索引。
 - `finish_input` 对残缺 UTF-8 显式写入 U+FFFD（解析器仅计 `Incomplete`）。
 
 ## T05 评审追加 + T06 encode / 渲染原型（同提交）

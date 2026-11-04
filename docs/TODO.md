@@ -1,7 +1,7 @@
 # termv2 剩余工作
 
-更新：2026-11-04，NEW-05 余项之后。
-读者：接手开发的人或 agent。先读 [HANDOFF.md](HANDOFF.md)（目录、构建、架构），再读本文决定做什么。逐日进度在 [STATUS.md](STATUS.md)，与 iTerm2 的差距清单在根目录 [REVIEW.md](../REVIEW.md) §8（已回写到 2026-11-04）。
+更新：2026-11-04，E7 之后。
+读者：接手开发的人或 agent。先读 [HANDOFF.md](HANDOFF.md)（目录、构建、架构），再读本文决定做什么。现状与逐日进度在 [STATUS.md](STATUS.md)，与 iTerm2 的差距清单在根目录 [REVIEW.md](../REVIEW.md) §8（已回写到 2026-11-04）。
 
 ## 0. 先知道这些
 
@@ -37,7 +37,6 @@
 
 ### 2.2 交付与资源
 
-- **E7**：STATUS 后半段与 `ports/core/SOURCE_MAP.md` 混着 10 月的陈旧条目，整理成单一现状，历史单独存放。
 - **E6**：根 LICENSE、SPDX、上游文件哈希清单、依赖审计（GAP-12）。
 - **E1**：会话执行器，或基于实测把 UI 线程模型写成 ADR（ADR-001 备选 A2）。
 - **E3**：会话与应用两级内存账本。
@@ -66,3 +65,4 @@
 | `65f5d0d` | DS-16 快捷键展示（D5） | [DS-16-快捷键展示.md](DS-16-快捷键展示.md) |
 | `1356bb6` | DS-10 OSC 52 读逐次确认（NEW-04） | [DS-10-OSC52读确认.md](DS-10-OSC52读确认.md) |
 | `f36ac44` | NEW-05 余项：`SessionStatus.droppedOutputBytes` 与状态栏提示 | ADR-001 §2.8 |
+| （待提交） | E7：STATUS 拆出「当前状态」，10 月旧快照移到 HISTORY-2026-10；SOURCE_MAP 改正过时说法 | [HISTORY-2026-10.md](HISTORY-2026-10.md) |
