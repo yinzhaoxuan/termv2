@@ -23,6 +23,7 @@ enum class SearchHit : uint8_t { None = 0, Other = 1, Current = 2 };
 struct SearchColors {
   uint32_t other_fg = 0x000000, other_bg = 0xFFFF00;
   uint32_t current_fg = 0x000000, current_bg = 0xFF9632;
+  bool operator==(const SearchColors&) const = default;
 };
 inline constexpr SearchColors kDefaultSearchColors{};
 

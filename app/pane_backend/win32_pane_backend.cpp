@@ -221,6 +221,7 @@ public:
     Win32PaneBackend(std::string connectionId, uishell::PaneEvents ev, std::shared_ptr<const PaneBackendConfig> cfg,
                      std::optional<std::wstring> localCommand = std::nullopt)
         : connId_(std::move(connectionId)), ev_(std::move(ev)), cfg_(std::move(cfg)), localCommand_(std::move(localCommand)) {
+        appearance_ = cfg_->resolveAppearance ? cfg_->resolveAppearance(connId_) : coreDefaultAppearance();
         status_ = {uishell::SessionState::Starting, 0, false, {}, {}};
     }
     // 析构：先断开 PaneEvents，再 teardown（close 队列 → 之后的投递一律丢弃）
@@ -243,6 +244,7 @@ public:
     void scrollViewport(int lines) override;
     void scrollToBottom() override;
     void setFont(std::string_view family, float sizePt) override;
+    void setColors(const uishell::PaneColors& colors) override;
     uishell::CellSize cellSize() const override;
     uishell::SearchResult findInScrollback(std::string_view needleUtf8, const uishell::SearchOptions &opt, bool backward) override;
     void clearSearch() override;
@@ -315,6 +317,7 @@ private:
     std::string connId_;
     uishell::PaneEvents ev_;
     std::shared_ptr<const PaneBackendConfig> cfg_;
+    uishell::PaneAppearance appearance_{};  // 资源上限构造后固定，颜色可实时更新
     PumpDriver pumpDriver_;
     TerminalStatus terminal_;
     std::shared_ptr<char> life_ = std::make_shared<char>(); // 每次 reconnect 换令牌
@@ -487,15 +490,16 @@ bool Win32PaneBackend::startSession() {
     opt.struct_size = sizeof(opt);
     opt.columns = resize_.dims().cols;
     opt.rows = resize_.dims().rows;
-    opt.scrollback_lines = cfg_->scrollbackLines;
-    opt.memory_limit_bytes = cfg_->memoryLimitBytes;
+    opt.scrollback_lines = appearance_.scrollbackLines;
+    opt.memory_limit_bytes = appearance_.memoryLimitBytes;
     if (itcore_create(&opt, &core_) != 0 || !core_) {
         core_ = nullptr; fail("itcore_create 失败"); return false;
     }
     itcore_resize(core_, resize_.dims().cols, resize_.dims().rows, resize_.generation());
     // 首次 feed 前：GridMetrics 单元格像素尺寸（CSI 14/16 t）与配置色（OSC 10/11/12/4 查询与 104/110–112 恢复）
     pushCellPixelSize();
-    if (cfg_->colors) itcore_set_colors(core_, &*cfg_->colors);
+    const auto colors = toCoreColors(appearance_.colors);
+    itcore_set_colors(core_, &colors);
     applyOsc52(core_, cfg_->osc52);
     if (applyWordChars(core_, cfg_->wordChars) != 0) std::fprintf(stderr, "[pane] wordChars 非法，使用默认\n");
     renderer_->set_expected_generation(resize_.generation());
@@ -897,6 +901,15 @@ void Win32PaneBackend::applyBounds(const uishell::PixelRect &rc, float dpi) {
 }
 
 void Win32PaneBackend::setBounds(const uishell::PixelRect &rc, float dpi) { applyBounds(rc, dpi); }
+
+// UI 线程：热切换配置色，重连沿用；资源上限保持构造时的值。
+void Win32PaneBackend::setColors(const uishell::PaneColors& colors) {
+    appearance_.colors = colors;
+    if (!core_) return;
+    const auto cfg = toCoreColors(colors);
+    itcore_set_colors(core_, &cfg);
+    present(true);
+}
 
 // 异步：只投递到 UI 队列，下一次 drain 时 applyFont（不在调用栈里重建 DWrite / 改网格）
 void Win32PaneBackend::setFont(std::string_view family, float sizePt) {

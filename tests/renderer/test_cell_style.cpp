@@ -8,6 +8,17 @@
 using namespace itren;
 int main() {
   Theme t;
+  // 快照映射包含完整 256 色，查表不能重新生成高位色。
+  itcore_colors colors{};
+  colors.foreground = 0x123456; colors.background = 0x654321; colors.cursor = 0xaabbcc;
+  for (size_t i = 0; i < 256; ++i) colors.palette[i] = uint32_t(0x100000 + i);
+  const SearchColors search{1, 2, 3, 4};
+  const auto mapped = themeFromColors(colors, search);
+  assert(mapped.fg == colors.foreground && mapped.bg == colors.background && mapped.cursor == colors.cursor);
+  assert(mapped.search == search && mapped == themeFromColors(colors, search) && mapped != t);
+  for (size_t i = 0; i < 256; ++i) assert(palette256(mapped, uint8_t(i)) == colors.palette[i]);
+  auto different = mapped; ++different.cursor; assert(different != mapped);
+  different = mapped; ++different.palette[200]; assert(different != mapped);
   assert(palette256(t, 1) == 0xCD3131);
   assert(palette256(t, 16) == 0x000000 && palette256(t, 231) == 0xFFFFFF);
   assert(palette256(t, 196) == 0xFF0000);

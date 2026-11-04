@@ -8,6 +8,15 @@ using namespace itren;
 static SearchRange R(int64_t row, uint16_t a, uint16_t b, bool cur = false) { SearchRange r; r.row = row; r.start_col = a; r.end_col = b; r.is_current = cur; return r; }
 
 int main() {
+  // 快照换主题时保留搜索层的独立配色。
+  itcore_colors colors{};
+  colors.foreground = 0x112233; colors.background = 0x445566;
+  const SearchColors search{0x010203, 0x040506, 0x070809, 0x0a0b0c};
+  const auto mapped = themeFromColors(colors, search);
+  const itcore_cell blank{};
+  assert(resolve_cell(mapped, blank, false, SearchHit::Other).bg == search.other_bg);
+  assert(resolve_cell(mapped, blank, false, SearchHit::Current).fg == search.current_fg);
+  assert(resolve_cell(mapped, blank).bg == colors.background);
   // 1. 建表：视口首行绝对行号 100，5 行 10 列；无序、重叠、越界、空区间
   SearchHighlight h;
   std::vector<SearchRange> in = {

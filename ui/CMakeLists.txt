@@ -9,7 +9,7 @@ set(UICFG_NLOHMANN_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohm
 if(UICFG_USE_SYSTEM_NLOHMANN)
   find_package(nlohmann_json 3.11 REQUIRED)
 endif()
-add_library(uicfg src/validate.cpp src/store.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
+add_library(uicfg src/validate.cpp src/store.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/appearance.cpp src/itermcolors.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
 target_include_directories(uicfg PUBLIC include)
 target_include_directories(uicfg PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../app/common)
 if(UICFG_USE_SYSTEM_NLOHMANN)
@@ -25,6 +25,20 @@ foreach(t validate_tests store_tests launch_tests compose_environment_tests snap
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} uicfg)
   add_test(NAME uicfg_${t} COMMAND ${t})
+endforeach()
+
+# DS-9：可移植外观规则与手写 iTerm2 XML 样本。
+add_executable(appearance_tests tests/appearance_tests.cpp)
+target_link_libraries(appearance_tests PRIVATE uicfg)
+target_include_directories(appearance_tests PRIVATE ../renderer/layout ../ports/core/include)
+foreach(mode settings resolution mutation)
+  add_test(NAME uicfg_appearance_${mode} COMMAND appearance_tests ${mode})
+endforeach()
+add_executable(itermcolors_tests tests/itermcolors_tests.cpp)
+target_link_libraries(itermcolors_tests PRIVATE uicfg)
+target_compile_definitions(itermcolors_tests PRIVATE ITERM_COLORS_SAMPLE="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/handmade.itermcolors")
+foreach(mode sample parsing prompt)
+  add_test(NAME uicfg_itermcolors_${mode} COMMAND itermcolors_tests ${mode})
 endforeach()
 
 # T08 Win32 主外壳（仅 WIN32 / mingw）。在仓库顶层构建时链接 it2w_pane_backend（目标在 app/pane_backend 定义，

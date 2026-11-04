@@ -12,22 +12,36 @@
 namespace itren {
 
 struct Theme {
-  uint32_t fg = 0xD4D4D4, bg = 0x1E1E1E;   // 0xRRGGBB
-  std::array<uint32_t, 16> ansi = {0x000000, 0xCD3131, 0x0DBC79, 0xE5E510, 0x2472C8, 0xBC3FBC, 0x11A8CD, 0xE5E5E5,
-                                   0x666666, 0xF14C4C, 0x23D18B, 0xF5F543, 0x3B8EEA, 0xD670D6, 0x29B8DB, 0xFFFFFF};
-  SearchColors search{};  // 搜索高亮配色（默认上游风格黄底黑字 / 当前命中橙底黑字）
+  // 无快照时的兜底副本；来源 uicfg::builtinAppearance（ui/src/appearance.cpp）。
+  // ui/tests/appearance_tests.cpp 对照两者，防止默认外观漂移。
+  uint32_t fg = 0xD4D4D4, bg = 0x1E1E1E, cursor = 0x3399FF;
+  std::array<uint32_t, 256> palette = [] {
+    std::array<uint32_t, 256> p{0x000000, 0xCD3131, 0x0DBC79, 0xE5E510, 0x2472C8, 0xBC3FBC, 0x11A8CD, 0xE5E5E5,
+                                0x666666, 0xF14C4C, 0x23D18B, 0xF5F543, 0x3B8EEA, 0xD670D6, 0x29B8DB, 0xFFFFFF};
+    constexpr uint32_t levels[]{0, 95, 135, 175, 215, 255};
+    for (size_t i = 16; i < 232; ++i) {
+      const size_t n = i - 16;
+      p[i] = (levels[n / 36] << 16) | (levels[(n / 6) % 6] << 8) | levels[n % 6];
+    }
+    for (size_t i = 232; i < p.size(); ++i) {
+      const auto v = uint32_t(8 + (i - 232) * 10);
+      p[i] = (v << 16) | (v << 8) | v;
+    }
+    return p;
+  }();
+  SearchColors search{};
+  bool operator==(const Theme&) const = default;
 };
 
-// 256 色：0-15 主题，16-231 为 6x6x6 立方，232-255 为灰阶（xterm 标准）
-inline uint32_t palette256(const Theme &t, uint8_t i) {
-  if (i < 16) return t.ansi[i];
-  if (i < 232) {
-    static const uint8_t lv[6] = {0, 95, 135, 175, 215, 255};
-    uint8_t n = uint8_t(i - 16);
-    return (uint32_t(lv[n / 36]) << 16) | (uint32_t(lv[(n / 6) % 6]) << 8) | lv[n % 6];
-  }
-  uint8_t g = uint8_t(8 + (i - 232) * 10);
-  return (uint32_t(g) << 16) | (uint32_t(g) << 8) | g;
+inline uint32_t palette256(const Theme& t, uint8_t i) { return t.palette[i]; }
+
+// 快照的生效色（配置 + OSC 覆盖）直接映射到渲染主题。
+inline Theme themeFromColors(const itcore_colors& colors, const SearchColors& search) {
+  Theme theme;
+  theme.fg = colors.foreground; theme.bg = colors.background; theme.cursor = colors.cursor;
+  std::copy_n(colors.palette, theme.palette.size(), theme.palette.begin());
+  theme.search = search;
+  return theme;
 }
 
 // 0xTTRRGGBB → 0xRRGGBB；TT=0 默认、1 调色板（RR 为下标）、2 真彩

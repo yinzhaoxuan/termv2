@@ -2,6 +2,7 @@
 // T08 shell <-> backend contract. UI owns this header; 架构师 implements PaneBackend
 // on top of win32_term / ISwapChainHost / SessionTransport. Platform-neutral on purpose
 // (HWND passed as void*), so UI state models stay testable on Linux.
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -10,6 +11,18 @@
 #include <string_view>
 #include <vector>
 namespace uishell {
+
+// 0xRRGGBB；16–255 色由核心按 xterm 标准补齐。
+struct PaneColors {
+  std::uint32_t foreground, background, cursor;
+  std::array<std::uint32_t, 16> ansi;
+  bool operator==(const PaneColors&) const = default;
+};
+struct PaneAppearance {
+  PaneColors colors;
+  std::uint32_t scrollbackLines;
+  std::uint64_t memoryLimitBytes;
+};
 
 struct PixelRect { int x, y, w, h; };
 struct CellSize { int w, h; };   // physical px, from renderer GridMetrics::from_font
@@ -101,6 +114,8 @@ public:
   // caches, recomputes GridMetrics, then set_cell_pixel_size -> resize(gen). Async; grid change
   // arrives via onStatus. sizePt clamped 6..72 by UI. Empty family = keep current.
   virtual void setFont(std::string_view family, float sizePt) { (void)family; (void)sizePt; }
+  // UI 线程：替换配置色并清除 OSC 覆盖，之后重连沿用。
+  virtual void setColors(const PaneColors& colors) { (void)colors; }
   virtual CellSize cellSize() const { return {0, 0}; }  // {0,0} = not yet known
   // 滚动历史搜索（UI 线程）。needle 或选项与上次不同 → 新一轮搜索（草案 end+begin），否则在当前结果上移动：
   // backward=true 向上（更早，草案 prev），false 向下（next）。找到后后端滚动视口使当前结果可见；高亮由渲染

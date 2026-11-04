@@ -11,6 +11,25 @@
 
 namespace it2app {
 
+itcore_colors toCoreColors(const uishell::PaneColors& colors) {
+    itcore_colors out{};
+    itcore_default_colors(&out);
+    out.foreground = colors.foreground; out.background = colors.background; out.cursor = colors.cursor;
+    std::copy(colors.ansi.begin(), colors.ansi.end(), out.palette);
+    return out;
+}
+
+uishell::PaneAppearance coreDefaultAppearance() {
+    itcore_colors colors{};
+    itcore_default_colors(&colors);
+    uishell::PaneAppearance out{};
+    out.colors.foreground = colors.foreground;
+    out.colors.background = colors.background;
+    out.colors.cursor = colors.cursor;
+    std::copy_n(colors.palette, out.colors.ansi.size(), out.colors.ansi.begin());
+    return out;
+}
+
 PumpDecision decidePumpStep(DrainPhase phase, PumpResult r, bool carryEmpty) {
     if (phase == DrainPhase::Finished) return {};
     if (r == PumpResult::Fatal) return {phase == DrainPhase::Draining, false, false, phase == DrainPhase::Running};

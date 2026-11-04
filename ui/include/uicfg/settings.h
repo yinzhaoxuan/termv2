@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "uicfg/store.h"
+#include "uishell/pane_backend.h"
 
 namespace uicfg {
 
@@ -16,6 +17,15 @@ struct Osc52Settings {
   bool allowRead = false;
   std::uint32_t maxBytes = 0;
   bool operator==(const Osc52Settings&) const = default;
+};
+
+// 字段可选，缺省时继承；rawObject 保留未知键；invalidField 记录首个错误字段，整个 Profile 忽略。
+struct AppearanceProfile {
+  std::optional<std::uint32_t> foreground, background, cursor;
+  std::optional<std::array<std::uint32_t, 16>> ansi;
+  std::optional<std::uint32_t> scrollbackLines, memoryLimitMiB;
+  std::string rawObject = "{}";  // 保留未知字段；非法值也原样写回
+  std::optional<std::string> invalidField;
 };
 
 // settings.json：快捷键与外观默认值（第 12.4 节）；允许覆盖和恢复默认
@@ -38,6 +48,12 @@ struct SettingsFile {
   std::optional<bool> confirmMultilinePaste;
   std::optional<std::string> confirmMultilinePasteRaw;
   bool confirmMultilinePasteOrDefault() const { return confirmMultilinePaste.value_or(true); }
+  // DS-9：id → 外观 Profile；新建窗格应用全部字段，已打开窗格可实时换色。
+  std::map<std::string, AppearanceProfile> appearanceProfiles;
+  // 字段存在但不是对象时的原始 JSON（序列化文本）；保存时原样写回。
+  std::optional<std::string> appearanceProfilesRaw;
+  // 原文件有此字段时，即使为空也写回空对象；原本缺省且仍为空则不写。
+  bool appearanceProfilesPresent = false;
 };
 
 
@@ -47,6 +63,17 @@ struct SettingsLoadResult {
   bool readOnly = false;
   std::string detail;
 };
+
+uishell::PaneAppearance builtinAppearance();
+struct AppearanceResolution {
+  uishell::PaneAppearance appearance;
+  std::optional<std::string> warning;
+};
+AppearanceResolution resolveAppearance(const SettingsFile&, const std::string& profileId);
+std::string appearanceProfileIdFor(const ConnectionsFile&, const std::string& connectionId);
+// 只修改颜色，保留资源上限与未知字段；返回剩余非法字段，nullopt 表示配色生效。
+std::optional<std::string> applyImportedColors(SettingsFile&, const std::string& profileId, const uishell::PaneColors&);
+void clearProfileColors(SettingsFile&, const std::string& profileId);
 
 // 第 12.4 建议默认值
 SettingsFile defaultSettings();

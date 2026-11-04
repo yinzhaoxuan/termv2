@@ -278,7 +278,7 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
 
     impl_->d2d->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black), &impl_->brush_bg);
     impl_->d2d->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &impl_->brush_fg);
-    impl_->d2d->CreateSolidColorBrush(D2D1::ColorF(0.2f, 0.6f, 1.f), &impl_->brush_caret);
+    impl_->d2d->CreateSolidColorBrush(rgb_f(impl_->theme.cursor), &impl_->brush_caret);
     return true;
 }
 
@@ -435,6 +435,15 @@ bool D2DRenderer::present_frame(PresentMode mode) {
         I.dirty.invalidate();
     }
     bool full = L.layout_changed;
+    itcore_colors colors{};
+    itcore_snapshot_colors(snap_, &colors);
+    const auto theme = themeFromColors(colors, I.theme.search);
+    if (theme != I.theme) {
+        I.theme = theme;
+        I.dirty.invalidate();
+        full = true;  // 背景边缘也必须清屏
+        I.brush_caret->SetColor(rgb_f(I.theme.cursor));
+    }
     {  // DPI / 格高变化（含首帧、setFont 之后）：按实测度量重建 TextFormat 的字号与行距，整屏重画
         const float sc = metrics_.dpi_scale > 0 ? metrics_.dpi_scale : 1.f;
         const int ch = metrics_.cell_h_px();

@@ -1,4 +1,5 @@
 #include "uicfg/settings.h"
+#include "appearance_json.h"
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -71,6 +72,13 @@ Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
       const auto& value = j["confirmMultilinePaste"];
       if (value.is_boolean()) f.confirmMultilinePaste = value.get<bool>();
       else { f.confirmMultilinePaste = true; f.confirmMultilinePasteRaw = value.dump(); }
+    }
+    if (j.contains("appearanceProfiles")) {
+      f.appearanceProfilesPresent = true;
+      const auto& profiles = j["appearanceProfiles"];
+      if (!profiles.is_object()) f.appearanceProfilesRaw = profiles.dump();
+      else for (auto it = profiles.begin(); it != profiles.end(); ++it)
+        f.appearanceProfiles[it.key()] = detail::parseAppearanceProfile(it.key(), it.value());
     }
     if (j.contains("keybindings") && j.at("keybindings").is_object()) {
       for (auto it = j.at("keybindings").begin(); it != j.at("keybindings").end(); ++it)
@@ -176,6 +184,12 @@ bool saveSettings(const fs::path& file, SettingsFile& data, bool readOnly, std::
     j["osc52"] = {{"allowWrite", data.osc52->allowWrite}, {"allowRead", data.osc52->allowRead}, {"maxBytes", data.osc52->maxBytes}};
   if (data.confirmMultilinePasteRaw) j["confirmMultilinePaste"] = json::parse(*data.confirmMultilinePasteRaw, nullptr, false);
   else if (data.confirmMultilinePaste) j["confirmMultilinePaste"] = *data.confirmMultilinePaste;
+  if (data.appearanceProfilesRaw) j["appearanceProfiles"] = json::parse(*data.appearanceProfilesRaw);
+  else if (data.appearanceProfilesPresent || !data.appearanceProfiles.empty()) {
+    auto profiles = json::object();
+    for (const auto& [id, profile] : data.appearanceProfiles) profiles[id] = detail::appearanceProfileJson(profile);
+    j["appearanceProfiles"] = std::move(profiles);
+  }
   fs::path tmp = file; tmp += ".tmp";
   if (!writeDurable(tmp, j.dump(2), error)) { std::error_code ec; fs::remove(tmp, ec); return false; }
   std::error_code ec;

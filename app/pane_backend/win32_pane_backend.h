@@ -42,10 +42,8 @@ struct PaneBackendConfig {
     std::optional<std::wstring> localCommand;
     std::wstring fontFamily = L"Consolas";
     float fontSizePt = 12.f;
-    uint32_t scrollbackLines = 5000;
-    uint64_t memoryLimitBytes = 32ull << 20;
-    // 配置色（前景/背景/光标/256 色）；空则用 itcore_default_colors。首次 feed 前经 itcore_set_colors 下发
-    std::optional<itcore_colors> colors;
+    // UI 线程、构造窗格时调用一次；未设置则用核心默认色与默认资源上限（传 0）。
+    std::function<uishell::PaneAppearance(const std::string& connectionId)> resolveAppearance;
     // B3：双击选词时额外算作单词字符的 ASCII 标点；nullopt 用核心默认 "/-+\\~_."
     std::optional<std::string> wordChars;
     // B4：OSC 52 剪贴板（默认关；读要单独打开，会把本机剪贴板交给远端程序）

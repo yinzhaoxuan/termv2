@@ -5,6 +5,7 @@
 #include "hyperv_resolve.h"
 #include "ssh_session.h"
 #include "uishell/pane_backend.h"
+#include "itcore.h"
 #include <chrono>
 #include <atomic>
 #include <cstddef>
@@ -24,6 +25,11 @@ typedef struct itcore_core itcore_core;
 typedef struct itcore_event itcore_event;
 
 namespace it2app {
+
+// Profile 只覆盖 0–15 色，其余保留核心的 xterm 标准色。
+itcore_colors toCoreColors(const uishell::PaneColors& colors);
+// 未注入外观解析器时的配置：核心默认色、资源上限传 0。
+uishell::PaneAppearance coreDefaultAppearance();
 
 // B3：把配置的分词字符下发给核心。nullopt → 核心默认；非法（字母数字/空白/非 ASCII）返回 -1，核心保持原设置。
 int applyWordChars(itcore_core *core, const std::optional<std::string> &wordChars);

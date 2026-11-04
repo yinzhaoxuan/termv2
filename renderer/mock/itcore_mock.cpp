@@ -1,4 +1,5 @@
 #include "itcore_mock.h"
+#include "../layout/cell_style.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -124,4 +125,14 @@ extern "C" size_t itcore_text_clusters(const itcore_core *, const char *utf8, si
     ++n;
   }
   return n;
+}
+
+// 模拟快照沿用渲染兜底色，不依赖真实核心。
+extern "C" void itcore_snapshot_colors(const itcore_snapshot*, itcore_colors* out) {
+  if (!out) return;
+  const itren::Theme theme;
+  *out = {};
+  out->struct_size = sizeof(*out);
+  out->foreground = theme.fg; out->background = theme.bg; out->cursor = theme.cursor;
+  std::copy(theme.palette.begin(), theme.palette.end(), out->palette);
 }

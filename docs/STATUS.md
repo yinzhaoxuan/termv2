@@ -2,6 +2,17 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
+## 2026-11-04：DS-9 最小外观 Profile（D3、D4）
+
+设计：[DS-9-外观Profile.md](DS-9-外观Profile.md)。基线 `2cc8b40`。
+
+- **颜色只有一个来源**：渲染器每帧从快照取核心的生效色（`itcore_snapshot_colors` → `itren::themeFromColors`），变化时整屏重画并更新光标画刷。以前渲染器用写死的主题、不读核心：OSC 4/10/11/12 改色在屏幕上不生效，OSC 10/11 查询回答的颜色也与屏幕不符。
+- **settings.json `appearanceProfiles`**：前景、背景、光标、16 色、`scrollbackLines`（100–1000000）、`memoryLimitMiB`（8–1024），字段都可省略。连接按 `appearanceProfileId` 引用，先套 `appearance-default` 再逐字段覆盖；不存在或非法的 Profile 回退默认并在状态栏提示一次（不阻止启动）。未知键与非法原值原样写回。
+- **默认值统一**：内置默认 = 升级前屏幕上的配色 + 10000 行 / 64 MiB（= 核心默认）。`PaneBackendConfig` 删去写死的 5000 / 32 MiB 与 `colors`，改为 `resolveAppearance` 回调；每个新核心（含重连）都下发配色。
+- **导入 `.itermcolors`**：系统菜单「导入 iTerm2 配色…」「恢复默认配色」，写入 `appearance-default`，已打开窗格经 `PaneBackend::setColors` 立即换色。自写 XML plist 子集解析（拒绝二进制 plist、限 1 MiB / 8 层）；` (Dark)` 后缀回退；P3 转 sRGB，Calibrated 按 sRGB 近似；选区色等不支持的键在确认框里列出。
+- macOS ctest **120/120**（新增 uicfg_appearance_{settings,resolution,mutation}、uicfg_itermcolors_{sample,parsing,prompt}、PANE-29.appearance_colors）。
+- **未验证**：`main.cpp`、`win32_pane_backend.cpp`、`renderer.cpp` 未在本机编译，等 CI `mingw`；Windows 手测见 DS-9 §7（默认外观不变、导入后实时换色、OSC 11 设置/查询/恢复、按连接引用 Profile、`scrollbackLines: 200` 生效）。
+
 ## 2026-11-04：E4/E5、NEW-02、NEW-03、DS-12 Direct 首次信任
 
 - **E4 / E5**（`299b3c1`）：ui 默认用仓库内 nlohmann；`IT2W_REQUIRE_VECTORS`；`IT2W_SANITIZE_THREAD`；`CMakePresets.json`（dev / asan / tsan / mingw / mingw-direct）；根 README；GitHub Actions（linux / asan / tsan 测试 + mingw 交叉编译，mingw-direct 仅手动触发）。首次 CI 全绿，`986cdf7` 的 Windows 文件经 mingw 编译通过。

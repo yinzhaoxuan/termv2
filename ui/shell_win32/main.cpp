@@ -19,6 +19,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -34,6 +36,7 @@
 #include "uicfg/reconnect.h"
 #include "uicfg/session_tree.h"
 #include "uicfg/settings.h"
+#include "uicfg/itermcolors.h"
 #include "uicfg/shell_logic.h"
 #include "uicfg/shell_models.h"
 #include "uicfg/snapshot_cleanup.h"
@@ -80,6 +83,8 @@ constexpr wchar_t kMainClass[] = L"it2w_shell_main";
 constexpr wchar_t kPaneHostClass[] = L"it2w_shell_pane";
 constexpr UINT kMsgSearch = WM_APP + 2;  // onSearchUpdated 投递（viewport 已直接更新，不再 Post）
 constexpr UINT kSysCmdFont = 0x0100;  // 系统菜单「字体…」（低 4 位须为 0）
+// 系统菜单「导入 iTerm2 配色…」「恢复默认配色」，低 4 位须为 0。
+constexpr UINT kSysCmdImportColors = 0x0110, kSysCmdResetColors = 0x0120;
 constexpr UINT kIdFontPreset = 0x1000, kIdFontOther = 0x10FF;  // 字体弹出菜单项
 constexpr UINT_PTR kIdSearch = 101, kIdTree = 102, kIdTabs = 103, kIdStatus = 104, kIdReconnect = 200;
 constexpr UINT_PTR kIdHistSearch = 105, kIdHistStatus = 106;  // 历史搜索条（searchHistory）
@@ -115,6 +120,7 @@ struct App {
   bool connsReadOnly = false;
   SettingsFile settings;
   bool settingsReadOnly = false;
+  std::set<std::string> shownAppearanceWarnings;  // 相同警告文本仅提示一次
   std::string statusNote;
   WorkspaceFile ws;
   bool wsReadOnly = false;
@@ -342,6 +348,20 @@ void updateStatusBar() {
   }
   if (!g->statusNote.empty()) s += " · " + g->statusNote;
   SetWindowTextW(g->statusBar, W(s).c_str());
+}
+
+void reportAppearanceWarning(const std::optional<std::string>& warning) {
+  if (!warning || !g->shownAppearanceWarnings.insert(*warning).second) return;
+  appendNote(g->statusNote, *warning);
+  OutputDebugStringW(W("it2w_shell: " + *warning + "\n").c_str());
+  if (g->statusBar) updateStatusBar();
+}
+
+uishell::PaneAppearance appearanceForPane(const std::string& connectionId) {
+  const auto id = appearanceProfileIdFor(g->conns, connectionId);
+  const auto result = resolveAppearance(g->settings, id);
+  reportAppearanceWarning(result.warning);
+  return result.appearance;
 }
 
 // ---------- 窗格 ----------
@@ -699,6 +719,50 @@ void pasteClipboard() {
 }
 
 uishell::PaneBackendFactory makeFactory();
+
+// 保存与实时换色：只替换颜色，已打开窗格的资源上限不变。
+void applyAppearance(const std::string& okNote) {
+  std::string error;
+  if (g->settingsReadOnly) g->statusNote = "settings.json 只读，配色未保存（本次运行有效）";
+  else if (!saveSettings(g->configDir / "settings.json", g->settings, false, &error))
+    g->statusNote = "保存 settings.json 失败：" + error;
+  else g->statusNote = okNote;
+  for (auto& [id, pane] : g->panes) {
+    if (pane->backend) pane->backend->setColors(appearanceForPane(pane->connectionId).colors);
+  }
+  updateStatusBar();
+}
+
+void importColors() {
+  wchar_t file[32768]{};
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof dialog; dialog.hwndOwner = g->main;
+  dialog.lpstrFilter = L"iTerm2 配色 (*.itermcolors)\0*.itermcolors\0\0";
+  dialog.lpstrFile = file; dialog.nMaxFile = (DWORD)std::size(file);
+  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+  if (!GetOpenFileNameW(&dialog)) return;
+  // 多读一字节判超限，避免先按不可信的文件大小分配。
+  std::ifstream in(fs::path(file), std::ios::binary);
+  std::string bytes(kItermColorsMaxBytes + 1, '\0');
+  if (!in) { MessageBoxW(g->main, L"无法读取配色文件", L"it2w", MB_OK | MB_ICONWARNING); return; }
+  in.read(bytes.data(), (std::streamsize)bytes.size());
+  if (in.bad() || (in.fail() && !in.eof())) {
+    MessageBoxW(g->main, L"读取配色文件失败", L"it2w", MB_OK | MB_ICONWARNING); return;
+  }
+  bytes.resize((size_t)in.gcount());
+  const auto result = importItermColors(bytes);
+  if (!result.colors) { MessageBoxW(g->main, W(result.error).c_str(), L"it2w", MB_OK | MB_ICONWARNING); return; }
+  const auto prompt = itermImportPrompt(result, U(fs::path(file).filename().wstring()));
+  if (MessageBoxW(g->main, W(prompt).c_str(), L"it2w", MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
+  const auto invalidField = applyImportedColors(g->settings, "appearance-default", *result.colors);
+  applyAppearance(invalidField ? "配色已写入，但默认外观的 " + *invalidField + " 无效，未生效"
+                               : "已导入默认外观配色");
+}
+
+void resetColors() {
+  clearProfileColors(g->settings, "appearance-default");
+  applyAppearance("已恢复默认配色");
+}
 
 // 字体（族 + 字号）：写回 settings.json；经 setFont 运行时应用到所有窗格，新窗格经 factory 生效
 void applyFont(const std::string& family, double size, const std::string& okNote) {
@@ -1145,11 +1209,15 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       if (HMENU sys = GetSystemMenu(h, FALSE)) {  // 系统菜单（标题栏图标 / Alt+Space）加「字体…」
         AppendMenuW(sys, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(sys, MF_STRING, kSysCmdFont, L"字体…");
+        AppendMenuW(sys, MF_STRING, kSysCmdImportColors, L"导入 iTerm2 配色…");
+        AppendMenuW(sys, MF_STRING, kSysCmdResetColors, L"恢复默认配色");
       }
       for (HWND c : {g->search, g->tree, g->tabs, g->statusBar, g->histEdit, g->histStatus}) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
       return 0;
     }
     case WM_SYSCOMMAND:
+      if ((w & 0xFFF0) == kSysCmdImportColors) { importColors(); return 0; }
+      if ((w & 0xFFF0) == kSysCmdResetColors) { resetColors(); return 0; }
       if ((w & 0xFFF0) == kSysCmdFont) { showFontMenu(); return 0; }
       break;
     case WM_SIZE: layoutAll(); return 0;
@@ -1346,6 +1414,7 @@ uishell::PaneBackendFactory makeFactory() {
     if (!st->inner || st->family != g->settings.fontFamily || st->size != g->settings.fontSize ||
         st->osc52 != g->settings.osc52OrDefault()) {  // osc52：只影响此后新建的窗格
       it2app::PaneBackendConfig cfg;
+      cfg.resolveAppearance = appearanceForPane;
       cfg.resolveLocal = resolveLocal;
       cfg.resolveHyperV = resolveHyperV;
       cfg.resolveSsh = resolveSsh;
@@ -1408,6 +1477,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     appendNote(app.statusNote, "osc52 配置无效，已按全关处理");
     OutputDebugStringW(L"it2w_shell: settings.json osc52 配置无效，已按全关处理\n");
   }
+  // 即使非法 Profile 尚未被连接引用，启动也提示一次。
+  reportAppearanceWarning(resolveAppearance(app.settings, "appearance-default").warning);
+  for (const auto& [id, profile] : app.settings.appearanceProfiles)
+    if (profile.invalidField) reportAppearanceWarning(resolveAppearance(app.settings, id).warning);
   auto lw = loadWorkspace(app.configDir / "workspace.json");
   app.ws = std::move(lw.data); app.wsReadOnly = lw.readOnly;
 
