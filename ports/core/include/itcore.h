@@ -131,7 +131,8 @@ void itcore_buffer_release(itcore_buffer *b);
 itcore_event *itcore_next_event(itcore_core *c);
 itcore_event_kind itcore_event_type(const itcore_event *e);
 /* 事件负载：REPLY_BYTES 为待写回字节，TITLE 为清洗后的 UTF-8，CLIPBOARD_REQUEST 为
-   已被拒绝的 OSC 52 选择参数；指针在 itcore_event_release 前有效。 */
+   已被拒绝的 OSC 52 选择参数；指针在 itcore_event_release 前有效。
+   事件与核心相互独立，可以在之后的 itcore_feed 之后再使用和释放。 */
 const uint8_t *itcore_event_data(const itcore_event *e, size_t *len);
 void itcore_event_release(itcore_event *e);
 /* finish_input 丢弃的残缺控制序列计数（含 EOF 时残缺 UTF-8，后者另产生一个 U+FFFD） */
@@ -220,6 +221,7 @@ typedef struct { uint32_t struct_size; int allow_write; int allow_read; uint32_t
 int  itcore_set_clipboard_policy(itcore_core *c, const itcore_clipboard_policy *cfg);
 /* 生成 OSC 52 读应答 ESC]52;<Pc>;<base64><结尾>，Pc 回显 req 的选择参数（req 为 NULL 用 c）。req 为触发它的 CLIPBOARD_READ 事件（须在 itcore_event_release 前调用），
    结尾与请求一致：BEL 请求回 BEL，ST 请求回 ESC\（同 OSC 4/10/11/12）；req 为 NULL 用 ST，非 READ 事件返回 -1。
+   事件与核心相互独立，可以晚于之后的 itcore_feed 使用和释放；本函数须在 itcore_destroy 前对同一核心调用。
    未允许读返回 1，utf8 超过 max_bytes 返回 -2（*out=null），成功 0 */
 int  itcore_encode_clipboard_reply(itcore_core *c, const itcore_event *req, const char *utf8, size_t len, itcore_buffer **out);
 /* 颜色配置：值为 0x00RRGGBB。OSC 10/11/12 与 OSC 4 可在运行时覆盖、OSC 110/111/112 与 104 恢复为这里的配置值，

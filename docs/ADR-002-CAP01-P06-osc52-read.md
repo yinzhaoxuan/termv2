@@ -30,9 +30,10 @@ Direct 已落地，决策与启用方式见 [ADR-003](ADR-003-ssh-direct.md) / [
 | OSC 52 写剪贴板 | ✅ 受 `osc52.allowWrite` 控制，默认关 | ✅ 同左 | ✅ 同左 | conhost 透传写序列（已实测） |
 | OSC 52 读剪贴板 | ❌ 不支持 | ❌ 不支持 | ❌ 不支持 | CAP-01 P06：conhost 输出侧吞掉 `52;c;?` |
 
-Direct SSH（含以 Direct 为内层的 Hyper-V）对 OSC 52 读查询字节透明，但 D-1 起不声明读能力
-（`supportsOsc52Read=false`），即使 `osc52.allowRead=true` 也不应答。写入仍受
-`osc52.allowWrite` 控制。上表仅列 ConPTY 路径。
+Direct SSH（含以 Direct 为内层的 Hyper-V）对 OSC 52 读查询字节透明。D-1 起曾不声明读能力；
+DS-10（2026-11-04）加了逐次确认后，Direct 声明 `supportsOsc52Read=true`：`osc52.allowRead=true`
+时每个读请求都弹框确认（可「本会话记住」，重连后重新询问），没有确认回调的前端一律拒绝。
+写入仍受 `osc52.allowWrite` 控制，每个会话第一次写入时状态栏提示。上表仅列 ConPTY 路径。
 
 ## 已知限制原文
 

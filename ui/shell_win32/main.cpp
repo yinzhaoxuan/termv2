@@ -34,6 +34,7 @@
 #include "connection_dialog.h"
 #include "diag_dialog.h"
 #include "keybinding_dialog.h"
+#include "clipboard_prompt.h"
 #include "uicfg/diag_bundle.h"
 #include "resource.h"
 #include "win32_text.h"
@@ -467,6 +468,16 @@ void onPaneStatus(const std::string& paneId, const uishell::SessionStatus& st) {
   updateStatusBar();
 }
 
+std::string clipboardText() {
+  if (!OpenClipboard(g->main)) return {};
+  std::wstring text;
+  if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
+    if (auto* s = static_cast<const wchar_t*>(GlobalLock(h))) { text = s; GlobalUnlock(h); }
+  }
+  CloseClipboard();
+  return U(text);
+}
+
 void startSession(PaneHost& p) {
   p.notStarted = false;
   if (auto* c = findConn(p.connectionId)) g->snaps.onSessionStarted(p.paneId, *c);  // 启动时快照
@@ -487,6 +498,26 @@ void startSession(PaneHost& p) {
   };
   ev.onPasteRejected = [](size_t bytes, size_t limit) {
     MessageBoxW(g->main, W(pasteRejectedMessage(bytes, limit)).c_str(), L"粘贴", MB_OK | MB_ICONWARNING);
+  };
+  ev.onClipboardReadRequest = [id](uint64_t requestId) {
+    if (!g) return;
+    auto* pane = paneById(id);
+    if (!pane || !pane->backend) return;
+    auto* backend = pane->backend.get();
+    const auto prompt = clipboardReadPrompt(connName(pane->connectionId), clipboardText());
+    const auto decision = runClipboardReadPrompt(g->main, prompt.mainText, prompt.content);
+    // 对话框会派发消息：重新查窗格；同一后端重连后的旧 id 由后端忽略。
+    if (!g) return;
+    pane = paneById(id);
+    if (pane && pane->backend.get() == backend)
+      pane->backend->answerClipboardRead(requestId, decision.value_or(uishell::ClipboardReadDecision::DenyOnce));
+  };
+  ev.onClipboardWritten = [id] {
+    if (!g) return;
+    if (auto* pane = paneById(id)) {
+      appendNote(g->statusNote, "「" + connName(pane->connectionId) + "」中的程序写入了剪贴板（OSC 52）");
+      updateStatusBar();
+    }
   };
   ev.onSelectionChanged = [](bool) {};
   ev.onSearchUpdated = [id](const uishell::SearchResult& r) {  // 异步结果（PENDING 之后）投递到 UI 线程
@@ -700,14 +731,9 @@ void copySelection() {
 
 void pasteClipboard() {
   PaneHost* p = activePane(); if (!p || !p->backend) return;
-  if (!OpenClipboard(g->main)) return;
-  std::wstring w;
-  if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
-    if (auto* s = static_cast<const wchar_t*>(GlobalLock(h))) { w = s; GlobalUnlock(h); }
-  }
-  CloseClipboard();
-  if (w.empty()) return;
-  const auto text = normalizePasteText(U(w));
+  const auto clipboard = clipboardText();
+  if (clipboard.empty()) return;
+  const auto text = normalizePasteText(clipboard);
   const auto preview = pastePreview(text, g->settings.confirmMultilinePasteOrDefault());
   const std::string paneId = p->paneId;
   auto* backend = p->backend.get();

@@ -37,8 +37,8 @@ Hyper-V 连接的身份改为稳定别名 `hv-<规范化 VM GUID>`（`normalizeV
 
 ## 能力与边界
 
-Direct 暂声明 `supportsOsc52Read=false`（REVIEW 增补二 D-1：逐次确认 UI 之前不开放读），
-与 ConPTY 相同；`osc52.allowRead` 策略门仍保留。Hyper-V 转发内层 SSH 能力，整个 attempt 模式固定。
+Direct 声明 `supportsOsc52Read=true`，但每个读请求都要用户确认（DS-10，取代 D-1 的临时关闭）；
+`osc52.allowRead` 策略门（默认关）仍保留。ConPTY 收不到读请求（ADR-002）。Hyper-V 转发内层 SSH 能力，整个 attempt 模式固定。
 关闭预算 ≤3 秒；v0 不增加 DCS/Sixel 旗标，像素尺寸为 0，不将序列透明性等同于渲染能力。
 静态依赖许可随包及 GPLv3 对应源码要求见 [THIRD-PARTY-NOTICES](../THIRD-PARTY-NOTICES.md)
 和 [UPSTREAM](../UPSTREAM.md#第三方静态依赖)。

@@ -2,6 +2,17 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
+## 2026-11-04：DS-10 OSC 52 读剪贴板逐次确认（NEW-04）
+
+设计：[DS-10-OSC52读确认.md](DS-10-OSC52读确认.md)。
+
+- `osc52.allowRead=true`（仍默认关）时，Direct 会话里的读请求不再立即应答：后端保留该请求事件，经延迟事件通知 UI（不在 pump 栈里弹框，ADR-001）；UI 弹 TaskDialog（「允许」「拒绝」，默认拒绝；「本会话记住此选择」），用户允许后**此刻**才读剪贴板并应答。一次最多一个待决请求，其余记 `osc52 read busy` 并丢弃。「本会话」= 当前 attempt，重连 / 新会话 / 销毁都清掉。没有接确认回调的前端一律拒绝。
+- Direct 改为 `supportsOsc52Read=true`（取代 D-1 的临时关闭）；ConPTY 不变（收不到读请求，ADR-002）。
+- 写入：每个 attempt 第一次经 OSC 52 成功写剪贴板时，状态栏提示「「<连接名>」中的程序写入了剪贴板（OSC 52）」。
+- 可移植：`ClipboardReadGate` 状态机、`clipboardReadPrompt` 文案（复用粘贴预览规则）；真实核心上验证读请求事件可在之后的 feed 之后再编码应答（BEL / ST 结尾）。`itcore.h` 只补注释。
+- macOS ctest 164/164（新增 10 项）。
+- **未验证**：`win32_pane_backend.cpp`、`main.cpp`、`clipboard_prompt.cpp` 等 CI `mingw`；`direct_ssh_transport.h` 只在 `mingw-direct` 里编译（需手动触发）；Windows 手测见 DS-10 §7。
+
 ## 2026-11-04：DS-16 快捷键展示（D5）
 
 设计：[DS-16-快捷键展示.md](DS-16-快捷键展示.md)。

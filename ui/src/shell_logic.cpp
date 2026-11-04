@@ -45,11 +45,10 @@ KeyMatch matchKey(const std::map<std::string, std::string>& b, const Chord& p) {
   }
   return {};
 }
-std::string normalizePasteText(const std::string& in) {
+static std::string normalizeNewlines(std::string_view in) {
   std::string out; out.reserve(in.size());
   for (size_t i = 0; i < in.size(); ++i) {
     char ch = in[i];
-    if (ch == '\0') break;
     if (ch == '\r') { out += '\r'; if (i + 1 < in.size() && in[i + 1] == '\n') ++i; }
     else if (ch == '\n') out += '\r';
     else out += ch;
@@ -57,7 +56,12 @@ std::string normalizePasteText(const std::string& in) {
   return out;
 }
 
+std::string normalizePasteText(const std::string& in) {
+  return normalizeNewlines(std::string_view(in).substr(0, in.find('\0')));
+}
+
 constexpr size_t kPastePreviewMaxLines = 10, kPastePreviewMaxCodePoints = 120;
+constexpr size_t kClipboardPreviewMaxLines = 3, kClipboardPreviewMaxCodePoints = 60;
 
 static size_t utf8SequenceBytes(std::string_view text, size_t i) {
   size_t end = i + 1;
@@ -69,14 +73,14 @@ static std::string renderControlByte(unsigned char ch) {
   return {'^', ch == 0x7f ? '?' : static_cast<char>(ch + '@')};
 }
 
-static std::string previewLine(std::string_view line) {
+static std::string previewLine(std::string_view line, size_t maxCodePoints) {
   std::string out;
   size_t chars = 0;
   for (size_t i = 0; i < line.size();) {
     auto ch = static_cast<unsigned char>(line[i]);
     bool control = ch < 0x20 || ch == 0x7f;
     size_t width = control ? 2 : 1;  // 上限按转义后的可见码点计算
-    if (chars + width > kPastePreviewMaxCodePoints) break;
+    if (chars + width > maxCodePoints) break;
     if (control) {
       out += renderControlByte(ch);
       ++i;
@@ -97,21 +101,42 @@ static size_t countPastedLines(std::string_view text) {
   return lines;
 }
 
-PastePreview pastePreview(const std::string& text, bool confirmEnabled) {
-  if (!confirmEnabled || text.find('\r') == std::string::npos) return {false, {}};
-  size_t lines = countPastedLines(text);
-  std::string message = "将粘贴 " + std::to_string(lines) + " 行、" + std::to_string(text.size()) + " 字节：";
+static std::string textPreview(const std::string& text, size_t maxLines, size_t maxCodePoints) {
+  const size_t lines = countPastedLines(text);
+  std::string message;
   size_t start = 0, shown = 0;
-  while (start < text.size() && shown < kPastePreviewMaxLines) {
+  while (start < text.size() && shown < maxLines) {
     size_t end = text.find('\r', start);
     if (end == std::string::npos) end = text.size();
     message += '\n';
-    message += previewLine(std::string_view(text).substr(start, end - start));
+    message += previewLine(std::string_view(text).substr(start, end - start), maxCodePoints);
     start = end + 1;
     ++shown;
   }
   if (lines > shown) message += "\n…（其余 " + std::to_string(lines - shown) + " 行未显示）";
+  return message;
+}
+
+PastePreview pastePreview(const std::string& text, bool confirmEnabled) {
+  if (!confirmEnabled || text.find('\r') == std::string::npos) return {false, {}};
+  std::string message = "将粘贴 " + std::to_string(countPastedLines(text)) + " 行、" + std::to_string(text.size()) + " 字节：";
+  message += textPreview(text, kPastePreviewMaxLines, kPastePreviewMaxCodePoints);
   return {true, std::move(message)};
+}
+
+ClipboardReadPrompt clipboardReadPrompt(const std::string& connectionName, const std::string& clipboardText) {
+  ClipboardReadPrompt out;
+  const auto name = connectionName.empty() ? std::string("本地终端") : connectionName;
+  out.mainText = "「" + name + "」中的程序请求读取本机剪贴板";
+  if (clipboardText.empty()) {
+    out.content = "剪贴板为空";
+    return out;
+  }
+  size_t chars = 0;
+  for (size_t i = 0; i < clipboardText.size(); i += utf8SequenceBytes(clipboardText, i)) ++chars;
+  out.content = "剪贴板当前有 " + std::to_string(chars) + " 个字符。允许后，该程序会得到全部内容。";
+  out.content += textPreview(normalizeNewlines(clipboardText), kClipboardPreviewMaxLines, kClipboardPreviewMaxCodePoints);
+  return out;
 }
 LinkPrompt linkPrompt(const std::string& url) {
   auto c = checkLink(url);

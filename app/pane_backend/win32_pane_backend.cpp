@@ -232,6 +232,7 @@ public:
     void setFocused(bool f) override;
     void sendInput(std::string_view utf8) override;
     void paste(std::string_view utf8) override;
+    void answerClipboardRead(uint64_t id, uishell::ClipboardReadDecision decision) override;
     void sendKey(unsigned vk, unsigned mods) override;
     std::uint64_t previousAttemptId() const override { return prevAttemptId_; }
     std::string previousAttemptText() const override { return prevAttemptText_; }
@@ -285,8 +286,9 @@ private:
     }
     void flushEvents(); // 取局部副本；之后不得再访问 this
     void drainCoreEvents();
-    void setClipboardUtf8(std::string_view u8);
+    bool setClipboardUtf8(std::string_view u8);
     std::string getClipboardUtf8();
+    void deliverClipboardRead(const itcore_event *request);
     void present(bool force = false, itren::PresentMode mode = itren::PresentMode::VSync);  // force：绕过 SyncGate；mode：续跑用 Immediate
     void syncSearchHighlight();        // 把 PaneSearch::ranges() 建进 D2DRenderer 高亮层（无活动搜索则 clear）
     void releaseSnap();
@@ -322,6 +324,12 @@ private:
     TerminalStatus terminal_;
     std::shared_ptr<char> life_ = std::make_shared<char>(); // 每次 reconnect 换令牌
     PendingEvents pendingEvents_;
+    struct EventReleaser {
+        void operator()(itcore_event *event) const { itcore_event_release(event); }
+    };
+    ClipboardReadGate clipboardGate_;
+    std::unique_ptr<itcore_event, EventReleaser> pendingClipboardRead_;
+    bool clipboardWriteNotified_ = false;
     bool eventsPosted_ = false;
     // 仅诊断用：默认关闭，会向远端 stdin 注入 PING/伪应答。只认环境变量值 1。
     const bool osc52Ping_ = envFlagOn(std::getenv("ITERM2WIN_OSC52_PING"));
@@ -484,6 +492,9 @@ std::optional<Win32PaneBackend::HyperVResolution> Win32PaneBackend::resolveHyper
 }
 
 bool Win32PaneBackend::startSession() {
+    clipboardGate_.reset();
+    pendingClipboardRead_.reset();
+    clipboardWriteNotified_ = false;
     auto hyperV = std::exchange(pendingHyperV_, std::nullopt);
     { std::lock_guard l(statusMu_); status_.recovery = {}; status_.hostKeyChanged = false; }
     itcore_options opt{};
@@ -735,19 +746,22 @@ void Win32PaneBackend::releaseSnap() {
 }
 
 // B4：OSC 52 剪贴板读写（UI 线程；失败静默，不阻塞输出）
-void Win32PaneBackend::setClipboardUtf8(std::string_view u8) {
+bool Win32PaneBackend::setClipboardUtf8(std::string_view u8) {
     int n = u8.empty() ? 0 : MultiByteToWideChar(CP_UTF8, 0, u8.data(), int(u8.size()), nullptr, 0);
-    if (!OpenClipboard(hwnd_)) return;
-    EmptyClipboard();
+    if ((!u8.empty() && !n) || !OpenClipboard(hwnd_)) return false;
+    if (!EmptyClipboard()) { CloseClipboard(); return false; }
+    bool written = false;
     if (HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, (size_t(n) + 1) * sizeof(wchar_t))) {
         if (auto *w = static_cast<wchar_t *>(GlobalLock(g))) {
             if (n) MultiByteToWideChar(CP_UTF8, 0, u8.data(), int(u8.size()), w, n);
             w[n] = 0;
             GlobalUnlock(g);
-            if (!SetClipboardData(CF_UNICODETEXT, g)) GlobalFree(g);
+            written = SetClipboardData(CF_UNICODETEXT, g) != nullptr;
+            if (!written) GlobalFree(g);
         } else GlobalFree(g);
     }
     CloseClipboard();
+    return written;
 }
 
 std::string Win32PaneBackend::getClipboardUtf8() {
@@ -757,6 +771,24 @@ std::string Win32PaneBackend::getClipboardUtf8() {
         if (auto *w = static_cast<const wchar_t *>(GlobalLock(h))) { out = toUtf8(w); GlobalUnlock(h); }
     CloseClipboard();
     return out;
+}
+
+void Win32PaneBackend::deliverClipboardRead(const itcore_event *request) {
+    if (!core_ || !transport_) return;
+    const auto current = getClipboardUtf8();
+    auto reply = [](void *ctx, const char *data, size_t n) -> int {
+        return int(static_cast<Transport *>(ctx)->reply(std::string_view(data, n)));
+    };
+    if (osc52Ping_) osc52DiagPingSequence(reply, transport_.get(), pumpLog, nullptr);
+    deliverOsc52ReadReply(core_, request, current.data(), current.size(), reply, transport_.get(), pumpLog, nullptr, true);
+}
+
+void Win32PaneBackend::answerClipboardRead(uint64_t id, uishell::ClipboardReadDecision decision) {
+    if (!clipboardGate_.pending()) return;
+    const bool deliver = clipboardGate_.onAnswer(id, decision);
+    if (clipboardGate_.pending()) return;  // 错 id：保留真正的待决事件
+    auto request = std::move(pendingClipboardRead_);
+    if (deliver && request) deliverClipboardRead(request.get());  // 此刻才读取剪贴板，之后释放事件
 }
 
 void Win32PaneBackend::drainCoreEvents() {
@@ -778,7 +810,10 @@ void Win32PaneBackend::drainCoreEvents() {
             }
             break;
         case ITCORE_EV_CLIPBOARD_WRITE:
-            setClipboardUtf8(std::string_view(reinterpret_cast<const char *>(p), p ? n : 0));
+            if (setClipboardUtf8(std::string_view(reinterpret_cast<const char *>(p), p ? n : 0)) && !clipboardWriteNotified_) {
+                clipboardWriteNotified_ = true;
+                deferEvent(ev_.onClipboardWritten);
+            }
             break;
         case ITCORE_EV_CLIPBOARD_REQUEST:
             // 核心 REQUEST 也包括写拒绝/非法选择器；事件本身无法区分读写。
@@ -789,18 +824,28 @@ void Win32PaneBackend::drainCoreEvents() {
             if (!transport_) {
                 pumpLog(nullptr, "[pane] osc52 read skipped (no transport)");
             } else if (!osc52ReadEffective(cfg_->osc52.allowRead, transport_->supportsOsc52Read())) {
-                // CAP-01 P06 / D-1：策略关，或传输不支持读（ConPTY 与 Direct 目前均为 false）→ 不交付应答。
+                // CAP-01 P06：策略关，或传输不支持读（ConPTY）→ 不交付应答。
                 if (!cfg_->osc52.allowRead)
                     pumpLog(nullptr, "[pane] osc52 read denied");
                 else
                     pumpLog(nullptr, "[pane] osc52 read unsupported (transport)");
             } else {
-                std::string cur = getClipboardUtf8();
-                auto replyFn = [](void *p, const char *data, size_t n) -> int {
-                    return int(static_cast<Transport *>(p)->reply(std::string_view(data, n)));
-                };
-                if (osc52Ping_) osc52DiagPingSequence(replyFn, transport_.get(), pumpLog, nullptr);
-                deliverOsc52ReadReply(core_, e, cur.data(), cur.size(), replyFn, transport_.get(), pumpLog, nullptr, true); // OSC52-05：成功日志常开
+                uint64_t id = 0;
+                switch (clipboardGate_.onRequest(static_cast<bool>(ev_.onClipboardReadRequest), &id)) {
+                case ClipboardReadGate::Action::Deliver:
+                    deliverClipboardRead(e);
+                    break;
+                case ClipboardReadGate::Action::Drop:
+                    pumpLog(nullptr, "[pane] osc52 read denied (session)");
+                    break;
+                case ClipboardReadGate::Action::Busy:
+                    pumpLog(nullptr, "[pane] osc52 read busy");
+                    break;
+                case ClipboardReadGate::Action::Ask:
+                    pendingClipboardRead_.reset(e);
+                    deferEvent(ev_.onClipboardReadRequest, id);
+                    continue;  // 所有权交给 pendingClipboardRead_，跳过循环末尾的释放
+                }
             }
             break;
         case ITCORE_EV_SEARCH_INVALIDATED:  // resize / 主备屏切换 / ED3 / RIS：下一次 step 得到 RESTARTED
@@ -1049,6 +1094,8 @@ void Win32PaneBackend::reconnect() {
     life_.reset(); // 使正在 flush 的旧 attempt 局部批次失效
     life_ = std::make_shared<char>();
     pendingEvents_.clear();
+    clipboardGate_.reset();
+    pendingClipboardRead_.reset();
     pumpDriver_.reset(*this, shared_->sched);
     terminal_ = {};
     queue_->close();
@@ -1614,6 +1661,8 @@ void Win32PaneBackend::teardown() {
     life_.reset();
     ev_ = {};
     pendingEvents_.clear();
+    clipboardGate_.reset();
+    pendingClipboardRead_.reset();
     pumpDriver_.stop(*this, shared_->sched);
     // GWLP_USERDATA 清空后 WM_DESTROY 不再进入本对象，因此必须显式撤所有定时器。
     if (HWND h = hwnd_) {

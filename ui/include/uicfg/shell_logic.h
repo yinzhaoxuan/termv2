@@ -35,6 +35,10 @@ struct PastePreview { bool needsConfirm; std::string message; };
 // 按 CR 分行，末尾 CR 不额外算空行："a\rb" = 2 行，"a\r" = 1 行；任何 CR 都触发确认。
 PastePreview pastePreview(const std::string& normalizedText, bool confirmEnabled);
 
+struct ClipboardReadPrompt { std::string mainText, content; };
+// DS-10：字符数按码点计；预览最多 3 行、每行 60 个可见码点，控制字符沿用粘贴预览规则。
+ClipboardReadPrompt clipboardReadPrompt(const std::string& connectionName, const std::string& clipboardText);
+
 // 命令行：it2w_shell.exe --command "<命令行>"（也接受 --command=<命令行>）。
 // 返回首个本地窗格要执行的命令；未给出返回 nullopt；--command 后缺值返回空串（调用方报错）。
 std::optional<std::wstring> parseCommandArg(const std::vector<std::wstring>& argv);

@@ -27,6 +27,13 @@ foreach(t validate_tests store_tests launch_tests compose_environment_tests snap
   add_test(NAME uicfg_${t} COMMAND ${t})
 endforeach()
 
+# DS-10：剪贴板读确认文案（纯函数）。
+add_executable(clipboard_prompt_tests tests/clipboard_prompt_tests.cpp)
+target_link_libraries(clipboard_prompt_tests PRIVATE uicfg)
+foreach(mode empty short truncation controls local)
+  add_test(NAME uicfg_clipboard_prompt_${mode} COMMAND clipboard_prompt_tests ${mode})
+endforeach()
+
 # DS-14：表单与编辑操作按模式单独登记。
 add_executable(connection_form_tests tests/connection_form_tests.cpp)
 target_link_libraries(connection_form_tests PRIVATE uicfg)
@@ -78,7 +85,7 @@ if(WIN32)
     set(IT2W_BUILD_COMMIT "unknown")
   endif()
   enable_language(RC)
-  add_executable(it2w_shell WIN32 shell_win32/main.cpp shell_win32/connection_dialog.cpp shell_win32/diag_dialog.cpp shell_win32/keybinding_dialog.cpp shell_win32/it2w_shell.rc)
+  add_executable(it2w_shell WIN32 shell_win32/main.cpp shell_win32/connection_dialog.cpp shell_win32/diag_dialog.cpp shell_win32/keybinding_dialog.cpp shell_win32/clipboard_prompt.cpp shell_win32/it2w_shell.rc)
   target_compile_definitions(it2w_shell PRIVATE UNICODE _UNICODE NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
   target_compile_definitions(it2w_shell PRIVATE IT2W_BUILD_COMMIT="${IT2W_BUILD_COMMIT}")
   if(IT2W_SSH_DIRECT AND NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)

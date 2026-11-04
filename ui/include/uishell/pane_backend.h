@@ -29,6 +29,7 @@ struct CellSize { int w, h; };   // physical px, from renderer GridMetrics::from
 struct CaretRect { int x, y, w, h; bool valid; };      // renderer caret_rect_px(), client px
 
 enum class SessionState { Starting, Running, Reconnecting, Exited, Failed };
+enum class ClipboardReadDecision { AllowOnce, DenyOnce, AllowSession, DenySession };
 struct AddressChoice { std::string adapterId; std::string label; };  // 「<网卡名> <地址>」
 struct HostKeyOffer {
   std::string knownHostsName, keyType, keyBase64, fingerprint;
@@ -76,6 +77,10 @@ struct PaneEvents {                       // called on the UI thread only
   std::function<void(bool hasSelection)> onSelectionChanged;
   // 可选：搜索状态异步变化（分批计数推进 total、PENDING 落定为 found、新输出、RESTART）。空 = 不通知
   std::function<void(const SearchResult&)> onSearchUpdated;
+  // 可选：远端请求读取剪贴板；UI 稍后调用 answerClipboardRead。空 = 一律拒绝。
+  std::function<void(uint64_t requestId)> onClipboardReadRequest;
+  // 可选：本 attempt 第一次经 OSC 52 成功写入剪贴板。
+  std::function<void()> onClipboardWritten;
 };
 
 class PaneBackend {
@@ -124,6 +129,10 @@ public:
     (void)needleUtf8; (void)opt; (void)backward; return {};
   }
   virtual void clearSearch() {}   // 结束本轮搜索（itcore_search_end），清高亮层；视口不动
+  // UI 线程：答复待决的剪贴板读请求；旧 attempt / 错误 id 的答复忽略。
+  virtual void answerClipboardRead(uint64_t requestId, ClipboardReadDecision decision) {
+    (void)requestId; (void)decision;
+  }
   virtual void requestClose() = 0;
 };
 

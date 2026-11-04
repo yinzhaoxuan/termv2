@@ -39,10 +39,24 @@ struct Osc52Config { bool allowWrite = false; bool allowRead = false; uint32_t m
 int applyOsc52(itcore_core *core, const Osc52Config &cfg);
 
 // CAP-01 P06：读是否生效 = 策略 allowRead 且传输声明支持 OSC 52 读（能力门，非强制忽略 settings）。
-// ConPTY 与 Direct 目前都返回 false（D-1，待逐次确认 UI）；将来确认后直连可返回 true。
+// ConPTY 不支持读；Direct 通过此门后仍须逐次确认（DS-10）。
 inline bool osc52ReadEffective(bool allowRead, bool transportSupportsOsc52Read) {
     return allowRead && transportSupportsOsc52Read;
 }
+
+// DS-10：每个 attempt 至多一个待决读请求；请求 id 跨 reset 递增，旧答复不会命中新请求。
+class ClipboardReadGate {
+public:
+    enum class Action { Deliver, Drop, Ask, Busy };
+    Action onRequest(bool canAsk, uint64_t *id);
+    bool onAnswer(uint64_t id, uishell::ClipboardReadDecision decision);
+    void reset();
+    bool pending() const { return pendingId_ != 0; }
+private:
+    std::optional<bool> sessionAllowed_;
+    uint64_t nextId_ = 0;
+    uint64_t pendingId_ = 0;
+};
 
 // OSC52-04：CLIPBOARD_READ → encode → reply。失败只记日志，不阻断 pump；不改 OSC 语义。
 // reply 返回 0=成功，非 0=失败码（与 it2w::EnqueueResult 整型一致：1=QueueFull, 2=TooLarge, 3=InvalidState…）。

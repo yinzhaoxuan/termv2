@@ -11,6 +11,30 @@
 
 namespace it2app {
 
+ClipboardReadGate::Action ClipboardReadGate::onRequest(bool canAsk, uint64_t *id) {
+    if (id) *id = 0;
+    if (!canAsk) return Action::Drop;  // 无确认回调时，即使曾记住允许也拒绝
+    if (sessionAllowed_) return *sessionAllowed_ ? Action::Deliver : Action::Drop;
+    if (pending()) return Action::Busy;
+    pendingId_ = ++nextId_;
+    if (id) *id = pendingId_;
+    return Action::Ask;
+}
+
+bool ClipboardReadGate::onAnswer(uint64_t id, uishell::ClipboardReadDecision decision) {
+    if (!pending() || id != pendingId_) return false;
+    pendingId_ = 0;
+    using Decision = uishell::ClipboardReadDecision;
+    if (decision == Decision::AllowSession) sessionAllowed_ = true;
+    else if (decision == Decision::DenySession) sessionAllowed_ = false;
+    return decision == Decision::AllowOnce || decision == Decision::AllowSession;
+}
+
+void ClipboardReadGate::reset() {
+    sessionAllowed_.reset();
+    pendingId_ = 0;
+}
+
 itcore_colors toCoreColors(const uishell::PaneColors& colors) {
     itcore_colors out{};
     itcore_default_colors(&out);
