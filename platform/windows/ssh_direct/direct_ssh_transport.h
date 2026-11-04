@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Windows in-process SSH. One attempt per object; all protocol I/O is owner-only.
 #pragma once
 #include "ssh_session_transport.h"

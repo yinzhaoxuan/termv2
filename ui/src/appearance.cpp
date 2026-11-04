@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/settings.h"
 #include "appearance_json.h"
 #include <algorithm>

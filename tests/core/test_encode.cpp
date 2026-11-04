@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // ENC-01：encode_text / paste / key / mouse
 #include "itcore.h"
 #include <cstdio>

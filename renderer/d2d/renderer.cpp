@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Direct2D/DirectWrite 网格渲染原型（DESIGN-T06）。
 // 非 WIN32 构建：提供可链接的空实现，便于 Linux CI 编译门闸。
 #include "renderer.h"

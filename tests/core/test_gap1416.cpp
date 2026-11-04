@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // CORE-22 / CORE-23：GAP-14 SGR 子参数，GAP-16 DA / XTVERSION / DECRQSS / XTGETTCAP。
 #include "itcore.h"
 #include <cstdio>

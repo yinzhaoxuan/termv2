@@ -1,4 +1,19 @@
-# 第三方声明：Direct SSH
+# 第三方声明
+
+termv2 采用 GPL-3.0-or-later（见 [LICENSE](LICENSE)）。完整的依赖与许可清单见 [docs/LICENSE-AUDIT.md](docs/LICENSE-AUDIT.md)。
+
+## 所有 Windows 构建
+
+| 组件 | 许可 | `licenses/` 中的文件 |
+|---|---|---|
+| nlohmann/json 3.11.3（`third_party/nlohmann_json`） | MIT | `nlohmann_json-LICENSE.txt` |
+| Unicode 字符数据库派生表（宽度、大小写折叠） | Unicode License v3 | `Unicode-LICENSE.txt` |
+| MinGW-w64 运行时（libstdc++ / libgcc，静态链接） | GPL-3.0 with GCC Runtime Library Exception | — |
+| MinGW-w64 运行时（winpthreads / CRT，静态链接） | MIT 风格 / ZPL 2.1 | 待补（见 LICENSE-AUDIT §5） |
+
+`it2w_license_notices` 目标随 `it2w_shell` 构建，把 `termv2-LICENSE.txt` 与上表文件放进 `it2w_shell.exe` 旁的 `licenses/`。
+
+## Direct SSH
 
 `IT2W_SSH_DIRECT=ON` 的 MinGW 产品静态链接以下固定依赖；源码 URL 和强制 hash 校验见
 [`cmake/SshDirectDeps.cmake`](cmake/SshDirectDeps.cmake)。
@@ -20,5 +35,5 @@ libssh2 本地补丁 [`cmake/ssh_a_openssh_only.cmake`](cmake/ssh_a_openssh_only
 - `THIRD-PARTY-NOTICES.md`：本声明。
 
 独立 `ssh_a_probe` 使用同一套复制命令，目录仍为 `ssh-a-licenses/`。
-上述许可均与本项目采用的 GPLv3 兼容；对应源码的随包或书面获取途径见
+上述许可均与本项目采用的 GPL-3.0-or-later 兼容；对应源码的随包或书面获取途径见
 [`UPSTREAM.md`「第三方静态依赖」](UPSTREAM.md#第三方静态依赖)。源码链接以仓库根目录为基准。

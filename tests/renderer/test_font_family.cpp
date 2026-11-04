@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #undef NDEBUG  // assert 在任何构建类型下都必须执行
 // FONT-02：启动字体族选择——找不到时退回 Consolas → Courier New，全都没有返回空串
 #include "font_family.h"

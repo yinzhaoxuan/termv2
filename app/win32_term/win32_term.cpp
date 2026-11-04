@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T06 最小 Win32 终端实验窗：itcore + ConPtyTransport + itrender_d2d 单窗串联。
 // 仅 WIN32 构建。键盘/IME → encode → enqueue；输出 tryPop → feed；定时快照绘制；
 // resize：先 itcore_resize(gen) 再 transport.resize(gen)；关闭按规格 close+wait。

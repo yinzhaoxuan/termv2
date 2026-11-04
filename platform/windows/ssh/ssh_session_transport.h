@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Windows SSH session interface shared by SSH and Hyper-V transports.
 #pragma once
 #ifndef _WIN32

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "itcore_mock.h"
 #include "../layout/cell_style.h"
 #include <string>

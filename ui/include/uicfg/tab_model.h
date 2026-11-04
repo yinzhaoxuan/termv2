@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // 第 12.1 / 12.3：标签栏状态模型。每个标签拥有一棵布局树。
 #include <functional>

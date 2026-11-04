@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T07 Linux 侧：ssh -G 解析/快照生效值校验、退出码与错误映射；可选的本机 sshd 实连（127.0.0.1:22422/22423）。
 // 实连只用 ssh/ssh-keyscan，不读取或输出任何密码/口令文件内容。
 #include "ssh_session.h"

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* IME 预编辑（preedit）内联布局与候选窗锚点（平台无关）。只产出覆盖层几何，绝不写入核心。
    cluster 宽度由调用方按核心宽度规则给出（1 或 2）。 */
 #pragma once

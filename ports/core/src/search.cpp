@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // iTerm2 Windows 派生核心：滚动历史纯文本搜索（SRCH-01）。见 search.h 与 itcore.h 的 itcore_search_* 注释。
 #include "search.h"

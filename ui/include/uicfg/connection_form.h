@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-14：连接编辑器的可移植表单、分组与菜单规则。
 #pragma once
 #include "uicfg/store.h"

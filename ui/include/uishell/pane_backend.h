@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // T08 shell <-> backend contract. UI owns this header; 架构师 implements PaneBackend
 // on top of win32_term / ISwapChainHost / SessionTransport. Platform-neutral on purpose

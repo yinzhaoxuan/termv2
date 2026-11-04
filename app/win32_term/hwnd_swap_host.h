@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // HWND → DXGI 交换链宿主（DESIGN-T06 §1.1）。仅 WIN32。
 #ifndef _WIN32

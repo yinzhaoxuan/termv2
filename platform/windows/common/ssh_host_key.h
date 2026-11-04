@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // SSH 主机密钥展示数据：跨平台共享。
 #pragma once
 #include <string>

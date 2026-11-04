@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// 数据来自 Unicode 字符数据库（UCD），适用 Unicode License v3，见 third_party/unicode/LICENSE.txt
 // 由 Python unicodedata 15.1.0 生成：Unicode 简单大小写折叠（CaseFolding.txt 的 C+S 项近似：casefold 为单码点取之，
 // 否则取单码点 lower）。格式 {码点, 折叠后}，按码点升序。用于 itcore_search 不区分大小写/smart 匹配。
 {0x41,0x61}, {0x42,0x62}, {0x43,0x63}, {0x44,0x64}, {0x45,0x65}, {0x46,0x66},

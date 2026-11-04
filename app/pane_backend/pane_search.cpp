@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "pane_search.h"
 #include <algorithm>
 #include <climits>

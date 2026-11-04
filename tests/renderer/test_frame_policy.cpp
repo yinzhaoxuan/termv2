@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "frame_policy.h"
 #include "itcore.h"
 #include <cstdio>

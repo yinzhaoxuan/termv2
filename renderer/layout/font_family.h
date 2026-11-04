@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // 启动字体族选择（平台无关，FONT-02）：settings 里的族名在系统字体集合里找不到时，
 // 依次退回内置等宽默认（Consolas → Courier New），不再拿不存在的族名建 TextFormat、度量退回估算。

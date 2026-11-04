@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* 格坐标与像素换算（与平台无关，渲染、IME 候选窗、鼠标命中、resize 共用这一处）。
    列宽来自字体主字形的整数化 advance，与 DirectWrite 回退字体无关：字体回退不改变列数（14.2）。 */
 #pragma once

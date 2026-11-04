@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # T06 最小 Win32 终端实验窗（仅 Windows / mingw 交叉编译）
 if(NOT WIN32)
   message(STATUS "跳过 app/win32_term（非 WIN32）")

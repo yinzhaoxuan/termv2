@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // HV-01（T09 平台无关逻辑）：VM ID 校验、查询 JSON 解析、地址筛选/选择、解析状态机（VM-01 场景的逻辑部分）。
 #include "hyperv_resolve.h"
 #include "ssh_snapshot.h"

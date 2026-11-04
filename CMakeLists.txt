@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.24)
 project(iterm2_win LANGUAGES C CXX)
 # mingw（真机包）默认 RelWithDebInfo：带调试符号，便于真机定位

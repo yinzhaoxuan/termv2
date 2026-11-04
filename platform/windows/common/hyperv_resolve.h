@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T09 Hyper-V 地址解析（设计第 7、16、17 节；docs/T09-Hyper-V辅助-v0.1.md）。跨平台纯逻辑：
 // VM ID 校验、查询结果 JSON 解析、地址筛选与选择、解析状态机（计时、启动一次、回退、歧义）。
 // Windows 层（platform/windows/hyperv）只负责运行固定 PowerShell 脚本并把输出交给这里。

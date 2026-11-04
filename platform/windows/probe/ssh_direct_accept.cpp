@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // S5 Windows acceptance carrier: actual product transport, one shell/channel
 // for the combined six (close-auth needs a separate interrupted attempt).
 // Env/factory selection, ssh.exe/snapshot checks and compat modes comparison

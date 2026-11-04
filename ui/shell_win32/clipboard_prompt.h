@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-10：剪贴板读取确认；关闭或创建失败均按拒绝一次处理。
 #pragma once
 #include <windows.h>

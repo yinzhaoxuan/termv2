@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // NEW-02：增量组计数与快照完整重排逐步对照。
 #include "screen.h"
 #include <cstdio>

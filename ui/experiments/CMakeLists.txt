@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # T08 外壳选型实验（独立工程，不进顶层构建）。
 #   cmake -S ui/experiments -B /tmp/exp-mingw -DCMAKE_TOOLCHAIN_FILE=<repo>/cmake/mingw-w64.cmake
 cmake_minimum_required(VERSION 3.20)

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // SessionTransport 的 ConPTY 实现（T03A 规格 §1、§2）。仅 Windows 编译。
 // 未实机验证：所有 ConPTY / Job / 管道 / 关闭时序行为均待 T03A 在 Win11 上实测。
 #pragma once

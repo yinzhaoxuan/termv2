@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // SSH-CFG-01（生成器部分）、IO-01（调度逻辑部分）的 Linux 单测。
 #include "io_queues.h"
 #include "ssh_snapshot.h"

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-15：诊断包收集与脱敏；不改变原始配置和日志。
 #pragma once
 #include "uicfg/settings.h"

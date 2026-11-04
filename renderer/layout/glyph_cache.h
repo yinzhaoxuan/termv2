@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* 平台无关的字形缓存（LRU + 字节预算 + 分页 shelf 图集）与字体回退规划（DESIGN-T06，14.2）。
    列数只由核心的 width/CONTINUATION 决定，字体回退只换 face，绝不改变列数。 */
 #pragma once

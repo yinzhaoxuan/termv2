@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/snapshot_cleanup.h"
 #include <algorithm>
 #include <string_view>

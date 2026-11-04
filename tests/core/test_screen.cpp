@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // CORE-03/04/05 与 MEM-01 子集：屏幕模型、CSI 默认参数、历史预算。
 #include "itcore.h"
 #include <cstdio>

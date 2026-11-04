@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 """从 Unicode UCD 生成 ports/core/src/ucd_width_table.inc（静态区间表）。
 
 对照上游 iTerm2 sources/CharacterSets/iTermCharacterWidth.c 与 ScreenChar.m
@@ -108,6 +108,8 @@ def main():
     amb -= comb | ign | wide
     out = os.path.abspath(args.o)
     with open(out, "w", encoding="utf-8") as o:
+        o.write("// SPDX-License-Identifier: GPL-3.0-or-later\n")
+        o.write("// 数据来自 Unicode 字符数据库（UCD），适用 Unicode License v3，见 third_party/unicode/LICENSE.txt\n")
         o.write("// 由 ports/core/tools/gen_width_table.py 生成，勿手改。\n")
         o.write(f"// Unicode {args.version}; 来源: " + ", ".join(os.path.basename(v[1]) for v in src.values()) + "\n")
         o.write(f"#define ITCORE_UCD_VERSION \"{args.version}\"\n")

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 滚动历史搜索的后端驱动（平台无关，UI 线程）：把 uishell findInScrollback / clearSearch 转发到
 // itcore_search_*（草案 /workspace/qa/itcore_search-草案-v0.2.md），step 按预算分批，由定时器续跑。
 // v0.1 只做纯文本；regex=true 直接 found=false，不退回子串搜索。

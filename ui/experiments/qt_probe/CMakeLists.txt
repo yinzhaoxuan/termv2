@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Qt 6 Widgets 版选型探针（与 win32_probe 同四个实验）。
 # 云端交叉：cmake -S . -B /tmp/exp-qt -DCMAKE_TOOLCHAIN_FILE=<repo>/cmake/mingw-w64.cmake \
 #   -DCMAKE_PREFIX_PATH=<qt>/6.8.3/mingw_64 -DQT_HOST_PATH=<qt>/6.8.3/gcc_64

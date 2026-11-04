@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // 第 12.3「点击重连」：每次重连新建 Session 并增加 attempt ID；
 // 每窗格最多保留一个旧 attempt 的只读文本（受第 15.4 节预算限制）。

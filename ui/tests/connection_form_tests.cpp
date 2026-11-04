@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-14：连接编辑器的表单、分组、菜单与保存冲突。
 #include "uicfg/connection_form.h"
 #include <algorithm>

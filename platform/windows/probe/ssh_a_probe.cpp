@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Windows A acceptance probe. One worker exclusively owns each libssh2 session.
 // No ConPTY/ssh.exe, product transport, terminal parser, or UI integration.
 #include <winsock2.h>

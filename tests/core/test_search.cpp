@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // SRCH-01：itcore_search 纯文本搜索（草案 /workspace/qa/itcore_search-草案-v0.2.md §5 的 SRCH-01～36）。
 // v0.1 不做正则：SRCH-13～15 整条跳过、SRCH-10～12 的正则部分跳过（v0.2 引入 PCRE2 后补）。
 #include "itcore.h"

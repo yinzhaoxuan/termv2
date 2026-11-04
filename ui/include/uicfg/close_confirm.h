@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // 第 12.3：关闭窗格／标签／应用的确认汇总。只看 SessionState，永远只弹一次。
 #include <functional>

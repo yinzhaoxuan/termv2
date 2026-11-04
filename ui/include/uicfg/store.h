@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 第 13.3 节：connections.json 读写、schema 检查、原子保存与备份
 #pragma once
 #include <filesystem>

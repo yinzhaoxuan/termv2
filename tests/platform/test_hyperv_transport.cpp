@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Hyper-V startup handoff regression: no PowerShell, VM, or SSH process required.
 #include "hyperv_transport.h"
 #include "hyperv_query.h"

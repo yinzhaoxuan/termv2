@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #undef NDEBUG  // assert 在任何构建类型下都必须执行
 #include "cursor_geometry.h"
 #include "itcore_mock.h"

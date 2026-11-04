@@ -3,7 +3,7 @@
 上游：https://github.com/gnachman/iTerm2 固定提交 `f29420ae4d3e0f986ee24ea286885d32af58175a`。
 
 本文描述**当前代码**与上游的对应关系；与代码不符时以代码为准并修正本文。各批次的开发过程见 `docs/HISTORY-2026-10.md` 与 `docs/STATUS.md`。
-许可：iTerm2 为 GNU GPL v2；派生文件保留来源声明并按 GPL v2 发布（`SPDX-License-Identifier: GPL-2.0-only`）。
+许可：iTerm2 为「GPL v2 或更新版本」（因 Apache-2.0 依赖实际按 GPL v3）。本项目整体采用 GPL-3.0-or-later，派生文件保留来源声明（`SPDX-License-Identifier: GPL-3.0-or-later`）；上游文件哈希见 `docs/UPSTREAM-FILES.md`，依赖审计见 `docs/LICENSE-AUDIT.md`。
 
 ## T04：CSI / Parser
 

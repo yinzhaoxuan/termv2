@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Probe-only protocol/CLI logic. No product transport or terminal parser involved.
 #pragma once
 #include <algorithm>

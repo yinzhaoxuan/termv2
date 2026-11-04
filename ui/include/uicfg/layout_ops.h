@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // 第 12.3 / 12.4：与外壳无关的布局操作（分屏、关闭、焦点移动、分隔条限制）
 #include <optional>

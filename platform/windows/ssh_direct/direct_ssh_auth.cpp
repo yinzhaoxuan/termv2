@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "direct_ssh_internal.h"
 #include <cstdlib>
 

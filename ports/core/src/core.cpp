@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 // iTerm2 Windows 派生核心：C ABI 实现（设计 14.1 / 14.2）。解析见 vt_parser；屏幕见 screen。
 #include "itcore.h"
 #include "vt_parser.h"

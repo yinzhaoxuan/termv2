@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Toolchain for the ssh_a libssh2 ExternalProject.
 # MinGW re-roots absolute OPENSSL_ROOT_DIR under CMAKE_FIND_ROOT_PATH; put the
 # pinned OpenSSL prefix first and pass -DOPENSSL_ROOT_DIR=/.

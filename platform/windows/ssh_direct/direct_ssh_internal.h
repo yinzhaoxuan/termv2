@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Implementation shared by the transport, host-key and agent adapters only.
 #pragma once
 // Winsock must precede the Windows transport interface (which includes windows.h).

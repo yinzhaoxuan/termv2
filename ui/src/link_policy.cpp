@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/link_policy.h"
 #include <cctype>
 namespace uicfg {

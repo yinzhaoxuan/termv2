@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 // itcore_test_tokens <向量文件> [--case NAME] [--check]
 //   向量文件为 /workspace/qa/vectors/ 格式的 JSON（数组，每项含 case/name/hex/splits）：
 //     对每个向量按 whole 切分输出规范化 Token（每行一个 JSON），向量之间以 "# case name" 注释行分隔；

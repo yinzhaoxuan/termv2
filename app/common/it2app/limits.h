@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 后端公共上限常量（不依赖 ui/；UI 可 include 后 using）
 #pragma once
 #include <cstddef>

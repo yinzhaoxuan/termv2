@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T08 PaneBackend（Win32）。线程模型：
 // - 传输回调在传输内部线程 → 只往 UiDispatchQueue post，wake = PostMessage(子窗口, WM_PANE_WAKE)。
 // - 子窗口消息在 UI 线程 drain 队列：喂核心、处理核心事件、present、回调 PaneEvents。

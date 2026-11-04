@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 get_filename_component(GOLDEN_NAME ${GOLDEN} NAME_WE)
 execute_process(COMMAND ${EXE} ${VEC} OUTPUT_VARIABLE out RESULT_VARIABLE rc)
 if(NOT rc EQUAL 0)

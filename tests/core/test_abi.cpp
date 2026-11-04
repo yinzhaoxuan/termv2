@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // ABI-01 / PARSE-01 部分：feed_result 语义、事件释放、EOF、超大 OSC。
 #include "itcore.h"
 #include <cstdio>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include <cstdio>
 #include "uicfg/launch.h"
 using namespace uicfg;

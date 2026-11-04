@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // T08 Win32 外壳的平台无关逻辑（Linux 单测）：快捷键解析与匹配、剪贴板粘贴换行、
 // 链接确认文案、会话状态文案、标签栏 ↔ workspace 转换。

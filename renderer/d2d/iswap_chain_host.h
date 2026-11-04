@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // ISwapChainHost：渲染器与窗口解耦（DESIGN-T06 §1.1）。
 // WIN32 专用；Linux 宿主可提供空实现以便头文件被包含（原型编译门闸）。

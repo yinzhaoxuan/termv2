@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/launch.h"
 #include "environment_names.h"
 #include <algorithm>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T07 SSH 会话：跨平台纯逻辑（ssh -G 解析、退出码/错误映射、输出尾部缓存）。
 // Windows 层 SshTransport 只负责落盘快照与在 ConPTY 中启动 ssh -F <快照> <alias>。
 #pragma once

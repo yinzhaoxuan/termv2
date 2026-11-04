@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-15：按规则登记；所有样本均为虚构值。
 #include "uicfg/diag_bundle.h"
 #include <cstdio>

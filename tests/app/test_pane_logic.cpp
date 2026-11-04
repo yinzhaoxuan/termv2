@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T08 PaneBackend 平台无关逻辑单测（PANE-01）
 #include "pane_logic.h"
 #include "frame_pump.h"

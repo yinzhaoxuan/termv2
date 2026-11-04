@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #undef NDEBUG
 #include "uicfg/shell_logic.h"
 #include <cassert>

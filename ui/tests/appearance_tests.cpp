@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/settings.h"
 #include "cell_style.h"
 #include <cstdio>

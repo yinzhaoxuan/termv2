@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # libssh2 1.11.1 tries Pageant BEFORE OpenSSH, even when identity_path is set.
 # Remove only that backend-table entry so this probe cannot accidentally pass
 # with Pageant. The OpenSSH synchronous I/O/auth implementation is unmodified.

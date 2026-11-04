@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* 平台无关的颜色与脏行解析（DESIGN-T06 §3.2、§3.6）。D2D 后端只消费这里的结果。 */
 #pragma once
 #include "itcore.h"

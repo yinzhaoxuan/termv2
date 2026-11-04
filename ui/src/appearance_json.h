@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // settings 与导入共用的 JSON 规则，不作为公共接口。
 #pragma once
 #include "uicfg/settings.h"

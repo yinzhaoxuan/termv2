@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 未实机验证：见 conpty_transport.h。
 #include "conpty_transport.h"
 #include "ssh_snapshot.h"

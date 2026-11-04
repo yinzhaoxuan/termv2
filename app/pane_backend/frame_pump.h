@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // pump() → present() 的平台无关核心：Win32PaneBackend 与 Linux 端到端测试走同一段代码。
 #pragma once
 #include "pane_logic.h"

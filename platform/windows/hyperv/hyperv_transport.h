@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T09 HyperVTransport：先在后台线程按 VM ID 解析地址（HyperVResolver + 固定 PowerShell 查询），
 // 得到地址后用注入的 SSH 传输连接。对外方法与 SshSessionTransport 相同，便于后端 Transport 抽象复用。
 // 解析期间：状态 Starting；输入/回复/粘贴丢弃（返回 Ok）；resize 记住最后尺寸供 ssh 启动；close 取消解析。

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // Direct2D/DirectWrite 网格渲染原型（DESIGN-T06）。
 // 字体回退不改变列数：字形 advance 不参与定位，簇强制锚在 cell_rect（14.2）。

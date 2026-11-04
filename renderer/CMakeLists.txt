@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # 渲染：平台无关的格度量与模拟快照（T06 原型与测试用，不与 itcore 同时链接）
 add_library(itrender_layout INTERFACE)
 target_include_directories(itrender_layout INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/layout)

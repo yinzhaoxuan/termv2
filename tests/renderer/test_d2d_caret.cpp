@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #undef NDEBUG  // 真机包是 Release 构建，assert 不能被编译掉
 #include "renderer.h"
 #include "itcore_mock.h"

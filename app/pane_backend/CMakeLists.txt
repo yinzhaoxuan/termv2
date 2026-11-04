@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # T08：uishell::PaneBackend 实现。平台无关逻辑所有平台编译并单测；Win32 实现只在 WIN32 构建。
 add_library(it2w_pane_logic STATIC pane_logic.cpp pane_search.cpp)
 target_include_directories(it2w_pane_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/ui/include)

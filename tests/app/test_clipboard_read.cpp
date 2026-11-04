@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #undef NDEBUG
 #include "pane_logic.h"
 #include <cassert>

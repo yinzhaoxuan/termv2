@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "hyperv_resolve.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>

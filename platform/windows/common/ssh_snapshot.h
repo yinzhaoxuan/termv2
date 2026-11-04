@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // SSH 配置快照生成（设计 13.4，T03A 规格 §3）与 Windows 进程参数/环境规则（13.5）。
 // 跨平台纯逻辑，便于在 Linux 上单测；Windows 层只负责 UTF-8↔UTF-16 转换与落盘。
 #pragma once

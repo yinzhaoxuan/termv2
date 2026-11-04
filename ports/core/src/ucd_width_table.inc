@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// 数据来自 Unicode 字符数据库（UCD），适用 Unicode License v3，见 third_party/unicode/LICENSE.txt
 // 由 ports/core/tools/gen_width_table.py 生成，勿手改。
 // Unicode 16.0.0; 来源: EastAsianWidth.txt, DerivedGeneralCategory.txt, DerivedCoreProperties.txt, HangulSyllableType.txt, emoji-data.txt, emoji-variation-sequences.txt
 #define ITCORE_UCD_VERSION "16.0.0"

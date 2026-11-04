@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #undef NDEBUG  // assert 在任何构建类型下都必须执行
 #include "itcore_mock.h"
 #include "grid_metrics.h"

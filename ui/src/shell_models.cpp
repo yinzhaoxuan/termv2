@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/shell_models.h"
 #include <algorithm>
 #include <cmath>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/workspace.h"
 #include <algorithm>
 #include <functional>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 第 13 节配置模型（connections.json）
 #pragma once
 #include <cstdint>

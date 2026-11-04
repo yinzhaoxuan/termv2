@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/close_confirm.h"
 namespace uicfg {
 bool stateNeedsConfirm(uishell::SessionState s) {

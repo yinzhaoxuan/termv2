@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Portable consumer-side checks for the product API acceptance harness.
 #pragma once
 #include "ssh_a_probe_logic.h"

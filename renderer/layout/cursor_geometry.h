@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* 平台无关的光标几何（DECSCUSR）、闪烁与 OSC 8 链接悬停下划线（DESIGN-T06）。D2D 只按这里的矩形画。
    光标样式来自 itcore_snapshot_cursor_style（DECSCUSR Ps），D2DRenderer::present_frame 经 decscusr_to_style 使用。 */
 #pragma once

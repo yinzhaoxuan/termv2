@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // CORE-06 宽度表 / CORE-07 OSC 8 / CORE-08 快照增量引用字素池。
 #include "itcore.h"
 #include "ucd_width.h"

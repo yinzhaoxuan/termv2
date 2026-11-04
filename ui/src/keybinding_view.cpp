@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/keybinding_view.h"
 #include "uicfg/shell_logic.h"
 #include <algorithm>

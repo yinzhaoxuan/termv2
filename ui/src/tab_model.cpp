@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/tab_model.h"
 namespace uicfg {
 size_t TabBar::newTab(const std::string& conn, const std::string& title) {

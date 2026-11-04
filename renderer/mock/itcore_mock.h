@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* 渲染用模拟快照：实现 itcore.h 的快照访问器，供 T05 完成前驱动渲染原型与测试。
    不与真实 itcore 同时链接。 */
 #pragma once

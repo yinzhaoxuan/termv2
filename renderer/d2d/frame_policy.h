@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // generation 不一致时的布局保持（渲染评审第 5 点）。平台无关，可在 Linux 单测。
 // 规则：快照 generation 与期望一致（或未设期望）时采用快照布局；不一致时保留上一次一致帧的布局，

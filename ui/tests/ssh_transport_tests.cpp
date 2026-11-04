@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-13：按连接选择传输的存储、校验与启动描述。
 #include "uicfg/launch.h"
 #include <cstdio>

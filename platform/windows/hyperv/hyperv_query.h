@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T09：运行固定 PowerShell 脚本查询/启动本机 Hyper-V 虚拟机（docs/T09-Hyper-V辅助-v0.1.md §2.1）。
 // VM ID 经 normalizeVmId 校验后由环境变量 IT2W_VMID 传入；脚本文本为常量，不拼接任何用户内容。
 // 未实机验证：须在启用 Hyper-V 的 Win11 上覆盖 VM-01。

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // T08 外壳交互模型（平台无关，Linux 单测）：分隔条拖动、标签拖放、滚动条、会话树文案、
 // 字号快捷键、按键路由（sendKey / 文本 / IME）、旧 attempt 面板布局。

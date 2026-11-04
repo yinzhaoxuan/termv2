@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* 搜索高亮层（平台无关，草案 itcore_search v0.2 §2.6）：独立于 cell flag 的渲染层，
    每帧按视口的命中区间建表，resolve_cell 逐格查询后叠色。核心网格不改。 */
 #pragma once

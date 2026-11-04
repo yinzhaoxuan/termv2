@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-2：平台无关的启动描述；Win32 边界只做转换与接线。
 #pragma once
 #include "uicfg/store.h"

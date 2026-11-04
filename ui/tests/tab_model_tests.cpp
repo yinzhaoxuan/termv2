@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/tab_model.h"
 #include <cstdio>
 static int fails = 0;

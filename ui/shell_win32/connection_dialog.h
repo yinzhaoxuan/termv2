@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-14：模态对话框只通过输入和提交回调接触配置。
 #pragma once
 #include <windows.h>

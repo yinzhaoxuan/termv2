@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """T04 补充向量（OSC/DCS/ESC/UTF-8 边界），格式与 /workspace/qa/vectors/core01_02.json 相同。"""
 import json, sys
 sys.path.insert(0, "/workspace/qa/vectors")

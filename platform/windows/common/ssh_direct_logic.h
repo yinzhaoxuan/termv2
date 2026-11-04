@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Portable direct-SSH policy only. No transport, OS or crypto-library dependency.
 #pragma once
 #include "ssh_host_key.h"

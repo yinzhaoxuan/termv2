@@ -378,7 +378,7 @@ C 批全部仍开放。C1 有第 16–18 轮的文字记录（ADR-002 / STATUS�
 - [ ] E3 会话和应用两级内存账本，含受控拒绝（GAP-09）
 - [~] E4 根 CMake 默认使用仓库内 nlohmann；补齐 core01_02.json；缺数据时让必需测试失败（GAP-11）——`299b3c1`：nlohmann 默认仓库内；`-DIT2W_REQUIRE_VECTORS=ON` 时缺向量即失败。`core01_02.json` 本身仍在旧 Linux 机器的 `/workspace/qa/vectors/`，未入仓。
 - [~] E5 CMakePresets、根 README、GitHub Actions（Linux plain/ASan/TSan + Windows MSVC）（GAP-11）——`299b3c1`：预设、README、CI（linux / asan / tsan + mingw 交叉编译；mingw-direct 手动触发）。没有 MSVC 任务（Direct 只支持 MinGW）。
-- [ ] E6 统一许可表述；补根 LICENSE、SPDX、上游文件哈希清单、依赖审计（GAP-12）
+- [x] E6 统一许可表述；补根 LICENSE、SPDX、上游文件哈希清单、依赖审计（GAP-12）——整体 GPL-3.0-or-later；`docs/UPSTREAM-FILES.md`、`docs/LICENSE-AUDIT.md`；所有构建附带 `licenses/`。余项：MinGW 运行时许可文本打包。
 - [x] E7 STATUS/SOURCE_MAP 去除陈旧条目，变更历史单独存放（§6）——STATUS 顶部「当前状态」表 + 按日流水；10 月快照原样移到 `docs/HISTORY-2026-10.md`（开头列出已过时的说法）；SOURCE_MAP 改正宽度表、快照池、编码、历史计数等过时描述。
 - [ ] E8 GlyphCache 图集与 glyph run 渲染路径（STATUS 第 4 批，也是连字的前提）
 

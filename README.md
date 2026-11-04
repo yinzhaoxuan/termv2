@@ -43,5 +43,9 @@ cmake --build --preset mingw-direct -j8
 - [剩余工作与推荐顺序](docs/TODO.md)
 - ADR：[窗格 pump](docs/ADR-001-pump状态机.md)、[OSC 52 读能力](docs/ADR-002-CAP01-P06-osc52-read.md)、[Direct SSH](docs/ADR-003-ssh-direct.md)
 - [启动描述与 B 批设计](docs/DS-2-启动描述与B批.md)
-- [上游来源](UPSTREAM.md)
-- [第三方声明](THIRD-PARTY-NOTICES.md)
+- [上游来源](UPSTREAM.md)、[上游文件清单](docs/UPSTREAM-FILES.md)
+- [第三方声明](THIRD-PARTY-NOTICES.md)、[许可与依赖审计](docs/LICENSE-AUDIT.md)
+
+## 许可
+
+GPL-3.0-or-later，见 [LICENSE](LICENSE)。`ports/core` 按 iTerm2（GPL v2 或更新版本）改写，来源见 [UPSTREAM.md](UPSTREAM.md)。

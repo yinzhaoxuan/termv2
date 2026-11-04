@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // t03a_probe：T03A 最小读写驱动。经 ConPtyTransport 启动一个程序，把本进程 stdin 的行
 // 作为用户输入写入（行尾 CR），原始输出字节写到 stdout 与可选日志文件，结束时打印诊断。
 // 用法：

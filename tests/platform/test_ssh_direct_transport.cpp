@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Windows-only deterministic unit tests; no DNS, socket, sshd or agent required.
 #include "direct_ssh_internal.h"
 #include <cassert>

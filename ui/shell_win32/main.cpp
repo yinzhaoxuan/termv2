@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T08 Win32 主外壳：左侧会话树、标签栏、窗格区（每窗格一个容器 HWND，后端在其上建子窗口与交换链）、状态栏。
 // 状态全部放在 uicfg 模型里（tab_model / session_tree / close_confirm / reconnect / shell_logic），
 // 这里只做 Win32 胶水。UTF-8 ↔ UTF-16 只在 Win32 边界转换。未实机验证。

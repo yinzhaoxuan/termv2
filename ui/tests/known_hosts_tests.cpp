@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/known_hosts.h"
 #include <cstdio>
 #include <fstream>

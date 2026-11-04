@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 启动时清理残留 SSH 快照
 #pragma once
 #include <filesystem>

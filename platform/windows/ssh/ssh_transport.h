@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T07 SshTransport：在 ConPTY 中启动 `ssh.exe -F <快照> <alias>`（不经 shell 拼接）。
 // 快照每个 attempt 独立一份，写到应用私有目录，attempt 结束由 ConPtyTransport 删除。
 // 未实机验证：Windows 自带 OpenSSH、ConPTY 下的提示交互、快照路径编码均待 DESKTOP-HOODQAJ。

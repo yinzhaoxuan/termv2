@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 // 第 12.1 / 12.3：左侧会话树模型（分组、搜索、运行标记、删除／修改连接语义）
 #include <map>

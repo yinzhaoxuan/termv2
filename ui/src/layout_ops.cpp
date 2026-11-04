@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/layout_ops.h"
 #include <algorithm>
 #include <cmath>

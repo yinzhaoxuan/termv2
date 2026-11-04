@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "diag_dialog.h"
 #include "resource.h"
 #include "win32_text.h"

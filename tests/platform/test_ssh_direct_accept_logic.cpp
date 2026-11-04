@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "ssh_direct_accept_logic.h"
 #include <cassert>
 #include <cstdio>

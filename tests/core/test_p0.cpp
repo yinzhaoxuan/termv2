@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // CORE-14..：核心未移植序列清单 P0 的测试向量（字符集、制表位、SGR 扩展、?5、DECALN、DECSTR、DECSCUSR、DEC DSR、模式）。
 #include "itcore.h"
 #include <cstdio>

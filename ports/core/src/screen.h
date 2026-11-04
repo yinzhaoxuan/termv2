@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // iTerm2 Windows 派生核心：屏幕模型（T05）。
 // 派生自 iTerm2（https://github.com/gnachman/iTerm2，固定提交

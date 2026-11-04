@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "hyperv_query.h"
 #include "conpty_transport.h"   // widen/narrow
 #include "ssh_snapshot.h"       // EnvList / filterChildEnvironment

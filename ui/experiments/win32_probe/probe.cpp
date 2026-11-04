@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T08 外壳选型实验：Win32/HWND 基线探针（对照 WinUI 3 / Qt）。
 // 四个实验：1 IME 候选窗定位  2 便携启动  3 分屏 20×5 最小网格  4 快捷键捕获。
 // 所有观察写入 exe 同目录的 probe-results-*.txt（不可写时退回 %TEMP%），同时显示在主窗口日志里。

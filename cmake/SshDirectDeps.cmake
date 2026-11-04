@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Reproducible source inputs (upstream release archives, never host DLLs).
 # libssh2 1.11.1: BSD-3-Clause (+ agent_win.c's retained BSD-2-Clause notices).
 # OpenSSL 3.5.9: Apache-2.0. License files are copied alongside the probe.

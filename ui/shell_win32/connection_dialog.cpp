@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-14：资源对话框与异步 VM 列表；配置逻辑在 uicfg。
 #include "connection_dialog.h"
 #include "resource.h"

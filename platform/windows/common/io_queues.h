@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 输入调度与输出水位（T03A 规格 §2.4、§2.5，设计 15.2）。纯逻辑、非线程安全：
 // ConPTY 传输层在自己的锁内调用；Linux 上单测。时间由调用方传入（毫秒，单调时钟）。
 #pragma once

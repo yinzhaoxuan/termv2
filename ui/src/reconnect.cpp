@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/reconnect.h"
 namespace uicfg {
 int PaneAttempts::reconnect(std::string out) {

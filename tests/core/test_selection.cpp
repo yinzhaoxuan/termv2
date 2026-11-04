@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // CORE-11 模式查询 / DECRQM；CORE-12 选区；ENC-02 粘贴标记清洗
 #include "itcore.h"
 #include "cell_style.h"

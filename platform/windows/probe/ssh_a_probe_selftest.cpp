@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "ssh_a_probe_logic.h"
 #include <cstdio>
 #include <cstdlib>

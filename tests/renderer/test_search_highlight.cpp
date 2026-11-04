@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #undef NDEBUG  // assert 在任何构建类型下都必须执行
 // SRCH-HL：搜索高亮层（建表健壮性、O(1) 查询、清除、与 resolve_cell 的叠加顺序、脏行）
 #include "cell_style.h"

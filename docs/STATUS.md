@@ -14,7 +14,18 @@
 
 - **测试**：macOS 本机 ctest 164 项全过；CI 每次推送跑 linux / asan / tsan / mingw。
 - **最大缺口**：上表「未实机」的部分全部没有在 Windows 上跑过。手测清单汇总在 [TODO.md](TODO.md) §1（每个设计文档的「只能在 Windows 上验」一节）。手测结果请写进本文件，并附「导出诊断包…」里的提交号与 Windows 版本（REVIEW C6）。
+- **许可**：GPL-3.0-or-later（[LICENSE-AUDIT.md](LICENSE-AUDIT.md)）。
 - **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认待 ADR（TODO §2.1）。OSC 52 读写默认全关。
+
+## 2026-11-04：E6 许可统一（GPL-3.0-or-later）
+
+- 项目所有者决定整体采用 **GPL-3.0-or-later**：上游 iTerm2 为「GPL v2 或更新版本」（其 `COPYING` 说明实际按 v3）；Direct 静态链接的 OpenSSL 3（Apache-2.0）与原先标的 `GPL-2.0-only` 不兼容。
+- 根目录 `LICENSE`（GPLv3 全文，SHA-256 与 gnu.org 一致）；`third_party/unicode/LICENSE.txt`（Unicode License v3）。
+- SPDX：201 个项目源文件统一为 `GPL-3.0-or-later`（新增 188、替换 13 个 `GPL-2.0-only`）；生成的 UCD 宽度表与大小写折叠表注明 Unicode 数据来源（生成脚本同步）。
+- 新增 `it2w_license_notices`：所有 Windows `it2w_shell` 构建都把 termv2 / nlohmann_json / Unicode 许可与 THIRD-PARTY-NOTICES 放进 `licenses/`（此前只有 Direct 构建有）。
+- 文档：[UPSTREAM-FILES.md](UPSTREAM-FILES.md)（19 个参照过的上游文件在固定提交上的 git blob 与 SHA-256，按「移植来源 / 参照」分类）、[LICENSE-AUDIT.md](LICENSE-AUDIT.md)（依赖闭包与分发清单）；UPSTREAM、THIRD-PARTY-NOTICES、SOURCE_MAP、README 表述统一。
+- 未完成：MinGW-w64 winpthreads / CRT 的许可文本尚未自动打包（LICENSE-AUDIT §5）。本文不是法律意见。
+- macOS ctest 164/164。**未验证**：`it2w_license_notices` 等 CI `mingw`。
 
 ## 2026-11-04：E7 文档整理
 

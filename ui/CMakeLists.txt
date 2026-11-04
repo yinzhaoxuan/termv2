@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.20)
 project(uicfg CXX)
 set(CMAKE_CXX_STANDARD 20)
@@ -103,4 +104,21 @@ if(WIN32)
   elseif(MSVC)
     target_compile_options(it2w_shell PRIVATE /utf-8)
   endif()
+  # 所有 Windows 外壳构建均附带项目与第三方许可声明。
+  add_custom_target(it2w_license_notices ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:it2w_shell>/licenses"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE"
+      "$<TARGET_FILE_DIR:it2w_shell>/licenses/termv2-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohmann_json/LICENSE"
+      "$<TARGET_FILE_DIR:it2w_shell>/licenses/nlohmann_json-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/unicode/LICENSE.txt"
+      "$<TARGET_FILE_DIR:it2w_shell>/licenses/Unicode-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/../THIRD-PARTY-NOTICES.md"
+      "$<TARGET_FILE_DIR:it2w_shell>/licenses/THIRD-PARTY-NOTICES.md"
+    DEPENDS it2w_shell
+    VERBATIM)
 endif()

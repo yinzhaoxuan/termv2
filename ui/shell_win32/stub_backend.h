@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 独立构建 ui/（未链接 it2w_pane_backend）时的占位后端：窗格直接进入 Failed，便于检查外壳本身。
 #pragma once
 #include <cstdint>

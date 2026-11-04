@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Win32 边界共用 UTF-8 / UTF-16 转换。
 #pragma once
 #include <windows.h>

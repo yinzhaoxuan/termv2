@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "ssh_snapshot.h"
 #include <algorithm>
 #include <cctype>

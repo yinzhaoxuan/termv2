@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "hyperv_transport.h"
 #include "hyperv_query.h"
 

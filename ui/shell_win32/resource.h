@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DS-14：C++ 与资源脚本共用；不要加入 C++ 声明。
 #ifndef IT2W_SHELL_RESOURCE_H
 #define IT2W_SHELL_RESOURCE_H

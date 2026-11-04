@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* 拖动选区的像素命中与选区绘制矩形（平台无关）。边界语义：boundary ∈ [0, cols]，选区为 [起点边界, 终点边界)。 */
 #pragma once
 #include "grid_metrics.h"

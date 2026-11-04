@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // iTerm2 Windows 派生核心：滚动历史纯文本搜索（SRCH-01，草案 itcore_search v0.2）。
 // 行为对齐上游 iTerm2 的 SearchEngine / FindContext / LineBuffer findSubstring / iTermCoreSearch

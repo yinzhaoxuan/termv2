@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Shared close-auth fault injector. Handle/Thread and join-failure policy stay
 // with each harness; the probe retains its hardFail-on-join-failure semantics.
 #pragma once

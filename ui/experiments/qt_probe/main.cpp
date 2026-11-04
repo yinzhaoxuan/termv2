@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T08 外壳选型实验：Qt 6 Widgets 探针。与 Win32 基线同四个实验，结果写入 exe 同目录 qt-probe-results-*.txt。
 #include <QApplication>
 #include <QDateTime>

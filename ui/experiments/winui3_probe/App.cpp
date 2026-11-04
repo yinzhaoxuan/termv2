@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // T08 外壳选型实验：WinUI 3 探针（纯代码 C++/WinRT，非打包，自包含）。未在云端构建。
 // 四个实验与 win32_probe 相同；结果写入 exe 同目录 winui3-probe-results-*.txt（不可写时 %TEMP%）。
 #include "pch.h"

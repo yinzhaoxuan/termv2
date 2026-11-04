@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 输入编码：text / paste / key / mouse（设计 14.1 / 14.3，T06 ABI）。
 #include "encode.h"
 #include <new>
