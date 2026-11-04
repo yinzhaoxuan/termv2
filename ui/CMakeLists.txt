@@ -9,7 +9,7 @@ set(UICFG_NLOHMANN_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohm
 if(UICFG_USE_SYSTEM_NLOHMANN)
   find_package(nlohmann_json 3.11 REQUIRED)
 endif()
-add_library(uicfg src/validate.cpp src/store.cpp src/connection_form.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/appearance.cpp src/itermcolors.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
+add_library(uicfg src/diag_bundle.cpp src/validate.cpp src/store.cpp src/connection_form.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/appearance.cpp src/itermcolors.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
 target_include_directories(uicfg PUBLIC include)
 target_include_directories(uicfg PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../app/common)
 if(UICFG_USE_SYSTEM_NLOHMANN)
@@ -55,12 +55,28 @@ foreach(mode sample parsing prompt)
   add_test(NAME uicfg_itermcolors_${mode} COMMAND itermcolors_tests ${mode})
 endforeach()
 
+# DS-15：各条脱敏规则与收集流程分别登记。
+add_executable(diag_bundle_tests tests/diag_bundle_tests.cpp)
+target_link_libraries(diag_bundle_tests PRIVATE uicfg)
+foreach(mode known fingerprint guid ipv4 ipv6 pipe home context logs summary bundle large filename save)
+  add_test(NAME uicfg_diag_${mode} COMMAND diag_bundle_tests ${mode})
+endforeach()
+
 # T08 Win32 主外壳（仅 WIN32 / mingw）。在仓库顶层构建时链接 it2w_pane_backend（目标在 app/pane_backend 定义，
 # 生成阶段解析，无需顶层改动）；单独 cmake -S ui 时用占位后端，只验证外壳本身。
 if(WIN32)
+  execute_process(COMMAND git rev-parse --short HEAD WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    OUTPUT_VARIABLE IT2W_BUILD_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE IT2W_GIT_RESULT)
+  if(NOT IT2W_GIT_RESULT EQUAL 0 OR IT2W_BUILD_COMMIT STREQUAL "")
+    set(IT2W_BUILD_COMMIT "unknown")
+  endif()
   enable_language(RC)
-  add_executable(it2w_shell WIN32 shell_win32/main.cpp shell_win32/connection_dialog.cpp shell_win32/it2w_shell.rc)
+  add_executable(it2w_shell WIN32 shell_win32/main.cpp shell_win32/connection_dialog.cpp shell_win32/diag_dialog.cpp shell_win32/it2w_shell.rc)
   target_compile_definitions(it2w_shell PRIVATE UNICODE _UNICODE NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+  target_compile_definitions(it2w_shell PRIVATE IT2W_BUILD_COMMIT="${IT2W_BUILD_COMMIT}")
+  if(IT2W_SSH_DIRECT AND NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    target_compile_definitions(it2w_shell PRIVATE IT2W_SSH_DIRECT=1)
+  endif()
   target_link_libraries(it2w_shell PRIVATE uicfg comctl32 comdlg32 dwrite shell32 ole32 user32 gdi32)
   if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     target_compile_definitions(it2w_shell PRIVATE IT2W_SHELL_STUB_BACKEND)

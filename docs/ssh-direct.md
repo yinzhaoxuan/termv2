@@ -40,7 +40,7 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
 窗格诊断（含 `ssh.direct.*`）写入 `<configDir>/logs/pane-diag.log`，约 5 MiB × 3 滚动（当前文件加 `.1`、`.2`）。
 `configDir` 来自窗格配置；shell 未传入时与默认配置目录一样使用 `%APPDATA%\it2w`，该目录也不可用则不写。
 每行包含 sid、attempt、phase、elapsed_ms 和 err。
-日志可能含主机名、主机密钥指纹和 agent 管道路径，导出前需自行脱敏。
+日志可能含主机名、主机密钥指纹和 agent 管道路径。需要发给别人时用系统菜单「导出诊断包…」：自动脱敏并先预览（DS-15），不要直接发原始日志。
 
 ## 认证与主机信任
 

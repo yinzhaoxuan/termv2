@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -30,6 +32,8 @@
 #include <vector>
 
 #include "connection_dialog.h"
+#include "diag_dialog.h"
+#include "uicfg/diag_bundle.h"
 #include "resource.h"
 #include "win32_text.h"
 #include "uicfg/close_confirm.h"
@@ -75,6 +79,7 @@ constexpr UINT kMsgSearch = WM_APP + 2;  // onSearchUpdated 投递（viewport �
 constexpr UINT kSysCmdFont = 0x0100;  // 系统菜单「字体…」（低 4 位须为 0）
 // 系统菜单「导入 iTerm2 配色…」「恢复默认配色」，低 4 位须为 0。
 constexpr UINT kSysCmdImportColors = 0x0110, kSysCmdResetColors = 0x0120;
+constexpr UINT kSysCmdExportDiagnostics = 0x0130;
 constexpr UINT kIdFontPreset = 0x1000, kIdFontOther = 0x10FF;  // 字体弹出菜单项
 constexpr UINT_PTR kIdSearch = 101, kIdTree = 102, kIdTabs = 103, kIdStatus = 104, kIdReconnect = 200;
 constexpr UINT_PTR kIdHistSearch = 105, kIdHistStatus = 106;  // 历史搜索条（searchHistory）
@@ -107,9 +112,11 @@ struct App {
   fs::path configDir;
   ConfigDirLock lock;
   ConnectionsFile conns;
+  LoadStatus connsLoadStatus = LoadStatus::NotFound;
   bool connsReadOnly = false;
   FileStamp connsStamp;
   SettingsFile settings;
+  LoadStatus settingsLoadStatus = LoadStatus::NotFound;
   bool settingsReadOnly = false;
   std::set<std::string> shownAppearanceWarnings;  // 相同警告文本仅提示一次
   std::string statusNote;
@@ -901,6 +908,105 @@ LRESULT CALLBACK TreeSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWOR
   return DefSubclassProc(h, m, w, l);
 }
 
+// DS-15：系统信息仅在 Win32 边界收集；摘要、脱敏和原子写入在 uicfg。
+std::string diagnosticWindowsVersion() {
+  using RtlGetVersionFn = LONG (WINAPI*)(OSVERSIONINFOW*);
+  HMODULE module = GetModuleHandleW(L"ntdll.dll");
+  FARPROC address = module ? GetProcAddress(module, "RtlGetVersion") : nullptr;
+  RtlGetVersionFn getVersion = nullptr;
+  static_assert(sizeof getVersion == sizeof address);
+  std::memcpy(&getVersion, &address, sizeof getVersion);
+  OSVERSIONINFOW version{}; version.dwOSVersionInfoSize = sizeof version;
+  if (!getVersion || getVersion(&version) != 0) return "未知";
+  return std::to_string(version.dwMajorVersion) + "." + std::to_string(version.dwMinorVersion) + "." + std::to_string(version.dwBuildNumber);
+}
+std::string formatLocalTime(const SYSTEMTIME& local) {
+  char time[64]{};
+  std::snprintf(time, sizeof time, "%04u-%02u-%02u %02u:%02u:%02u",
+      static_cast<unsigned>(local.wYear), static_cast<unsigned>(local.wMonth), static_cast<unsigned>(local.wDay),
+      static_cast<unsigned>(local.wHour), static_cast<unsigned>(local.wMinute), static_cast<unsigned>(local.wSecond));
+  return time;
+}
+std::string diagFileStamp(const SYSTEMTIME& local) {
+  char stamp[32]{};
+  std::snprintf(stamp, sizeof stamp, "%04u%02u%02u-%02u%02u%02u",
+      static_cast<unsigned>(local.wYear), static_cast<unsigned>(local.wMonth), static_cast<unsigned>(local.wDay),
+      static_cast<unsigned>(local.wHour), static_cast<unsigned>(local.wMinute), static_cast<unsigned>(local.wSecond));
+  return stamp;
+}
+DiagEnvironment diagnosticEnvironment(const SYSTEMTIME& local) {
+  DiagEnvironment env;
+  env.generatedAt = formatLocalTime(local);
+  TIME_ZONE_INFORMATION zone{};
+  const DWORD zoneId = GetTimeZoneInformation(&zone);
+  if (zoneId != TIME_ZONE_ID_INVALID) {
+    const LONG bias = zone.Bias + (zoneId == TIME_ZONE_ID_DAYLIGHT ? zone.DaylightBias :
+        zoneId == TIME_ZONE_ID_STANDARD ? zone.StandardBias : 0);
+    const LONG minutes = bias < 0 ? -bias : bias;
+    char offset[24]{};
+    std::snprintf(offset, sizeof offset, " %c%02ld:%02ld", bias <= 0 ? '+' : '-', minutes / 60, minutes % 60);
+    env.generatedAt += offset;
+  } else env.generatedAt += "（时区未知）";
+  env.commit = IT2W_BUILD_COMMIT;
+#ifdef NDEBUG
+  env.build = "Release";
+#else
+  env.build = "Debug";
+#endif
+#ifdef __MINGW32__
+  env.build += " / MinGW";
+#elif defined(_MSC_VER)
+  env.build += " / MSVC";
+#else
+  env.build += " / 未知编译器";
+#endif
+#ifdef IT2W_SSH_DIRECT
+  env.build += " / Direct 已编译";
+#else
+  env.build += " / Direct 未编译";
+#endif
+  env.windowsVersion = diagnosticWindowsVersion();
+  for (const wchar_t* name : {L"ITERM2WIN_SSH_DIRECT", L"ITERM2WIN_OSC52_PING"}) {
+    const wchar_t* value = _wgetenv(name);
+    env.envFlags.emplace_back(U(name), value ? U(value) : "(未设置)");
+  }
+  return env;
+}
+void exportDiagnostics() {
+  SYSTEMTIME local{}; GetLocalTime(&local);
+  const auto env = diagnosticEnvironment(local);
+  std::vector<std::pair<std::string, std::string>> extra{{"path", U(g->configDir.wstring())}};
+  for (const auto& entry : {std::pair{L"USERNAME", "user"}, std::pair{L"USERPROFILE", "path"}, std::pair{L"COMPUTERNAME", "host"}})
+    if (const wchar_t* value = _wgetenv(entry.first)) extra.emplace_back(entry.second, U(value));
+  const auto summary = configSummaryLines(g->conns, g->connsLoadStatus, validateConnectionsFile(g->conns), g->settings, g->settingsLoadStatus);
+  const auto bundle = buildDiagnosticBundle(env, summary, readDiagLogs(g->configDir / "logs"), redactionContextFrom(g->conns, extra));
+  if (!runDiagPreview(g->main, g->inst, bundle)) return;
+  const auto suggested = W(diagnosticFileName(diagFileStamp(local)));
+  wchar_t file[32768]{};
+  std::copy(suggested.begin(), suggested.end(), file);
+  PWSTR documents = nullptr;
+  std::wstring directory;
+  if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &documents))) directory = documents;
+  CoTaskMemFree(documents);
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof dialog; dialog.hwndOwner = g->main;
+  dialog.lpstrFile = file; dialog.nMaxFile = static_cast<DWORD>(std::size(file));
+  dialog.lpstrInitialDir = directory.empty() ? nullptr : directory.c_str();
+  dialog.lpstrFilter = L"文本文件 (*.txt)\0*.txt\0\0"; dialog.lpstrDefExt = L"txt";
+  dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+  if (!GetSaveFileNameW(&dialog)) {
+    if (CommDlgExtendedError()) MessageBoxW(g->main, L"无法打开诊断包保存对话框", L"it2w", MB_OK | MB_ICONERROR);
+    return;
+  }
+  std::string error;
+  if (!saveDiagnosticBundle(fs::path(file), bundle, &error)) {
+    MessageBoxW(g->main, W("保存诊断包失败：" + error).c_str(), L"it2w", MB_OK | MB_ICONERROR);
+    return;
+  }
+  g->statusNote = "已导出诊断包：" + U(fs::path(file).filename().wstring());
+  updateStatusBar();
+}
+
 void importColors() {
   wchar_t file[32768]{};
   OPENFILENAMEW dialog{};
@@ -1380,11 +1486,13 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         AppendMenuW(sys, MF_STRING, kSysCmdFont, L"字体…");
         AppendMenuW(sys, MF_STRING, kSysCmdImportColors, L"导入 iTerm2 配色…");
         AppendMenuW(sys, MF_STRING, kSysCmdResetColors, L"恢复默认配色");
+        AppendMenuW(sys, MF_STRING, kSysCmdExportDiagnostics, L"导出诊断包…");
       }
       for (HWND c : {g->search, g->tree, g->tabs, g->statusBar, g->histEdit, g->histStatus}) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
       return 0;
     }
     case WM_SYSCOMMAND:
+      if ((w & 0xFFF0) == kSysCmdExportDiagnostics) { exportDiagnostics(); return 0; }
       if ((w & 0xFFF0) == kSysCmdImportColors) { importColors(); return 0; }
       if ((w & 0xFFF0) == kSysCmdResetColors) { resetColors(); return 0; }
       if ((w & 0xFFF0) == kSysCmdFont) { showFontMenu(); return 0; }
@@ -1634,6 +1742,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     lc.readOnly = true;
     appendNote(app.statusNote, "无法读取 connections.json 文件戳，已禁止编辑：" + std::string(e.what()));
   }
+  app.connsLoadStatus = lc.status;
   app.conns = std::move(lc.data); app.connsReadOnly = lc.readOnly;
   const auto report = reportValidation(app.conns, lc.validation);
   appendNote(app.statusNote, report.statusNote);
@@ -1643,6 +1752,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     MessageBoxW(nullptr, W("connections.json 无法读取：" + lc.detail).c_str(), L"it2w", MB_OK | MB_ICONWARNING);
   auto ls = loadSettings(app.configDir / "settings.json");
   app.settings = (ls.status == LoadStatus::NotFound || ls.status == LoadStatus::Corrupt) ? defaultSettings() : ls.data;
+  app.settingsLoadStatus = ls.status;
   app.settingsReadOnly = ls.readOnly;
   app.settings.fontSize = normalizeFontSize(app.settings.fontSize);
   {  // 非法或 DirectWrite 不存在的字体名：本次运行回退默认（不改 settings.json），免得渲染退回比例字体

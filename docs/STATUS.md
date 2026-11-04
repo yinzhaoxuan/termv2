@@ -2,6 +2,16 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
+## 2026-11-04：DS-15 诊断包导出与脱敏（D8）
+
+设计：[DS-15-诊断包导出.md](DS-15-诊断包导出.md)。基线 `0b72f82`。
+
+- 系统菜单「导出诊断包…」：收集 → 脱敏 → 预览（只读，等宽）→ 用户点「保存…」后写成一个 UTF-8 文本文件（默认「文档」目录，`it2w-diag-YYYYMMDD-HHMMSS.txt`，原子写入）。
+- 内容：构建与环境（配置时提交号 `IT2W_BUILD_COMMIT`、Release/Debug、MinGW、Direct 是否编译、Windows 版本、两个诊断环境开关）、配置摘要（只有计数与开关）、`pane-diag.log.2 / .1 / 当前` 各最后 5 MiB。
+- 脱敏（`uicfg::redactDiagnosticText`，每条规则一个函数）：先按配置里的主机、用户、VM、路径以及 Windows 用户名、主机名、用户目录、configDir 精确替换（长的优先、边界检查、少于 3 个字符不替换），再按模式替换 `SHA256:` 指纹、GUID（含 `hv-`）、IPv4、IPv6、非默认 agent 管道、`X:\Users\<名字>`。同值同记号（`<host-1>` 等）。
+- macOS ctest 146/146（新增 uicfg_diag_* 共 14 项，含 60 个已知值的 15 MiB 大包用例）。
+- **未验证**：`diag_dialog.cpp`、`main.cpp`、`.rc` 未在本机编译（等 CI `mingw`）；Windows 手测见 DS-15 §7。
+
 ## 2026-11-04：D6 Ctrl+C 默认行为（ADR-004）
 
 - 决定保留 `copyOrInterrupt` 为 Ctrl+C 默认（有选区复制并清除，否则发 0x03，与 Windows Terminal 一致），写入 [ADR-004](ADR-004-Ctrl+C默认行为.md)。退路：settings.json 里 `"copyOrInterrupt": ""`。
