@@ -12,10 +12,17 @@
 | 传输 `platform/windows` | ConPTY、`ssh.exe` 快照、libssh2 Direct（含首次信任 DS-12）、Hyper-V 解析 | Direct 只在手动触发的 `mingw-direct` 里编译 |
 | 主界面 `ui` | 会话树与连接编辑器（DS-14）、标签 / 分屏、历史搜索、多行粘贴确认、外观 Profile 与 `.itermcolors`（DS-9）、按连接选择传输（DS-13）、快捷键展示（DS-16）、诊断包导出（DS-15） | uicfg 单测；Win32 代码只经 CI mingw 编译 |
 
-- **测试**：macOS 本机 ctest 164 项全过；CI 每次推送跑 linux / asan / tsan / mingw。
+- **测试**：macOS 本机 ctest 165 项全过；CI 每次推送跑 linux / asan / tsan / mingw。
 - **最大缺口**：上表「未实机」的部分全部没有在 Windows 上跑过。手测清单汇总在 [TODO.md](TODO.md) §1（每个设计文档的「只能在 Windows 上验」一节）。手测结果请写进本文件，并附「导出诊断包…」里的提交号与 Windows 版本（REVIEW C6）。
 - **许可**：GPL-3.0-or-later（[LICENSE-AUDIT.md](LICENSE-AUDIT.md)）。
 - **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认待 ADR（TODO §2.1）。OSC 52 读写默认全关。
+
+## 2026-11-05：DS-8 余项 ABI 版本规则（ADR-005）
+
+- [ADR-005](ADR-005-itcore-ABI版本规则.md)：`ITCORE_ABI_VERSION` 只在不兼容变化时加 1（删改函数 / 签名、已有字段布局或含义、已有枚举值、收紧契约）；新增函数、枚举末尾追加、启用保留位、调用方结构体末尾追加字段（配最初尺寸常量）都是兼容变化。此前的 SGR 扩展位、新事件、新函数、DS-10 生存期说明都属兼容，版本保持 0。
+- `itcore.h` 开头写明调用方义务（忽略未知事件类型但照常释放、忽略未知 `flags` 位、`struct_size = sizeof`），并标出 `itcore_cell.flags` 已用 bit 0–13、保留 bit 14–15。
+- 新增 `ABI-02.layout`：257 条 `static_assert` 覆盖 12 个公开结构体的全部字段偏移 / 尺寸、15 组枚举的 98 个值与 5 个常量宏（64 位目标）。任何布局或数值变化都会编译失败，迫使改动者按 ADR-005 §4 判断并在提交信息里写明。
+- macOS ctest 165/165。
 
 ## 2026-11-04：E6 许可统一（GPL-3.0-or-later）
 

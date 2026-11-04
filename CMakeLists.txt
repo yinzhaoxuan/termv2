@@ -98,6 +98,10 @@ add_subdirectory(ui)
 add_executable(itcore_test_abi tests/core/test_abi.cpp)
 target_link_libraries(itcore_test_abi PRIVATE itcore)
 add_test(NAME ABI-01.contract COMMAND itcore_test_abi)
+# ABI-02：公开结构体布局与枚举、常量数值的编译期基线（仅 64 位目标）
+add_executable(itcore_test_abi_layout tests/core/test_abi_layout.cpp)
+target_link_libraries(itcore_test_abi_layout PRIVATE itcore)
+add_test(NAME ABI-02.layout COMMAND itcore_test_abi_layout)
 add_test(NAME PARSE-01.oversized_osc COMMAND itcore_test_abi big_osc)
 add_test(NAME B4.osc52_clipboard COMMAND itcore_test_abi osc52)
 
