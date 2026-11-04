@@ -66,4 +66,4 @@
 | `1356bb6` | DS-10 OSC 52 读逐次确认（NEW-04） | [DS-10-OSC52读确认.md](DS-10-OSC52读确认.md) |
 | `f36ac44` | NEW-05 余项：`SessionStatus.droppedOutputBytes` 与状态栏提示 | ADR-001 §2.8 |
 | `2d00cab` | E7：STATUS 拆出「当前状态」，10 月旧快照移到 HISTORY-2026-10；SOURCE_MAP 改正过时说法 | [HISTORY-2026-10.md](HISTORY-2026-10.md) |
-| （待提交） | E6：GPL-3.0-or-later、LICENSE、SPDX、上游文件清单、依赖审计、所有构建附带许可 | [LICENSE-AUDIT.md](LICENSE-AUDIT.md) |
+| `376408e` | E6：GPL-3.0-or-later、LICENSE、SPDX、上游文件清单、依赖审计、所有构建附带许可 | [LICENSE-AUDIT.md](LICENSE-AUDIT.md) |
