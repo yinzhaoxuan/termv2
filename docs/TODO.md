@@ -65,4 +65,4 @@
 | `65f5d0d` | DS-16 快捷键展示（D5） | [DS-16-快捷键展示.md](DS-16-快捷键展示.md) |
 | `1356bb6` | DS-10 OSC 52 读逐次确认（NEW-04） | [DS-10-OSC52读确认.md](DS-10-OSC52读确认.md) |
 | `f36ac44` | NEW-05 余项：`SessionStatus.droppedOutputBytes` 与状态栏提示 | ADR-001 §2.8 |
-| （待提交） | E7：STATUS 拆出「当前状态」，10 月旧快照移到 HISTORY-2026-10；SOURCE_MAP 改正过时说法 | [HISTORY-2026-10.md](HISTORY-2026-10.md) |
+| `2d00cab` | E7：STATUS 拆出「当前状态」，10 月旧快照移到 HISTORY-2026-10；SOURCE_MAP 改正过时说法 | [HISTORY-2026-10.md](HISTORY-2026-10.md) |
