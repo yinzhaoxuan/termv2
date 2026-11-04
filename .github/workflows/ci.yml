@@ -52,6 +52,15 @@ jobs:
           sudo apt-get install -y mingw-w64 g++-mingw-w64-x86-64-posix
       - run: cmake --preset mingw
       - run: cmake --build --preset mingw -j2
+      # Windows 实机手测用（docs/WINDOWS-手测清单.md）：exe 与同目录 licenses/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: it2w_shell-mingw-${{ github.sha }}
+          path: |
+            build-mingw/ui/it2w_shell.exe
+            build-mingw/ui/licenses/
+          if-no-files-found: error
+          retention-days: 14
 
   mingw-direct:
     if: github.event_name == 'workflow_dispatch'
@@ -63,3 +72,11 @@ jobs:
           sudo apt-get install -y mingw-w64 g++-mingw-w64-x86-64-posix
       - run: cmake --preset mingw-direct
       - run: cmake --build --preset mingw-direct -j2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: it2w_shell-mingw-direct-${{ github.sha }}
+          path: |
+            build-mingw-direct/ui/it2w_shell.exe
+            build-mingw-direct/ui/licenses/
+          if-no-files-found: error
+          retention-days: 14
