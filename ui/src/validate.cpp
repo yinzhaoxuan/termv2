@@ -55,6 +55,13 @@ void validateLocal(const LocalSettings& local, std::vector<ValidationError>& err
 
 }  // namespace
 
+std::optional<SshTransport> parseSshTransport(const SshSettings& ssh) {
+  if (!ssh.transport) return std::nullopt;
+  if (*ssh.transport == "compatible") return SshTransport::Compatible;
+  if (*ssh.transport == "direct") return SshTransport::Direct;
+  return std::nullopt;
+}
+
 std::vector<ValidationError> validate(const Connection& c) {
   std::vector<ValidationError> errs;
   auto err = [&](const char* f, const char* m) { errs.push_back({f, m}); };
@@ -79,6 +86,11 @@ std::vector<ValidationError> validate(const Connection& c) {
       if (ep.host) err("endpoint.host", "Hyper-V 模式不保存地址");
     }
     const auto& ssh = *c.ssh;
+    const auto transport = parseSshTransport(ssh);
+    if (ssh.transport && !transport)
+      err("ssh.transport", "传输只能是 compatible 或 direct");
+    if (transport == SshTransport::Direct && ssh.authMode != AuthMode::Agent)
+      err("ssh.auth.mode", "直连只支持 agent 认证；改用 agent，或把 ssh.transport 改为 compatible");
     if (ssh.connectTimeoutSeconds < 1 || ssh.connectTimeoutSeconds > 600)
       err("ssh.connectTimeoutSeconds", "连接超时必须是 1–600 秒的整数");
     const std::string u = trim(ssh.user);

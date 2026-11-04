@@ -1363,6 +1363,9 @@ it2w::SshLaunchOptions sshOptions(const SshLaunchDesc& ssh) {
   o.target.auth = ssh.auth == AuthMode::Agent ? it2w::SshAuthMode::Agent
                 : ssh.auth == AuthMode::KeyFile ? it2w::SshAuthMode::KeyFile : it2w::SshAuthMode::Interactive;
   o.target.keyFile = ssh.identityFile;
+  if (ssh.transport)
+    o.transport = *ssh.transport == SshTransport::Direct ? it2w::SshTransportMode::Direct
+                                                       : it2w::SshTransportMode::ConPty;
   fs::path sshDir = g->configDir / L"ssh", snapDir = sshDir / L"snapshots";
   std::error_code ec; fs::create_directories(snapDir, ec);
   fs::path kh = sshDir / L"known_hosts", empty = sshDir / L"empty_known_hosts";

@@ -325,7 +325,8 @@ private:
     bool eventsPosted_ = false;
     // 仅诊断用：默认关闭，会向远端 stdin 注入 PING/伪应答。只认环境变量值 1。
     const bool osc52Ping_ = envFlagOn(std::getenv("ITERM2WIN_OSC52_PING"));
-    const bool sshDirect_ = envFlagOn(std::getenv("ITERM2WIN_SSH_DIRECT"));
+    const bool envSshDirect_ = envFlagOn(std::getenv("ITERM2WIN_SSH_DIRECT"));
+    bool attemptDirect_ = false;
     std::optional<std::wstring> localCommand_;  // --command，仅第一个本地窗格；重连（新 attempt）同样带上
     // 与关闭线程 / 传输回调共享的唯一状态（不含 this、不含 PaneEvents）
     std::shared_ptr<SessionShared> shared_ = std::make_shared<SessionShared>();
@@ -577,9 +578,9 @@ bool Win32PaneBackend::startSession() {
         cb.onResolved = [ws](SessionId, AttemptId, const HvAction &a) {
             if (auto sh = ws.lock()) postTo<P>(*sh->queue, [a](P &p) {
                 p.hvResult_ = a;
-                // HyperVTransport 已将 SnapshotError 展平成文本；这里仍按窗格固定模式标注。
+                // HyperVTransport 已将 SnapshotError 展平成文本；按本次连接的模式标注。
                 constexpr std::string_view snapshotPrefix = "SSH 配置快照无效：";
-                if (p.sshDirect_ && a.kind == HvAction::Fail && a.text.starts_with(snapshotPrefix))
+                if (p.attemptDirect_ && a.kind == HvAction::Fail && a.text.starts_with(snapshotPrefix))
                     p.hvResult_->text.replace(0, snapshotPrefix.size(), "SSH 配置无效（直连）：");
                 if (a.kind == HvAction::Connect) {
                     std::lock_guard l(p.statusMu_);
@@ -592,7 +593,8 @@ bool Win32PaneBackend::startSession() {
             });
         };
         std::string err;
-        auto factory = makeSshFactory(sshDirect_, &err);
+        attemptDirect_ = wantDirectSsh(h.ssh.transport, envSshDirect_);
+        auto factory = makeSshFactory(attemptDirect_, &err);
         if (!factory) { fail(err); return false; }
         auto ht = std::make_unique<HyperVT>();
         ht->t = std::make_unique<HyperVTransport>(cb, std::move(factory));
@@ -613,7 +615,8 @@ bool Win32PaneBackend::startSession() {
         };
         cb.onDiagnostic = onDiag;
         cb.onOutputTap = outputTap;
-        auto factory = makeSshFactory(sshDirect_, &err);
+        attemptDirect_ = wantDirectSsh(o->transport, envSshDirect_);
+        auto factory = makeSshFactory(attemptDirect_, &err);
         if (!factory) { fail(err); return false; }
         auto st = std::make_unique<SshT>();
         st->t = factory(cb);

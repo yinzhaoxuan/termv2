@@ -27,6 +27,13 @@ foreach(t validate_tests store_tests launch_tests compose_environment_tests snap
   add_test(NAME uicfg_${t} COMMAND ${t})
 endforeach()
 
+# DS-13：存储、校验与两种 SSH 启动路径分别登记。
+add_executable(ssh_transport_tests tests/ssh_transport_tests.cpp)
+target_link_libraries(ssh_transport_tests PRIVATE uicfg)
+foreach(mode store validate launch)
+  add_test(NAME uicfg_ssh_transport_${mode} COMMAND ssh_transport_tests ${mode})
+endforeach()
+
 # DS-9：可移植外观规则与手写 iTerm2 XML 样本。
 add_executable(appearance_tests tests/appearance_tests.cpp)
 target_link_libraries(appearance_tests PRIVATE uicfg)

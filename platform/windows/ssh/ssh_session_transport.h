@@ -17,6 +17,8 @@ struct SshLaunchOptions {
     std::wstring snapshotDir;       // 应用私有目录（已存在）；文件名 ssh-<pid>-<sid>-<aid>.conf
     GridSize initialSize;
     EnvList environment;            // 空：继承当前进程环境后过滤
+    // 按连接选择；nullopt = 全局默认（ITERM2WIN_SSH_DIRECT），仅窗格选工厂时读取。
+    std::optional<SshTransportMode> transport = std::nullopt;
 };
 
 struct SshCallbacks {
@@ -28,8 +30,6 @@ struct SshCallbacks {
     std::function<void(SessionId, AttemptId, const SshExitInfo &)> onFinished;
     std::function<void(SessionId, AttemptId, const DiagRecord &)> onDiagnostic;
 };
-
-enum class SshTransportMode { ConPty, Direct };
 
 class SshSessionTransport {
 public:

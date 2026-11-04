@@ -80,6 +80,10 @@ Connection connFrom(const json& j) {
     ss.authMode = authFrom(s.at("auth").at("mode"));
     ss.identityFile = opt<std::string>(s.at("auth"), "identityFile");
     ss.connectTimeoutSeconds = intFieldOrZero(s, "connectTimeoutSeconds", 15);
+    if (s.contains("transport")) {
+      const auto& transport = s.at("transport");
+      ss.transport = transport.is_string() ? transport.get<std::string>() : transport.dump();
+    }
     c.ssh = ss;
   } else if (kind == "local") {
     c.kind = ConnectionKind::Local;
@@ -119,6 +123,8 @@ json connTo(const Connection& c) {
                 {"auth", {{"mode", authTo(c.ssh->authMode)}, {"identityFile", nullable(c.ssh->identityFile)}}},
                 {"hostKeyPolicy", "ask"},
                 {"connectTimeoutSeconds", c.ssh->connectTimeoutSeconds}};
+    if (c.ssh->transport)
+      j["ssh"]["transport"] = *c.ssh->transport;
   } else {
     j["kind"] = "local";
     j["local"] = {{"executable", c.local->executable}, {"arguments", c.local->arguments},

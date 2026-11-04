@@ -18,16 +18,24 @@ cmake --build build-mingw-direct --parallel 4
 首次构建会下载并编译源码；离线可设 `SSH_A_OPENSSL_URL` / `SSH_A_LIBSSH2_URL` 指向相同源码包，
 hash 校验仍强制执行。v0 不支持 MSVC 或 POSIX 直连传输。
 
-在 Windows PowerShell 中，于启动产品前设置环境变量：
+**按连接选择**（DS-13）：在 `connections.json` 该连接的 `ssh` 里写 `"transport": "direct"` 或 `"compatible"`。
+Hyper-V 连接的内层 SSH 同样按这个字段选择。写明的值优先于环境变量。
+
+```json
+"ssh": { "user": "gavin", "auth": { "mode": "agent" }, "transport": "direct" }
+```
+
+没写 `transport` 的连接跟随**全局默认**：在 Windows PowerShell 中，于启动产品前设置环境变量：
 
 ```powershell
 $env:ITERM2WIN_SSH_DIRECT = '1'
 .\it2w_shell.exe
 ```
 
-**仅值恰为 `1` 时开启**；`true` / `ON` 等值不生效。开关在窗格构造时读取一次，重连沿用原模式。
-未设置时继续使用兼容传输；选了 Direct 而构建未包含它时明确报错。
-连接、主机密钥或认证失败均**不自动回落**。要改用兼容模式，先移除环境变量再重新启动产品。
+**仅值恰为 `1` 时开启**；`true` / `ON` 等值不生效。环境变量在窗格构造时读取一次；connections.json 只在产品启动时读入，改了 `transport` 要重启产品才生效。
+两者都没有时使用兼容传输（默认值不变）。选了 Direct 而构建未包含它时明确报错。
+`"transport": "direct"` 配 KeyFile / Interactive 认证会在加载校验时被拒绝，窗格不启动。
+连接、主机密钥或认证失败均**不自动回落**。要改用兼容模式，把该连接的 `transport` 改为 `"compatible"`，或移除环境变量后重新启动产品。
 
 窗格诊断（含 `ssh.direct.*`）写入 `<configDir>/logs/pane-diag.log`，约 5 MiB × 3 滚动（当前文件加 `.1`、`.2`）。
 `configDir` 来自窗格配置；shell 未传入时与默认配置目录一样使用 `%APPDATA%\it2w`，该目录也不可用则不写。
@@ -40,8 +48,8 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
   `KeyFile`（包括未加密私钥）、`Interactive`、password、keyboard-interactive 和 ASKPASS 均不支持。
 - 只有 `SSH_AUTH_SOCK` 以 `\\.\pipe\` 开头时才采用；否则使用默认
   `\\.\pipe\openssh-ssh-agent`。**永不使用 Pageant**，构建保留移除后端条目的补丁。
-- 应用的 `configDir/ssh/known_hosts` 必须已预信任目标；可先在兼容模式中核对指纹并完成信任。
-  Direct **只读**该文件，不写入、不 accept-new、不弹出首次信任提示。
+- 应用的 `configDir/ssh/known_hosts` 中没有的主机：窗格给出「核对指纹…」，用户确认后写入并重连（DS-12）。
+  不 accept-new；密钥变化不提供信任按钮。
 - 握手偏好为**已知类型在前，其余支持的类型在后**；握手后按服务器实际出示的类型核对密钥。
   支持普通和哈希条目；`@cert-authority` / `@revoked` 标记报配置错误。
   未知类型/主机报 `HostKeyUnknown`，密钥变化报 `HostKeyChanged`，均失败关闭；按受信渠道核实后再更新信任。

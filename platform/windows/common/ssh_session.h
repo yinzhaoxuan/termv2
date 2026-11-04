@@ -11,6 +11,9 @@
 
 namespace it2w {
 
+// 传输选择也用于平台无关的窗格策略。
+enum class SshTransportMode { ConPty, Direct };
+
 // `ssh -G` 输出：键统一小写；同键多值（identityfile 等）按出现顺序保存
 using SshEffectiveConfig = std::map<std::string, std::vector<std::string>>;
 SshEffectiveConfig parseSshG(std::string_view text);

@@ -1757,10 +1757,25 @@ static void ssh_direct_select() {
     CHECK(selectSshTransport(envFlagOn("1"), true, &err) == SshTransportChoice::Direct);
     CHECK(err.empty());
     CHECK(selectSshTransport(envFlagOn("1"), false, &err) == SshTransportChoice::Unavailable);
-    CHECK(err == "此构建未包含直连 SSH（ITERM2WIN_SSH_DIRECT=1）");
+    CHECK(err == "此构建未包含直连 SSH；把连接的 ssh.transport 改为 compatible，或去掉 ITERM2WIN_SSH_DIRECT");
     CHECK(selectSshTransport(false, false, &err) == SshTransportChoice::ConPty);
     CHECK(err.empty());
     CHECK(selectSshTransport(true, false) == SshTransportChoice::Unavailable);
+}
+
+static void ssh_connection_transport() {
+    using Mode = it2w::SshTransportMode;
+    for (bool envDefault : {false, true}) {
+        CHECK(wantDirectSsh(std::nullopt, envDefault) == envDefault);
+        CHECK(!wantDirectSsh(Mode::ConPty, envDefault));
+        CHECK(wantDirectSsh(Mode::Direct, envDefault));
+        for (bool buildHasDirect : {false, true}) {
+            CHECK(selectSshTransport(wantDirectSsh(Mode::ConPty, envDefault), buildHasDirect) ==
+                  SshTransportChoice::ConPty);
+            CHECK(selectSshTransport(wantDirectSsh(Mode::Direct, envDefault), buildHasDirect) ==
+                  (buildHasDirect ? SshTransportChoice::Direct : SshTransportChoice::Unavailable));
+        }
+    }
 }
 
 // Running 阶段核心一直拒收：有限次重试后丢弃，不再 FedMore 空转；终态带上不完整输出。
@@ -1811,6 +1826,7 @@ int main(int argc, char **argv) {
     else if (w == "fsm_decisions") pump_fsm_decisions_and_frame_modes();
     else if (w == "osc52_diag") osc52_ping_sequence_and_split_output_hex();
     else if (w == "ssh_direct_select") ssh_direct_select();
+    else if (w == "ssh_connection_transport") ssh_connection_transport();
     else if (w == "fsm_gap02") gap02_closed_transport_drains_before_eof();
     else if (w == "prestart") prestart_failure_leaves_starting();
     else if (w == "pane_diag") pane_diag();

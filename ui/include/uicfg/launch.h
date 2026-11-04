@@ -21,6 +21,7 @@ struct SshLaunchDesc {
   AuthMode auth;
   std::string identityFile;
   uint32_t connectTimeoutSec;
+  std::optional<SshTransport> transport = std::nullopt;
 };
 struct HyperVLaunchDesc {
   SshLaunchDesc ssh;  // host 留空，由 Hyper-V 解析填入

@@ -295,7 +295,10 @@ private:
 // 环境开关只有值恰好为 "1" 才开启。
 bool envFlagOn(const char *value);
 
-// SSH 模式在窗格构造时确定；请求直连但构建未包含时必须报错，不回落到 ConPTY。
+// 连接未写明传输时用环境默认值（ITERM2WIN_SSH_DIRECT=1）。
+bool wantDirectSsh(std::optional<it2w::SshTransportMode> perConnection, bool envDefault);
+
+// 请求直连但构建未包含时必须报错，不回落到 ConPTY。
 enum class SshTransportChoice { ConPty, Direct, Unavailable };
 SshTransportChoice selectSshTransport(bool wantDirect, bool buildHasDirect, std::string *err = nullptr);
 

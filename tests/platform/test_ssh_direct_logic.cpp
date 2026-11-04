@@ -311,7 +311,7 @@ static void test_preferences_and_auth() {
     for (auto mode : {SshAuthMode::KeyFile, SshAuthMode::Interactive}) {
         auto e = validateDirectAuthMode(mode);
         CHECK(e && e->field == "auth" && e->reason ==
-            "直连 v0 仅支持 agent；请 ssh-add 后使用，或去掉 ITERM2WIN_SSH_DIRECT 使用兼容模式");
+            "直连 v0 仅支持 agent；请 ssh-add 后使用，或在连接里写 \"transport\": \"compatible\"，或去掉 ITERM2WIN_SSH_DIRECT");
     }
 }
 

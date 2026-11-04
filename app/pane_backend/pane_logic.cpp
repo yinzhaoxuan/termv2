@@ -281,11 +281,14 @@ void PendingEvents::flush(std::weak_ptr<char> life, Batch events) {
     }
 }
 bool envFlagOn(const char *value) { return value && std::string_view(value) == "1"; }
+bool wantDirectSsh(std::optional<it2w::SshTransportMode> perConnection, bool envDefault) {
+    return perConnection ? *perConnection == it2w::SshTransportMode::Direct : envDefault;
+}
 SshTransportChoice selectSshTransport(bool wantDirect, bool buildHasDirect, std::string *err) {
     if (err) err->clear();
     if (!wantDirect) return SshTransportChoice::ConPty;
     if (buildHasDirect) return SshTransportChoice::Direct;
-    if (err) *err = "此构建未包含直连 SSH（ITERM2WIN_SSH_DIRECT=1）";
+    if (err) *err = "此构建未包含直连 SSH；把连接的 ssh.transport 改为 compatible，或去掉 ITERM2WIN_SSH_DIRECT";
     return SshTransportChoice::Unavailable;
 }
 void osc52DiagPingSequence(int (*reply)(void *, const char *, size_t), void *ctx,

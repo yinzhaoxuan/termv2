@@ -2,6 +2,16 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
+## 2026-11-04：DS-13 按连接选择 SSH 传输（增补二 D-5）
+
+设计：[DS-13-按连接选择传输.md](DS-13-按连接选择传输.md)。基线 `6db9448`。
+
+- connections.json 的 `ssh.transport`：`"compatible"`（ConPTY + `ssh.exe`）或 `"direct"`（进程内 libssh2），Hyper-V 内层 SSH 同样适用。写明的值优先；省略时跟随环境变量 `ITERM2WIN_SSH_DIRECT`（降为全局默认）。**默认值不变**：两者都没有时仍走兼容模式。
+- 加载校验：未知值或非字符串 → `ssh.transport` 错误；`"direct"` 配 KeyFile / Interactive → `ssh.auth.mode` 错误。两者都只阻止该连接启动，不让文件变 Corrupt。
+- 传输偏好经 `SshLaunchDesc` → `it2w::SshLaunchOptions.transport` 带到后端，每次 attempt 由 `wantDirectSsh` 选择；构建不含 Direct 时照旧失败、不回落。两条报错文字改为指向连接字段。
+- macOS ctest 全部通过（新增 uicfg_ssh_transport_{store,validate,launch}、PANE-30）。
+- **未验证**：Windows 手测见 DS-13 §6；改了 `win32_pane_backend.cpp`，需要手动触发一次 CI `mingw-direct`。
+
 ## 2026-11-04：DS-9 最小外观 Profile（D3、D4）
 
 设计：[DS-9-外观Profile.md](DS-9-外观Profile.md)。基线 `2cc8b40`。
@@ -10,7 +20,7 @@
 - **settings.json `appearanceProfiles`**：前景、背景、光标、16 色、`scrollbackLines`（100–1000000）、`memoryLimitMiB`（8–1024），字段都可省略。连接按 `appearanceProfileId` 引用，先套 `appearance-default` 再逐字段覆盖；不存在或非法的 Profile 回退默认并在状态栏提示一次（不阻止启动）。未知键与非法原值原样写回。
 - **默认值统一**：内置默认 = 升级前屏幕上的配色 + 10000 行 / 64 MiB（= 核心默认）。`PaneBackendConfig` 删去写死的 5000 / 32 MiB 与 `colors`，改为 `resolveAppearance` 回调；每个新核心（含重连）都下发配色。
 - **导入 `.itermcolors`**：系统菜单「导入 iTerm2 配色…」「恢复默认配色」，写入 `appearance-default`，已打开窗格经 `PaneBackend::setColors` 立即换色。自写 XML plist 子集解析（拒绝二进制 plist、限 1 MiB / 8 层）；` (Dark)` 后缀回退；P3 转 sRGB，Calibrated 按 sRGB 近似；选区色等不支持的键在确认框里列出。
-- macOS ctest **120/120**（新增 uicfg_appearance_{settings,resolution,mutation}、uicfg_itermcolors_{sample,parsing,prompt}、PANE-29.appearance_colors）。
+- macOS ctest **120/120**，CI 全绿（`6db9448`，含 mingw）（新增 uicfg_appearance_{settings,resolution,mutation}、uicfg_itermcolors_{sample,parsing,prompt}、PANE-29.appearance_colors）。
 - **未验证**：`main.cpp`、`win32_pane_backend.cpp`、`renderer.cpp` 未在本机编译，等 CI `mingw`；Windows 手测见 DS-9 §7（默认外观不变、导入后实时换色、OSC 11 设置/查询/恢复、按连接引用 Profile、`scrollbackLines: 200` 生效）。
 
 ## 2026-11-04：E4/E5、NEW-02、NEW-03、DS-12 Direct 首次信任

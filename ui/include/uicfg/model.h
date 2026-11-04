@@ -9,6 +9,7 @@
 namespace uicfg {
 
 enum class AuthMode { Agent, KeyFile, Interactive };
+enum class SshTransport { Compatible, Direct };
 enum class EndpointMode { Manual, HyperV };
 enum class ConnectionKind { Ssh, Local };
 
@@ -32,7 +33,12 @@ struct SshSettings {
   AuthMode authMode = AuthMode::Agent;
   std::optional<std::string> identityFile;  // keyFile 必填
   int connectTimeoutSeconds = 15;
+  // ssh.transport 原文：nullopt = 跟随全局默认；非字符串存其 JSON 文本（必然非法）。
+  std::optional<std::string> transport = std::nullopt;
 };
+
+// compatible / direct → 枚举；缺省、未知或非字符串 → nullopt，调用前应已校验。
+std::optional<SshTransport> parseSshTransport(const SshSettings&);
 
 struct LocalEnvironment {
   bool inherit = true;

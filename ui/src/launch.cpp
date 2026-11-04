@@ -45,7 +45,7 @@ LaunchDesc describeLaunch(const ConnectionsFile& file, const std::string& id, co
   const auto& settings = *c.ssh;
   SshLaunchDesc ssh{ep.host.value_or(""), static_cast<uint16_t>(ep.port), settings.user,
                     settings.authMode, settings.identityFile.value_or(""),
-                    static_cast<uint32_t>(settings.connectTimeoutSeconds)};
+                    static_cast<uint32_t>(settings.connectTimeoutSeconds), parseSshTransport(settings)};
   if (ep.mode == EndpointMode::Manual) return ssh;
   ssh.host.clear();
   const auto& hv = *ep.hyperv;
