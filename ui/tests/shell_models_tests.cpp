@@ -53,6 +53,15 @@ int main() {
   CHECK(runningCount(g) == 2 && groupLabel(g) == "生产 (2 运行中)");
   CHECK(groupLabel(TreeGroup{"", "x", {}}) == "未分组");
   CHECK(itemLabel(g.items[0]) == "● web · 10.0.0.1 (2)" && itemLabel(g.items[1]) == "db");
+  // 终态丢弃输出：字节边界、单位切换和一位小数。
+  CHECK(droppedOutputNote(0).empty());
+  CHECK(droppedOutputNote(1) == "输出不完整（丢弃 1 字节）");
+  CHECK(droppedOutputNote(1023) == "输出不完整（丢弃 1023 字节）");
+  CHECK(droppedOutputNote(1024) == "输出不完整（丢弃 1.0 KiB）");
+  CHECK(droppedOutputNote(1536) == "输出不完整（丢弃 1.5 KiB）");
+  CHECK(droppedOutputNote(1024 * 1024 - 1) == "输出不完整（丢弃 1024.0 KiB）");
+  CHECK(droppedOutputNote(1024 * 1024) == "输出不完整（丢弃 1.0 MiB）");
+  CHECK(droppedOutputNote(5 * 1024 * 1024 + 512 * 1024) == "输出不完整（丢弃 5.5 MiB）");
   // 字号
   CHECK(fontSizeFor("fontBigger", 12) == 13.0 && fontSizeFor("fontSmaller", 12.5) == 12.0);
   CHECK(fontSizeFor("fontBigger", 72) == 72.0 && fontSizeFor("fontSmaller", 6) == 6.0);

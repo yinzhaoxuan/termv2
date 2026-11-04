@@ -93,7 +93,7 @@ struct PaneHost {
   HWND scrollBar = nullptr, oldPanel = nullptr, separator = nullptr;  // 滚动条；旧 attempt 只读文本与分隔行
   int vpOffset = 0, vpHistory = 0;  // 最近一次 onViewportChanged
   std::unique_ptr<uishell::PaneBackend> backend;
-  uishell::SessionStatus status{SessionState::Starting, 0, false, "", ""};
+  uishell::SessionStatus status{.state = SessionState::Starting};
   PaneAttempts attempts;
   bool missingRef = false;  // 恢复布局时连接已删除
   bool notStarted = false;
@@ -346,6 +346,8 @@ void updateStatusBar() {
     s = "当前窗格：" + connName(p->connectionId) + " · " + (p->missingRef ? "引用缺失" : stateLabel(p->status.state));
     if (auto* c = findConn(p->connectionId); c && c->endpoint && c->endpoint->host) s += " · " + *c->endpoint->host;
     s += " · attempt #" + std::to_string(p->attempts.attemptId());
+    if ((p->status.state == SessionState::Exited || p->status.state == SessionState::Failed) && p->status.droppedOutputBytes > 0)
+      s += " · " + droppedOutputNote(p->status.droppedOutputBytes);
   }
   if (!g->statusNote.empty()) s += " · " + g->statusNote;
   SetWindowTextW(g->statusBar, W(s).c_str());
@@ -526,7 +528,7 @@ void startSession(PaneHost& p) {
     if (!g || !PostMessageW(g->main, kMsgSearch, 0, (LPARAM)m)) delete m;
   };
   if (g->histPaneId == p.paneId) closeSearchBar(false);  // 换新后端：旧搜索状态作废
-  p.status = {SessionState::Starting, 0, false, "", ""};
+  p.status = uishell::SessionStatus{.state = SessionState::Starting};
   p.backend = g->factory(p.connectionId, std::move(ev));
   p.vpOffset = p.vpHistory = 0;
   if (p.backend) p.backend->attach(p.host, termRect(p), scale());

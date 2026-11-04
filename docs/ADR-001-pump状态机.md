@@ -387,7 +387,7 @@ Draining 期间 `status_.state` 仍然是 Running（终态还没发布），所�
 2. **PERF-01 0.25 s**：作为验收目标保留，真机第 15 轮测量；不作为本提交阻断项。
 3. **PaneEvents 派发时机**：草案写在 `pumpStep` 末尾 `flushEvents`；实现改为 `PostMessage(WM_PANE_EVENTS)`，在 pump 栈完全退回后再发回调。更严格满足「回调下方没有 pump 帧」，采纳。
 4. **成功日志**：草案 D4 常开；初版实现绑在 `ITERM2WIN_OSC52_PING`。定稿改回常开。
-5. **`SessionStatus.droppedOutputBytes`**：为不改 `ui/`，暂经 `errorText` 回传「输出可能不完整，丢弃字节数=N」。UI 后续需求见工作区 `ui-needs.md`。
+5. **`SessionStatus.droppedOutputBytes`**：起初为不改 `ui/`，只经 `errorText` 回传「输出可能不完整，丢弃字节数=N」。2026-11-04 已补字段，状态栏据此提示（`errorText` 文字保留）。
 6. **present_frame 接线**：`Win32PaneBackend::present` → `renderer_->present_frame(force ? Force : mode)`；模式由 `chooseFrameMode(phase, pending, force)` 决定。渲染复审此项。
 
 备选 A1–A4 维持草案结论：本 ADR 落地首选方案；会话执行器（E1）推迟。

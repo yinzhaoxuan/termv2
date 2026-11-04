@@ -99,6 +99,21 @@ std::string itemLabel(const TreeItem& it) {
   return s;
 }
 
+std::string droppedOutputNote(std::uint64_t bytes) {
+  if (bytes == 0) return {};
+  std::string size;
+  if (bytes < 1024) {
+    size = std::to_string(bytes) + " 字节";
+  } else {
+    const std::uint64_t unit = bytes < 1024 * 1024 ? 1024 : 1024 * 1024;
+    // 先除再乘，避免大计数溢出；余数四舍五入到十分之一。
+    const auto tenths = (bytes / unit) * 10 + ((bytes % unit) * 10 + unit / 2) / unit;
+    size = std::to_string(tenths / 10) + "." + std::to_string(tenths % 10) +
+           (unit == 1024 ? " KiB" : " MiB");
+  }
+  return "输出不完整（丢弃 " + size + "）";
+}
+
 std::optional<double> fontSizeFor(const std::string& action, double cur) {
   double v;
   if (action == "fontBigger") v = std::floor(cur) + 1;

@@ -2,6 +2,12 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
+## 2026-11-04：NEW-05 余项 `droppedOutputBytes`
+
+- `uishell::SessionStatus` 末尾加 `droppedOutputBytes`（ADR-001 §2.8 / §9.5）：终态时由后端填入，重连清零；`errorText` 仍附「输出可能不完整，丢弃字节数=N」，向后兼容。
+- 状态栏：当前窗格 Exited / Failed 且有丢弃时追加「输出不完整（丢弃 1.5 KiB）」（`uicfg::droppedOutputNote`，与区域设置无关）。`SessionStatus` 的初始化改为指定初始化（`{.state = Starting}`）。
+- macOS ctest 164/164。**未验证**：`win32_pane_backend.cpp`、`main.cpp` 等 CI `mingw`；实机触发需洪峰关闭（HANDOFF §4.6）。
+
 ## 2026-11-04：DS-10 OSC 52 读剪贴板逐次确认（NEW-04）
 
 设计：[DS-10-OSC52读确认.md](DS-10-OSC52读确认.md)。

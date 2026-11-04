@@ -48,6 +48,7 @@ struct SessionStatus {
   std::string errorText;     // classified error for Failed (T07 categories)
   SessionRecovery recovery; // 只在 Failed 时有意义
   bool hostKeyChanged = false;
+  std::uint64_t droppedOutputBytes = 0; // 终态 Exited/Failed 时有效；>0 表示输出不完整
 };
 
 // ---- 滚动历史搜索（草案 /workspace/qa/itcore_search-草案-v0.2.md §1.6 映射；架构师拍板 v0.1：纯文本、无正则）----

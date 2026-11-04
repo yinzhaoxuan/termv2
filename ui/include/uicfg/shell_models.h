@@ -1,6 +1,7 @@
 #pragma once
 // T08 外壳交互模型（平台无关，Linux 单测）：分隔条拖动、标签拖放、滚动条、会话树文案、
 // 字号快捷键、按键路由（sendKey / 文本 / IME）、旧 attempt 面板布局。
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -45,6 +46,9 @@ int scrollLinesForThumb(int newPos, int offsetFromBottom, int historyLines);
 int runningCount(const TreeGroup& g);
 std::string groupLabel(const TreeGroup& g);   // "生产 (2 运行中)" / "未分组"
 std::string itemLabel(const TreeItem& it);    // "● web-1 · 10.0.0.1 (2)"
+
+// 会话终态的丢弃输出提示；0 返回空串，KiB / MiB 保留一位小数，不受区域设置影响。
+std::string droppedOutputNote(std::uint64_t bytes);
 
 // ---- 字号快捷键 ----
 constexpr double kMinFontSize = 6.0, kMaxFontSize = 72.0, kDefaultFontSize = 12.0;

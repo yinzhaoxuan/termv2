@@ -1,6 +1,6 @@
 # termv2 剩余工作
 
-更新：2026-11-04，DS-10（NEW-04）之后。
+更新：2026-11-04，NEW-05 余项之后。
 读者：接手开发的人或 agent。先读 [HANDOFF.md](HANDOFF.md)（目录、构建、架构），再读本文决定做什么。逐日进度在 [STATUS.md](STATUS.md)，与 iTerm2 的差距清单在根目录 [REVIEW.md](../REVIEW.md) §8（已回写到 2026-11-04）。
 
 ## 0. 先知道这些
@@ -35,11 +35,7 @@
 - 要决定：发布包是否 `IT2W_SSH_DIRECT=ON`；没写 `ssh.transport` 的连接默认走哪种；全局默认放在 settings.json 还是继续用环境变量（ADR-003 §决策 1 需要改写）。
 - 不写代码，先写 ADR。
 
-### 2.2 小项
-
-- **`droppedOutputBytes`**：丢弃字节目前只在 errorText 里，UI 头文件没有这个字段（NEW-05 余项，ADR-001 §9.5）。
-
-### 2.3 交付与资源
+### 2.2 交付与资源
 
 - **E7**：STATUS 后半段与 `ports/core/SOURCE_MAP.md` 混着 10 月的陈旧条目，整理成单一现状，历史单独存放。
 - **E6**：根 LICENSE、SPDX、上游文件哈希清单、依赖审计（GAP-12）。
@@ -69,3 +65,4 @@
 | `96f8abd` | DS-15 诊断包导出与脱敏（D8） | [DS-15-诊断包导出.md](DS-15-诊断包导出.md) |
 | `65f5d0d` | DS-16 快捷键展示（D5） | [DS-16-快捷键展示.md](DS-16-快捷键展示.md) |
 | `1356bb6` | DS-10 OSC 52 读逐次确认（NEW-04） | [DS-10-OSC52读确认.md](DS-10-OSC52读确认.md) |
+| （待提交） | NEW-05 余项：`SessionStatus.droppedOutputBytes` 与状态栏提示 | ADR-001 §2.8 |

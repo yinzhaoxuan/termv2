@@ -222,7 +222,7 @@ public:
                      std::optional<std::wstring> localCommand = std::nullopt)
         : connId_(std::move(connectionId)), ev_(std::move(ev)), cfg_(std::move(cfg)), localCommand_(std::move(localCommand)) {
         appearance_ = cfg_->resolveAppearance ? cfg_->resolveAppearance(connId_) : coreDefaultAppearance();
-        status_ = {uishell::SessionState::Starting, 0, false, {}, {}};
+        status_ = uishell::SessionStatus{.state = uishell::SessionState::Starting};
     }
     // 析构：先断开 PaneEvents，再 teardown（close 队列 → 之后的投递一律丢弃）
     ~Win32PaneBackend() override { teardown(); }
@@ -715,6 +715,7 @@ void Win32PaneBackend::completePump(uint64_t dropped) {
         std::lock_guard l(statusMu_);
         status_.state = terminal_.failed ? uishell::SessionState::Failed : uishell::SessionState::Exited;
         status_.errorText = terminal_.error;
+        status_.droppedOutputBytes = terminal_.droppedOutputBytes;
         status_.exitCode = terminal_.exitCode;
         status_.hasForegroundJob = false;
         if (sshExit_) {
@@ -1118,7 +1119,7 @@ void Win32PaneBackend::reconnect() {
     dragEdge_ = 0;
     vp_.toBottom();
     ++attempt_;
-    { std::lock_guard l(statusMu_); status_ = {uishell::SessionState::Starting, 0, false, {}, {}}; }
+    { std::lock_guard l(statusMu_); status_ = uishell::SessionStatus{.state = uishell::SessionState::Starting}; }
     // UI 的一次性覆盖只在 reconnect 调用期间有效；即使等网格变大，也先同步取好启动参数。
     pendingHyperV_ = connId_.empty() ? std::nullopt : resolveHyperVNow();
     queue_->setWake([h] { PostMessageW(h, WM_PANE_WAKE, 0, 0); });
