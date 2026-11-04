@@ -56,6 +56,9 @@ public:
     void finish(TokenSink &sink);
     bool dead() const { return state_ == State::Dead; }
     bool utf8_pending() const { return utf8_need_ > 0; }
+    size_t buffered_bytes() const {
+        return text_.size() + esc_inter_.size() + inter_.size() + payload_.size() + size_t(utf8_have_);
+    }
 
 private:
     enum class State { Ground, Esc, EscInter, Csi, Str, StrEsc, Dead };

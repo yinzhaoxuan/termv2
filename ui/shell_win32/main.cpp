@@ -54,6 +54,7 @@
 #include "uicfg/tab_model.h"
 #include "uicfg/workspace.h"
 #include "uishell/pane_backend.h"
+#include "uicfg/memory_ledger.h"
 
 #ifdef IT2W_SHELL_STUB_BACKEND
 #include "stub_backend.h"
@@ -88,6 +89,10 @@ constexpr UINT kIdFontPreset = 0x1000, kIdFontOther = 0x10FF;  // 字体弹出�
 constexpr UINT_PTR kIdSearch = 101, kIdTree = 102, kIdTabs = 103, kIdStatus = 104, kIdReconnect = 200;
 constexpr UINT_PTR kIdHistSearch = 105, kIdHistStatus = 106;  // 历史搜索条（searchHistory）
 
+constexpr UINT_PTR kMemoryTimer = 201;
+constexpr UINT kMemoryIntervalMs = 2000;
+constexpr LedgerLimits kMemoryLimits{};
+
 struct PaneHost {
   std::string paneId, connectionId, title;
   HWND host = nullptr, overlay = nullptr, reconnectBtn = nullptr;
@@ -98,6 +103,7 @@ struct PaneHost {
   PaneAttempts attempts;
   bool missingRef = false;  // 恢复布局时连接已删除
   bool notStarted = false;
+  std::optional<std::uint64_t> lastMemoryNote;
 };
 
 struct HvOverride {
@@ -124,6 +130,7 @@ struct App {
   bool settingsReadOnly = false;
   std::set<std::string> shownAppearanceWarnings;  // 相同警告文本仅提示一次
   std::string statusNote;
+  std::uint64_t memoryTotal = 0;
   WorkspaceFile ws;
   bool wsReadOnly = false;
   int paneSeq = 0;
@@ -481,6 +488,42 @@ std::string clipboardText() {
   return U(text);
 }
 
+// UI 线程拉取存活后端；准入前刷新，避免两次定时器之间连续新建漏计。
+std::vector<SessionMemory> collectMemory() {
+  std::vector<SessionMemory> sessions;
+  g->memoryTotal = 0;
+  for (const auto& [id, pane] : g->panes) {
+    if (!pane->backend) continue;
+    const auto usage = pane->backend->memoryUsage();
+    sessions.push_back({id, usage.total, usage.history, usage.historyLimit});
+    g->memoryTotal += usage.total;
+  }
+  return sessions;
+}
+
+bool admitSession() {
+  collectMemory();
+  if (admitNewSession(g->memoryTotal, kMemoryLimits)) return true;
+  MessageBoxW(g->main, W(memoryRefusedMessage(g->memoryTotal, kMemoryLimits)).c_str(),
+      L"内存上限", MB_OK | MB_ICONWARNING);
+  return false;
+}
+
+void balanceSessionMemory() {
+  const auto decision = balanceMemory(collectMemory(), kMemoryLimits);
+  for (const auto& trim : decision.trims) {
+    auto* pane = paneById(trim.paneId);
+    if (!pane || !pane->backend) continue;
+    pane->backend->setHistoryMemoryLimit(trim.newLimit);
+    if (pane->lastMemoryNote != trim.newLimit) {
+      pane->lastMemoryNote = trim.newLimit;
+      appendNote(g->statusNote, historyTrimmedNote(connName(pane->connectionId), trim.newLimit));
+    }
+  }
+  collectMemory();  // 只保存实际量，不把策略估计当作已释放的内存。
+  if (!decision.trims.empty()) updateStatusBar();
+}
+
 void startSession(PaneHost& p) {
   p.notStarted = false;
   if (auto* c = findConn(p.connectionId)) g->snaps.onSessionStarted(p.paneId, *c);  // 启动时快照
@@ -579,6 +622,7 @@ void destroyPane(const std::string& paneId) {
 
 bool startPlaceholder(PaneHost& p) {
   if (!p.notStarted || p.missingRef) return false;
+  if (!admitSession()) return false;
   startSession(p);
   focusPane(p.paneId);
   refreshTree();
@@ -587,7 +631,7 @@ bool startPlaceholder(PaneHost& p) {
 
 void reconnectPane(PaneHost& p) {
   if (p.missingRef) return;
-  if (startPlaceholder(p)) return;
+  if (p.notStarted) { startPlaceholder(p); return; }
   if (p.backend) {
     p.backend->reconnect();  // 后端：新 core + 进程，attempt +1，保留上一 attempt 只读文本
     p.attempts.reconnect(p.backend->previousAttemptText());  // 按 15.4 预算截断，只留一个
@@ -680,7 +724,8 @@ bool confirm(const CloseSummary& s) {
 }
 
 // ---------- 标签 / 窗格操作 ----------
-void openTab(const std::string& connectionId) {
+void openTab(const std::string& connectionId, bool firstLocal = false) {
+  if (!firstLocal && !admitSession()) return;
   size_t i = g->tabBar.newTab(connectionId, connName(connectionId));  // 双击连接：总是新标签
   Tab& t = g->tabBar.tabs()[i];
   createPane(t.activePaneId, connectionId, false, PaneStart::Now);
@@ -711,6 +756,7 @@ void closeActivePane() {
 void splitActive(SplitAxis axis) {
   Tab* t = g->tabBar.activeTab(); PaneHost* p = activePane();
   if (!t || !p) return;
+  if (!admitSession()) return;
   std::string conn = p->connectionId, newId = "pane-" + std::to_string(GetTickCount64()) + "-" + std::to_string(++g->paneSeq);
   if (!splitPane(*t, p->paneId, axis, newId)) return;
   createPane(newId, conn, p->missingRef, PaneStart::Now);  // 同一连接，独立 Session
@@ -997,6 +1043,10 @@ DiagEnvironment diagnosticEnvironment(const SYSTEMTIME& local) {
   env.build += " / Direct 未编译";
 #endif
   env.windowsVersion = diagnosticWindowsVersion();
+  const auto sessions = collectMemory();
+  env.memoryTotal = g->memoryTotal;
+  env.memorySessions = sessions.size();
+  for (const auto& session : sessions) env.memoryMax = std::max(env.memoryMax, session.total);
   for (const wchar_t* name : {L"ITERM2WIN_SSH_DIRECT", L"ITERM2WIN_OSC52_PING"}) {
     const wchar_t* value = _wgetenv(name);
     env.envFlags.emplace_back(U(name), value ? U(value) : "(未设置)");
@@ -1496,8 +1546,12 @@ LRESULT CALLBACK TabSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD
 
 LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   switch (m) {
+    case WM_TIMER:
+      if (w == kMemoryTimer) { balanceSessionMemory(); return 0; }
+      break;
     case WM_CREATE: {
       g->main = h;
+      SetTimer(h, kMemoryTimer, kMemoryIntervalMs, nullptr);
       g->dpi = GetDpiForWindow(h);
       g->search = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, h, (HMENU)kIdSearch, g->inst, nullptr);
       SendMessageW(g->search, EM_SETCUEBANNER, TRUE, (LPARAM)L"搜索会话");
@@ -1616,7 +1670,7 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       if (!confirm(summarizeQuit(g->tabBar.tabs(), lookupInfo))) return 0;  // 一次汇总确认
       shutdownAndExit();
       return 0;
-    case WM_DESTROY: PostQuitMessage(0); return 0;
+    case WM_DESTROY: KillTimer(h, kMemoryTimer); PostQuitMessage(0); return 0;
   }
   return DefWindowProcW(h, m, w, l);
 }
@@ -1852,7 +1906,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     walk(t.root);
     if (t.activePaneId.empty() || !paneById(t.activePaneId)) t.activePaneId = paneIds(t.root).front();
   }
-  if (app.tabBar.empty()) openTab("");  // 首次运行：本地终端
+  if (app.tabBar.empty()) openTab("", true);  // 首次运行：本地终端
   refreshTree(); refreshTabs();
   ShowWindow(h, show); UpdateWindow(h);
   layoutAll();

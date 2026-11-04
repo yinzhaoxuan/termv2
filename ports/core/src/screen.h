@@ -37,6 +37,7 @@ public:
     PoolStore(const PoolStore &) = delete;
     PoolStore &operator=(const PoolStore &) = delete;
     uint32_t size() const { return size_.load(std::memory_order_acquire); }
+    size_t bytes() const { return bytes_.load(std::memory_order_acquire); }
     // 仅读端：id 须 < 调用方先前 acquire 得到的 size。
     const std::string *at(uint32_t id) const;
     // 仅写端：返回新 id；满（kChunk*kMaxChunks）时返回 0。
@@ -45,6 +46,7 @@ public:
 private:
     std::atomic<std::string *> chunks_[kMaxChunks];
     std::atomic<uint32_t> size_{0};
+    std::atomic<size_t> bytes_{sizeof(PoolStore)};
 };
 
 struct PoolRef {
@@ -62,6 +64,7 @@ public:
     size_t bytes() const { return bytes_; }
     uint32_t size() const { return store_->size(); }
     uint64_t epoch() const { return epoch_; }
+    size_t store_bytes() const { return store_->bytes(); }
     void clear();
     // 压缩：只保留 live 中的 id（0 恒保留），重建新 store；返回 旧id→新id（未列入者映射到 0）。
     // epoch 递增；旧 PoolRef 继续持有旧 store。bytes_ 重新按实际条目计算。
@@ -198,6 +201,8 @@ public:
     bool empty() const { return lines_.empty(); }
     size_t logical_count() const { return lines_.size(); }
     size_t bytes() const { return bytes_; }
+    uint64_t byte_limit() const { return max_bytes_; }
+    void set_limits(uint32_t lines, uint64_t bytes);
     const LogicalLine &at(size_t i) const { return lines_[i]; }
     void clear();
     template <class F> void for_each_line(F f) const { for (const auto &l : lines_) f(l); }
@@ -337,6 +342,8 @@ public:
     uint64_t search_serial() const { return search_serial_; }
 
     size_t mem_bytes() const;
+    size_t grid_bytes() const { return main_.mem_bytes() + alt_.mem_bytes(); }
+    void set_history_limits(uint32_t lines, uint64_t bytes);
 private:
     void write_char(uint32_t cp, const uint8_t *utf8, size_t utf8_len);
     void write_utf8_text(const std::string &text);

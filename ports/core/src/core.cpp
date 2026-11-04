@@ -515,6 +515,31 @@ int itcore_selection_start_unit(itcore_core *c, int32_t first_row, uint16_t col,
     c->push(ITCORE_EV_RENDER_INVALIDATED);
     return 1;
 }
+int itcore_memory_usage_get(const itcore_core *c, itcore_memory_usage *out) {
+    if (!c || !c->screen || !out || out->struct_size < sizeof(*out)) return -1;
+    itcore_memory_usage usage{};
+    usage.struct_size = sizeof(usage);
+    usage.grid_bytes = c->screen->grid_bytes();
+    usage.scrollback_bytes = c->screen->scrollback().bytes();
+    usage.pool_bytes = c->screen->pool().store_bytes();
+    usage.pool_epoch = c->screen->pool().epoch();
+    usage.queue_bytes = c->parser.buffered_bytes();
+    for (const auto *event : c->events) usage.queue_bytes += sizeof(*event) + event->data.size();
+    for (const auto *search : c->searches) usage.search_bytes += sizeof(*search) + search->s->mem_bytes();
+    usage.total_bytes = usage.grid_bytes + usage.scrollback_bytes + usage.pool_bytes +
+        usage.queue_bytes + usage.search_bytes;
+    usage.history_limit_bytes = c->screen->scrollback().byte_limit();
+    *out = usage;
+    return 0;
+}
+int itcore_set_history_limits(itcore_core *c, uint32_t lines, uint64_t bytes) {
+    if (!c || !c->screen) return -1;
+    c->screen->set_history_limits(lines, bytes);
+    c->push(ITCORE_EV_RENDER_INVALIDATED);
+    c->check_search();
+    return 0;
+}
+
 uint32_t itcore_history_rows(const itcore_core *c) {
     if (!c || !c->screen) return 0;
     return static_cast<uint32_t>(c->screen->history_display_rows());
@@ -722,6 +747,16 @@ itcore_snapshot *itcore_acquire_snapshot(itcore_core *c, int32_t first_row, uint
         for (size_t x = 0; x < src.cells.size(); ++x) s->rows[i][x] = src.cells[x].to_abi();
     }
     return s;
+}
+uint64_t itcore_snapshot_row_bytes(const itcore_snapshot *s) {
+    if (!s) return 0;
+    uint64_t bytes = 0;
+    for (const auto &row : s->data.rows_data) bytes += row.mem_bytes();
+    for (const auto &row : s->rows) bytes += sizeof(row) + row.size() * sizeof(itcore_cell);
+    return bytes;
+}
+uint64_t itcore_snapshot_pool_bytes(const itcore_snapshot *s) {
+    return s && s->data.pool.store ? s->data.pool.store->bytes() : 0;
 }
 uint64_t itcore_snapshot_revision(const itcore_snapshot *s) { return s ? s->data.revision : 0; }
 uint64_t itcore_snapshot_epoch(const itcore_snapshot *s) { return s ? s->data.epoch : 0; }

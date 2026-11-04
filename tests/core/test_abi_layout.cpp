@@ -50,6 +50,27 @@ static_assert(sizeof(((itcore_options *)nullptr)->scrollback_lines) == 4);
 static_assert(offsetof(itcore_options, memory_limit_bytes) == 16);
 static_assert(sizeof(((itcore_options *)nullptr)->memory_limit_bytes) == 8);
 
+// itcore_memory_usage：新增类型，ABI 版本仍为 0；字面量由本机编译器实测。
+static_assert(sizeof(itcore_memory_usage) == 72);
+static_assert(offsetof(itcore_memory_usage, struct_size) == 0);
+static_assert(sizeof(((itcore_memory_usage *)nullptr)->struct_size) == 4);
+static_assert(offsetof(itcore_memory_usage, grid_bytes) == 8);
+static_assert(sizeof(((itcore_memory_usage *)nullptr)->grid_bytes) == 8);
+static_assert(offsetof(itcore_memory_usage, scrollback_bytes) == 16);
+static_assert(sizeof(((itcore_memory_usage *)nullptr)->scrollback_bytes) == 8);
+static_assert(offsetof(itcore_memory_usage, pool_bytes) == 24);
+static_assert(sizeof(((itcore_memory_usage *)nullptr)->pool_bytes) == 8);
+static_assert(offsetof(itcore_memory_usage, pool_epoch) == 32);
+static_assert(sizeof(((itcore_memory_usage *)nullptr)->pool_epoch) == 8);
+static_assert(offsetof(itcore_memory_usage, queue_bytes) == 40);
+static_assert(sizeof(((itcore_memory_usage *)nullptr)->queue_bytes) == 8);
+static_assert(offsetof(itcore_memory_usage, search_bytes) == 48);
+static_assert(sizeof(((itcore_memory_usage *)nullptr)->search_bytes) == 8);
+static_assert(offsetof(itcore_memory_usage, total_bytes) == 56);
+static_assert(sizeof(((itcore_memory_usage *)nullptr)->total_bytes) == 8);
+static_assert(offsetof(itcore_memory_usage, history_limit_bytes) == 64);
+static_assert(sizeof(((itcore_memory_usage *)nullptr)->history_limit_bytes) == 8);
+
 // itcore_cell：结构体大小、各字段偏移及大小。
 static_assert(sizeof(itcore_cell) == 24);
 static_assert(offsetof(itcore_cell, grapheme_id) == 0);

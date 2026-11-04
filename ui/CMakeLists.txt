@@ -10,7 +10,7 @@ set(UICFG_NLOHMANN_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohm
 if(UICFG_USE_SYSTEM_NLOHMANN)
   find_package(nlohmann_json 3.11 REQUIRED)
 endif()
-add_library(uicfg src/diag_bundle.cpp src/validate.cpp src/store.cpp src/connection_form.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/keybinding_view.cpp src/appearance.cpp src/itermcolors.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
+add_library(uicfg src/memory_ledger.cpp src/diag_bundle.cpp src/validate.cpp src/store.cpp src/connection_form.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/keybinding_view.cpp src/appearance.cpp src/itermcolors.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
 target_include_directories(uicfg PUBLIC include)
 target_include_directories(uicfg PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../app/common)
 if(UICFG_USE_SYSTEM_NLOHMANN)
@@ -69,6 +69,11 @@ target_link_libraries(diag_bundle_tests PRIVATE uicfg)
 foreach(mode known fingerprint guid ipv4 ipv6 pipe home context logs summary bundle large filename save)
   add_test(NAME uicfg_diag_${mode} COMMAND diag_bundle_tests ${mode})
 endforeach()
+
+# DS-17：会话与应用两级账本。
+add_executable(memory_ledger_tests tests/memory_ledger_tests.cpp)
+target_link_libraries(memory_ledger_tests PRIVATE uicfg)
+add_test(NAME uicfg_memory_ledger COMMAND memory_ledger_tests)
 
 # DS-16：快捷键展示的状态、顺序与名称覆盖。
 add_executable(keybinding_view_tests tests/keybinding_view_tests.cpp)

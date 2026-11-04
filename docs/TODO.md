@@ -1,11 +1,11 @@
 # termv2 剩余工作
 
-更新：2026-11-05，ADR-005（DS-8 余项）之后。
+更新：2026-11-05，DS-17（E3）之后。
 读者：接手开发的人或 agent。先读 [HANDOFF.md](HANDOFF.md)（目录、构建、架构），再读本文决定做什么。现状与逐日进度在 [STATUS.md](STATUS.md)，与 iTerm2 的差距清单在根目录 [REVIEW.md](../REVIEW.md) §8（已回写到 2026-11-04）。
 
 ## 0. 先知道这些
 
-- **构建与测试**：`cmake --preset dev && cmake --build --preset dev -j8 && ctest --preset dev -j8`。macOS 和 Linux 上能跑全部可移植测试（165 项）；`asan`、`tsan` 预设同理。见根 [README](../README.md)。
+- **构建与测试**：`cmake --preset dev && cmake --build --preset dev -j8 && ctest --preset dev -j8`。macOS 和 Linux 上能跑全部可移植测试（172 项）；`asan`、`tsan` 预设同理。见根 [README](../README.md)。
 - **Windows 代码在本地编不了**（`ui/shell_win32/main.cpp`、`app/pane_backend/win32_pane_backend.cpp`、`platform/windows/{conpty,ssh,ssh_direct,hyperv}`）。开发机没有 MinGW。靠 GitHub Actions 的 `mingw` 任务做编译检查：每次推送到 main 自动跑。
 - **Direct SSH 代码**只在 `IT2W_SSH_DIRECT=ON` 时编译。CI 的 `mingw-direct` 任务**只能手动触发**（Actions → CI → Run workflow），改了 `platform/windows/ssh_direct/` 就要手动跑一次。
 - **写法约定**：平台无关的决策逻辑放在 `ui/src`（uicfg）、`app/pane_backend/pane_logic.*` 或 `platform/windows/common/`，并加单测；Win32 文件只做薄胶水。设计先写进 `docs/DS-*.md`，再写代码。提交信息用 `type(scope): 中文说明`，正文写清行为、测试结果和「未验证」项。改完回写 STATUS 顶部。
@@ -16,6 +16,7 @@
 1. **手动触发一次 CI 的 `mingw-direct`**，验证 DS-12、DS-13、DS-10 的 Direct 构建能编译链接。
 2. **Windows 实机手测**。代码都在 main 上，只缺实机记录。结果写进 STATUS，并绑定提交号和 Windows / conhost 版本（REVIEW C6）：
    - `986cdf7` 的清单：STATUS 2026-11-04「A5、A1 余量、DS-2、B1–B5」一节末尾（PowerShell 本地连接、Hyper-V 各分支、恢复不自动连接、多行粘贴确认、启动清理快照）。
+   - DS-17 的清单：[DS-17-内存账本.md](DS-17-内存账本.md) §6。
    - DS-10 的清单：[DS-10-OSC52读确认.md](DS-10-OSC52读确认.md) §7。
    - DS-16 的清单：[DS-16-快捷键展示.md](DS-16-快捷键展示.md) §4。
    - DS-15 的清单：[DS-15-诊断包导出.md](DS-15-诊断包导出.md) §7。实机手测时可直接用「导出诊断包…」附上提交号与 Windows 版本（REVIEW C6）。
@@ -39,7 +40,6 @@
 
 - **E6 余项**：MinGW-w64 winpthreads / CRT 许可文本打包进 `licenses/`（[LICENSE-AUDIT](LICENSE-AUDIT.md) §5）；`case_fold_table.inc` 补生成脚本。
 - **E1**：会话执行器，或基于实测把 UI 线程模型写成 ADR（ADR-001 备选 A2）。
-- **E3**：会话与应用两级内存账本。
 - **E8**：GlyphCache 图集与 glyph run（连字的前提）。
 - **DS-7 余项**：TERM、terminfo 与 DA 身份三者对齐，需要实机（GAP-10）。
 
@@ -67,3 +67,4 @@
 | `2d00cab` | E7：STATUS 拆出「当前状态」，10 月旧快照移到 HISTORY-2026-10；SOURCE_MAP 改正过时说法 | [HISTORY-2026-10.md](HISTORY-2026-10.md) |
 | `376408e` | E6：GPL-3.0-or-later、LICENSE、SPDX、上游文件清单、依赖审计、所有构建附带许可 | [LICENSE-AUDIT.md](LICENSE-AUDIT.md) |
 | `398f799` | DS-8 余项：ABI 版本规则 + ABI-02 布局测试 | [ADR-005-itcore-ABI版本规则.md](ADR-005-itcore-ABI版本规则.md) |
+| （待提交） | DS-17 会话 / 应用两级内存账本（E3） | [DS-17-内存账本.md](DS-17-内存账本.md) |

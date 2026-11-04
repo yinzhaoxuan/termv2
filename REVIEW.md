@@ -375,7 +375,7 @@ C 批全部仍开放。C1 有第 16–18 轮的文字记录（ADR-002 / STATUS�
 ### E. 资源与交付（P2）
 - [ ] E1 会话执行器迁移，或基于实测写 ADR（GAP-08）
 - [x] E2 `itcore_history_rows` 增加缓存，避免每次输出都 O(历史) 重排（GAP-08）——`c69bc48`：按组增量计数，持续输出时整段重建 0 次（NEW-02）。
-- [ ] E3 会话和应用两级内存账本，含受控拒绝（GAP-09）
+- [x] E3 会话和应用两级内存账本，含受控拒绝（GAP-09）——DS-17：拉取式计量（含快照滞留的旧字素池），单会话 128 MiB / 应用 512 MiB，超限压历史，新建窗格准入检查；传输队列与显存不计。Windows 实机待验。
 - [~] E4 根 CMake 默认使用仓库内 nlohmann；补齐 core01_02.json；缺数据时让必需测试失败（GAP-11）——`299b3c1`：nlohmann 默认仓库内；`-DIT2W_REQUIRE_VECTORS=ON` 时缺向量即失败。`core01_02.json` 本身仍在旧 Linux 机器的 `/workspace/qa/vectors/`，未入仓。
 - [~] E5 CMakePresets、根 README、GitHub Actions（Linux plain/ASan/TSan + Windows MSVC）（GAP-11）——`299b3c1`：预设、README、CI（linux / asan / tsan + mingw 交叉编译；mingw-direct 手动触发）。没有 MSVC 任务（Direct 只支持 MinGW）。
 - [x] E6 统一许可表述；补根 LICENSE、SPDX、上游文件哈希清单、依赖审计（GAP-12）——整体 GPL-3.0-or-later；`docs/UPSTREAM-FILES.md`、`docs/LICENSE-AUDIT.md`；所有构建附带 `licenses/`。余项：MinGW 运行时许可文本打包。

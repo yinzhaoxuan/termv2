@@ -22,6 +22,26 @@ typedef struct { uint32_t struct_size; size_t accepted; itcore_status status; } 
 typedef struct { uint32_t abi_version, struct_size; uint16_t columns, rows;
                  uint32_t scrollback_lines; uint64_t memory_limit_bytes; } itcore_options;
 
+/* DS-17：只读计量，不含传输队列与显存。调用方填 struct_size。 */
+typedef struct {
+    uint32_t struct_size;
+    uint64_t grid_bytes;           /* 主屏 + 备用屏 */
+    uint64_t scrollback_bytes;     /* 回滚历史 */
+    uint64_t pool_bytes;           /* 当前字素池 store */
+    uint64_t pool_epoch;           /* 当前 store 的 epoch */
+    uint64_t queue_bytes;          /* 待取事件与解析器缓冲 */
+    uint64_t search_bytes;         /* 未释放搜索句柄的结果与状态 */
+    uint64_t total_bytes;          /* 以上字节数之和 */
+    uint64_t history_limit_bytes;  /* 当前历史上限 */
+} itcore_memory_usage;
+/* 线程同 itcore_feed；只读，不分配。成功 0，参数无效 -1。 */
+int itcore_memory_usage_get(const itcore_core *c, itcore_memory_usage *out);
+/* 任意线程只读；NULL 返回 0。池大小包含同 store 后续追加的条目。 */
+uint64_t itcore_snapshot_row_bytes(const itcore_snapshot *s);
+uint64_t itcore_snapshot_pool_bytes(const itcore_snapshot *s);
+/* 线程同 itcore_feed；0 保持原限额。立即淘汰历史，旧快照不受影响。成功 0，无效 -1。 */
+int itcore_set_history_limits(itcore_core *c, uint32_t lines, uint64_t bytes);
+
 /* 字符格：颜色统一为 0xTTRRGGBB，TT=0 默认/1 调色板索引/2 真彩色。
    索引色的下标在最低字节（0x01xxxxxx 的 BB），与 kColorIndexed 一致。
    itcore_cell.flags 已用 bit 0–9（下列标志）、bit 10–12（下划线样式）、bit 13（OVERLINE）；

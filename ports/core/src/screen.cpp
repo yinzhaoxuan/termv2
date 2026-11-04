@@ -192,8 +192,12 @@ uint32_t PoolStore::append(std::string &&s) {
     if (!c) {
         c = new std::string[kChunk];
         chunks_[ci].store(c, std::memory_order_release);
+        bytes_.fetch_add(kChunk * sizeof(std::string), std::memory_order_relaxed);
     }
+    // 写端累计负载，读端不访问仍在追加的字符串。预算估算仍由 GraphemePool 保持原规则。
+    const size_t payload = s.size();
     c[id & (kChunk - 1)] = std::move(s);
+    bytes_.fetch_add(payload, std::memory_order_release);
     size_.store(id + 1, std::memory_order_release);  // 发布：此后读端可见且不再修改
     return id;
 }
@@ -552,6 +556,29 @@ void Scrollback::trim() {
         ++evicted_;
     }
 }
+void Scrollback::set_limits(uint32_t lines, uint64_t bytes) {
+    if (lines) max_lines_ = lines;
+    if (bytes) max_bytes_ = bytes;
+    const auto before = evicted_;
+    trim();
+    if (evicted_ != before) ++gen_;
+}
+
+namespace {
+size_t history_pool_budget(uint64_t bytes) {
+    return std::max<uint64_t>(1u << 20, bytes / 8);
+}
+}  // namespace
+
+void Screen::set_history_limits(uint32_t lines, uint64_t bytes) {
+    scrollback_.set_limits(lines, bytes);
+    if (bytes) {
+        set_pool_budget(history_pool_budget(bytes));
+        maybe_compact();
+    }
+    bump();
+}
+
 void Scrollback::clear() {
     ++gen_;
     lines_.clear(); bytes_ = 0;
@@ -750,7 +777,7 @@ Screen::Screen(uint16_t cols, uint16_t rows, uint32_t sb_lines, uint64_t mem_lim
     if (!rows) rows = 24;
     main_.set_rev_counter(&row_rev_);
     alt_.set_rev_counter(&row_rev_);
-    set_pool_budget(std::max<uint64_t>(1u << 20, (mem_limit ? mem_limit : (64ull << 20)) / 8));
+    set_pool_budget(history_pool_budget(scrollback_.byte_limit()));
     main_.reset(cols, rows);
     alt_.reset(cols, rows);
     reset_tabs();

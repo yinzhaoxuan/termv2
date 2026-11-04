@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "uicfg/diag_bundle.h"
+#include "uicfg/memory_ledger.h"
 #include <algorithm>
 #include <array>
 #include <fstream>
@@ -374,6 +375,9 @@ std::string buildDiagnosticBundle(const DiagEnvironment& env, const std::vector<
       "# 少于 3 个字符的已知名字不会精确替换。\n\n[构建与环境]\n生成时间 = " + env.generatedAt +
       "\n提交（配置时） = " + env.commit + "\n构建 = " + env.build + "\nWindows = " + env.windowsVersion + "\n";
   for (const auto& [name, value] : env.envFlags) text += name + " = " + value + "\n";
+  text += "内存（账本）= 合计 " + memoryLine(env.memoryTotal) + " / " + (std::to_string(LedgerLimits{}.app >> 20) + " MiB") +
+      "，" + std::to_string(env.memorySessions) + " 个会话；最大 " + memoryLine(env.memoryMax) + "\n";
+  text += "账本不含传输队列、显存与 DWrite 缓存\n";
   text += "\n[配置摘要]\n";
   for (const auto& line : summary) text += line + "\n";
   for (const auto& log : logs) {

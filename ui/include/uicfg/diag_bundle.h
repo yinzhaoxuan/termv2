@@ -3,6 +3,7 @@
 #pragma once
 #include "uicfg/settings.h"
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 #include <utility>
 
@@ -10,6 +11,8 @@ namespace uicfg {
 struct DiagEnvironment {
   std::string generatedAt, commit, build, windowsVersion;
   std::vector<std::pair<std::string, std::string>> envFlags;
+  std::uint64_t memoryTotal = 0, memoryMax = 0;
+  std::size_t memorySessions = 0;
 };
 std::vector<std::string> configSummaryLines(const ConnectionsFile&, LoadStatus, const FileValidation&,
                                           const SettingsFile&, LoadStatus);

@@ -85,6 +85,8 @@ struct PaneEvents {                       // called on the UI thread only
   std::function<void()> onClipboardWritten;
 };
 
+struct MemoryUsage { std::uint64_t total = 0, history = 0, historyLimit = 0; };
+
 class PaneBackend {
 public:
   virtual ~PaneBackend() = default;
@@ -102,6 +104,9 @@ public:
   virtual void paste(std::string_view utf8) = 0;                   // bracketed-paste aware
   virtual CaretRect caretRect() const = 0;                         // for IME candidate window
   virtual SessionStatus status() const = 0;
+  // UI 线程：拉取账本；限额立即生效，之后重连沿用。
+  virtual MemoryUsage memoryUsage() const { return {}; }
+  virtual void setHistoryMemoryLimit(std::uint64_t bytes) { (void)bytes; }
   // 12.3 reconnect: read-only logical text of the previous attempt (at most one kept, budgeted
   // per 15.4). previousAttemptId()==0 means none. UI shows it above a separator, not clickable.
   virtual std::uint64_t previousAttemptId() const = 0;

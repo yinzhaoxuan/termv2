@@ -12,6 +12,16 @@
 
 namespace it2app {
 
+uint64_t sessionMemoryTotal(const SessionMemoryInputs& inputs) {
+    uint64_t bytes = inputs.core.total_bytes + inputs.archiveBytes;
+    if (inputs.hasSnapshot) {
+        bytes += inputs.snapshotRowBytes;
+        if (inputs.snapshotEpoch != inputs.core.pool_epoch) bytes += inputs.snapshotPoolBytes;
+    }
+    return bytes;
+}
+
+
 ClipboardReadGate::Action ClipboardReadGate::onRequest(bool canAsk, uint64_t *id) {
     if (id) *id = 0;
     if (!canAsk) return Action::Drop;  // 无确认回调时，即使曾记住允许也拒绝

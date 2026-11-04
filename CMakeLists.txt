@@ -105,6 +105,14 @@ add_test(NAME ABI-02.layout COMMAND itcore_test_abi_layout)
 add_test(NAME PARSE-01.oversized_osc COMMAND itcore_test_abi big_osc)
 add_test(NAME B4.osc52_clipboard COMMAND itcore_test_abi osc52)
 
+# DS-17：只读计量、运行时历史上限、跨线程快照。
+add_executable(itcore_test_memory tests/core/test_memory.cpp)
+target_include_directories(itcore_test_memory PRIVATE ports/core/src)
+target_link_libraries(itcore_test_memory PRIVATE itcore)
+foreach(mode measurement limits snapshots)
+  add_test(NAME MEM-02.${mode} COMMAND itcore_test_memory ${mode})
+endforeach()
+
 # T03A：Windows 平台层。跨平台纯逻辑（SSH 快照、命令行与环境、输入调度、输出水位）在所有平台编译并单测；
 # ConPTY 传输与 t03a_probe 只在 Windows（含 mingw-w64 交叉编译）构建。
 add_library(it2w_platform_common STATIC
@@ -206,6 +214,7 @@ find_package(Threads REQUIRED)
 add_executable(itcore_test_unicode tests/core/test_unicode.cpp)
 target_include_directories(itcore_test_unicode PRIVATE ports/core/src)
 target_link_libraries(itcore_test_unicode PRIVATE itcore Threads::Threads)
+target_link_libraries(itcore_test_memory PRIVATE Threads::Threads)
 add_test(NAME CORE-06.ucd_width_grapheme COMMAND itcore_test_unicode width)
 add_test(NAME CORE-07.osc8_hyperlink COMMAND itcore_test_unicode osc8)
 add_test(NAME CORE-08.snapshot_pool_ref COMMAND itcore_test_unicode pool)
@@ -312,7 +321,7 @@ if(IT2W_SANITIZE OR IT2W_SANITIZE_THREAD)
   else()
     set(_it2w_sanitizer address,undefined)
   endif()
-  foreach(_target itcore it2w_pane_logic)
+  foreach(_target itcore it2w_pane_logic uicfg)
     target_compile_options(${_target} PUBLIC -fsanitize=${_it2w_sanitizer} -fno-omit-frame-pointer)
     target_link_options(${_target} PUBLIC -fsanitize=${_it2w_sanitizer})
   endforeach()

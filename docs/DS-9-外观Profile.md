@@ -31,7 +31,7 @@
 - 选区色、粗体色、链接色、光标文字色、徽章色、深浅色双套配色、背景图与透明度。
 - 256 色里 16–255 的自定义（与 iTerm2 一致，只配 16 色；16–255 用 xterm 标准值）。
 - 改动已打开窗格的回滚 / 内存上限（只对新建窗格和重连生效，见 §5.3）。
-- 会话 / 应用两级内存账本（E3）。本文的「内存上限」仍只是历史缓冲的上限，不是会话实际占用的上限。
+- 会话 / 应用两级内存账本（E3，后由 DS-17 实现）。本文的「内存上限」只是历史缓冲的上限，不是会话实际占用的上限。
 
 约束（同 DS-2 §0）：逻辑放 `ui/src`（uicfg）、`app/pane_backend/pane_logic.*`、`renderer/layout/`，并在 macOS / Linux ctest 单测；`main.cpp`、`win32_pane_backend.cpp`、`renderer/d2d/renderer.cpp` 只做胶水。不改 `ITCORE_ABI_VERSION`，不改 `ports/core` 的行为（核心默认色保持 xterm，供无前端的测试与工具使用）。
 

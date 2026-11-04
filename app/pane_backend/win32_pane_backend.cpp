@@ -247,6 +247,8 @@ public:
     void scrollToBottom() override;
     void setFont(std::string_view family, float sizePt) override;
     void setColors(const uishell::PaneColors& colors) override;
+    uishell::MemoryUsage memoryUsage() const override;
+    void setHistoryMemoryLimit(std::uint64_t bytes) override;
     uishell::CellSize cellSize() const override;
     uishell::SearchResult findInScrollback(std::string_view needleUtf8, const uishell::SearchOptions &opt, bool backward) override;
     void clearSearch() override;
@@ -320,7 +322,7 @@ private:
     std::string connId_;
     uishell::PaneEvents ev_;
     std::shared_ptr<const PaneBackendConfig> cfg_;
-    uishell::PaneAppearance appearance_{};  // 资源上限构造后固定，颜色可实时更新
+    uishell::PaneAppearance appearance_{};  // 历史内存上限与颜色可实时更新
     PumpDriver pumpDriver_;
     TerminalStatus terminal_;
     std::shared_ptr<char> life_ = std::make_shared<char>(); // 每次 reconnect 换令牌
@@ -952,12 +954,33 @@ void Win32PaneBackend::applyBounds(const uishell::PixelRect &rc, float dpi) {
 
 void Win32PaneBackend::setBounds(const uishell::PixelRect &rc, float dpi) { applyBounds(rc, dpi); }
 
-// UI 线程：热切换配置色，重连沿用；资源上限保持构造时的值。
+// UI 线程：热切换配置色，重连沿用。
 void Win32PaneBackend::setColors(const uishell::PaneColors& colors) {
     appearance_.colors = colors;
     if (!core_) return;
     const auto cfg = toCoreColors(colors);
     itcore_set_colors(core_, &cfg);
+    present(true);
+}
+
+uishell::MemoryUsage Win32PaneBackend::memoryUsage() const {
+    SessionMemoryInputs inputs;
+    inputs.core.struct_size = sizeof(inputs.core);
+    if (core_) itcore_memory_usage_get(core_, &inputs.core);
+    inputs.hasSnapshot = snap_ != nullptr;
+    inputs.snapshotRowBytes = itcore_snapshot_row_bytes(snap_);
+    inputs.snapshotPoolBytes = itcore_snapshot_pool_bytes(snap_);
+    inputs.snapshotEpoch = itcore_snapshot_epoch(snap_);
+    inputs.archiveBytes = prevAttemptText_.size();
+    return {sessionMemoryTotal(inputs), inputs.core.scrollback_bytes, inputs.core.history_limit_bytes};
+}
+
+void Win32PaneBackend::setHistoryMemoryLimit(std::uint64_t bytes) {
+    if (!bytes) return;
+    appearance_.memoryLimitBytes = bytes;
+    if (!core_) return;
+    itcore_set_history_limits(core_, 0, bytes);
+    syncViewport();
     present(true);
 }
 

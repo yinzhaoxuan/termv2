@@ -8,14 +8,25 @@
 |---|---|---|
 | 终端核心 `ports/core` | VT 解析、屏幕与历史（10000 行 / 64 MiB 默认）、SGR 子参数与下划线样式、UCD 16 宽度、OSC 8 / 52、DA / DECRQSS / XTVERSION / XTGETTCAP（VT220 身份）、选区、搜索、编码（键 / 鼠标 / 粘贴） | Linux / macOS ctest；CORE-01/02 外部向量未入仓 |
 | 渲染 `renderer` | D2D / DWrite，脏行画布，光标与 IME，配色读自核心（DS-9） | 逻辑单测；像素效果未实机 |
-| 窗格后端 `app/pane_backend` | pump 状态机（ADR-001）、ConPTY / 兼容 SSH / Direct SSH / Hyper-V、诊断日志 5 MiB × 3、OSC 52 读逐次确认（DS-10）、丢弃字节上报 | 纯逻辑单测；Windows 只经 CI mingw 编译 |
+| 窗格后端 `app/pane_backend` | pump 状态机（ADR-001）、ConPTY / 兼容 SSH / Direct SSH / Hyper-V、诊断日志 5 MiB × 3、OSC 52 读逐次确认（DS-10）、丢弃字节上报、会话 / 应用内存账本（DS-17） | 纯逻辑单测；Windows 只经 CI mingw 编译 |
 | 传输 `platform/windows` | ConPTY、`ssh.exe` 快照、libssh2 Direct（含首次信任 DS-12）、Hyper-V 解析 | Direct 只在手动触发的 `mingw-direct` 里编译 |
 | 主界面 `ui` | 会话树与连接编辑器（DS-14）、标签 / 分屏、历史搜索、多行粘贴确认、外观 Profile 与 `.itermcolors`（DS-9）、按连接选择传输（DS-13）、快捷键展示（DS-16）、诊断包导出（DS-15） | uicfg 单测；Win32 代码只经 CI mingw 编译 |
 
-- **测试**：macOS 本机 ctest 165 项全过；CI 每次推送跑 linux / asan / tsan / mingw。
+- **测试**：macOS 本机 ctest 172 项全过；CI 每次推送跑 linux / asan / tsan / mingw。
 - **最大缺口**：上表「未实机」的部分全部没有在 Windows 上跑过。手测清单汇总在 [TODO.md](TODO.md) §1（每个设计文档的「只能在 Windows 上验」一节）。手测结果请写进本文件，并附「导出诊断包…」里的提交号与 Windows 版本（REVIEW C6）。
 - **许可**：GPL-3.0-or-later（[LICENSE-AUDIT.md](LICENSE-AUDIT.md)）。
 - **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认待 ADR（TODO §2.1）。OSC 52 读写默认全关。
+
+## 2026-11-05：DS-17 会话与应用两级内存账本（E3）
+
+设计：[DS-17-内存账本.md](DS-17-内存账本.md)。
+
+- **拉取式计量**（不预扣、不归还）：新增核心 API `itcore_memory_usage_get`（网格 / 历史 / 字素池 / 事件与解析器缓冲 / 搜索）、`itcore_snapshot_row_bytes`、`itcore_snapshot_pool_bytes`、`itcore_set_history_limits`（运行时调低历史上限并立即淘汰，池预算随之）。ABI 兼容新增，版本仍 0，ABI-02 已补断言。
+- 会话合计 = 核心 + 渲染器当前快照（快照持有的字素池与核心同 epoch 不重复计；旧 epoch 的 store 计入）+ 旧 attempt 归档。传输队列不计（`io_queues` 固定上限，每会话 ≤ 约 8.1 MiB）；显存不计。
+- **策略**（`uicfg::balanceMemory`）：单会话 > 128 MiB 调低其历史上限；合计 > 512 MiB 从历史最大的会话开始压，每个不低于 4 MiB。调低是粘性的（重连 / 新建前不回调）。UI 每 2 s 计量一次，缩减时状态栏提示一次。
+- **受控拒绝**：新建标签、分屏、点「连接」前检查合计 + 16 MiB 是否超过 512 MiB，超过则弹框拒绝；重连与首次启动的本地窗格不检查。诊断包增加账本合计、会话数与最大值。
+- macOS ctest 172/172；新增 MEM-02 ×3、PANE-32 ×3（含 10 会话各填满 64 MiB 历史后压到应用上限、100 次快照滞留循环）、uicfg_memory_ledger，在 ASan / TSan 下通过。
+- **未验证**：`win32_pane_backend.cpp`、`main.cpp` 等 CI `mingw`；Windows 手测见 DS-17 §6。
 
 ## 2026-11-05：DS-8 余项 ABI 版本规则（ADR-005）
 

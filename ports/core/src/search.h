@@ -20,6 +20,7 @@ class SearchLocator {
 public:
     explicit SearchLocator(const Screen &s) : s_(s) {}
     void sync();
+    size_t mem_bytes() const;
     uint64_t ev() const { return ev_; }
     int64_t hist() const { return H_; }
     int64_t count() const { return H_ + R_; }
@@ -54,6 +55,7 @@ public:
     int prev(itcore_search_match *out, int64_t *index) { return move(false, out, index); }
     int select(int64_t index);
     int ranges(int64_t first_row, uint32_t rows, itcore_search_range *out, uint32_t cap);
+    size_t mem_bytes() const;
     void supersede() { superseded_ = true; }
     // 失效事件：句柄因屏幕失效计数变化而失效、且尚未通知过时返回 true 并记为已通知
     bool take_invalidation_notice();

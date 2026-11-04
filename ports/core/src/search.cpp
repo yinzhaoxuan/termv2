@@ -7,6 +7,22 @@
 #include <climits>
 
 namespace itcore {
+
+// 容器状态只读，按现有元素与桶计量，不构建定位缓存。
+size_t SearchLocator::mem_bytes() const {
+    return (hmap_.size() + gmap_.size()) * (sizeof(decltype(hmap_)::value_type) + sizeof(void *)) +
+        (hmap_.bucket_count() + gmap_.bucket_count()) * sizeof(void *) +
+        lrow_.capacity() * sizeof(int64_t) + lcol_.capacity() * sizeof(uint16_t);
+}
+size_t Searcher::mem_bytes() const {
+    return sizeof(Searcher) + loc_.mem_bytes() + needle_.capacity() * sizeof(uint32_t) +
+        (order_.capacity() + weight_.capacity()) * sizeof(uint64_t) + ms_.capacity() * sizeof(M) +
+        pending_.capacity() * sizeof(decltype(pending_)::value_type) +
+        (excluded_.size() + scanned_.size()) * (sizeof(uint64_t) + sizeof(void *)) +
+        rev_.size() * (sizeof(decltype(rev_)::value_type) + sizeof(void *)) +
+        (excluded_.bucket_count() + scanned_.bucket_count() + rev_.bucket_count()) * sizeof(void *);
+}
+
 namespace {
 
 struct FoldPair { uint32_t cp, to; };
@@ -372,7 +388,7 @@ uint64_t Searcher::scan_group(int64_t a, int64_t b, std::vector<char> &kill, std
     const int64_t ev = int64_t(loc_.ev());
     // 旧结果：起点落在 [a, b] 内的
     size_t lo = lower({ev + a, 0}), hi = lower({ev + b + 1, 0});
-    size_t removed = 0, kept = 0;
+    size_t removed = 0;
     std::vector<char> matched(found.size(), 0);
     for (size_t i = lo; i < hi; ++i) {
         if (kill[i]) continue;
@@ -381,7 +397,7 @@ uint64_t Searcher::scan_group(int64_t a, int64_t b, std::vector<char> &kill, std
         for (size_t j = 0; j < found.size(); ++j)
             if (!matched[j] && found[j].sseg == o.sseg && found[j].soff == o.soff && found[j].eseg == o.eseg &&
                 found[j].eoff == o.eoff) { matched[j] = 1; same = true; break; }
-        if (same) { ++kept; continue; }
+        if (same) continue;
         kill[i] = 1;
         ++removed;
     }

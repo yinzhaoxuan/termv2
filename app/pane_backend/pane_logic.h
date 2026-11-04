@@ -27,6 +27,16 @@ typedef struct itcore_event itcore_event;
 
 namespace it2app {
 
+struct SessionMemoryInputs {
+    itcore_memory_usage core{};
+    uint64_t snapshotRowBytes = 0, snapshotPoolBytes = 0, snapshotEpoch = 0;
+    bool hasSnapshot = false;
+    uint64_t archiveBytes = 0;
+};
+// 同 epoch 共享 store，只计一次；旧快照单独计入。
+uint64_t sessionMemoryTotal(const SessionMemoryInputs& inputs);
+
+
 // Profile 只覆盖 0–15 色，其余保留核心的 xterm 标准色。
 itcore_colors toCoreColors(const uishell::PaneColors& colors);
 // 未注入外观解析器时的配置：核心默认色、资源上限传 0。
