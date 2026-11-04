@@ -2,6 +2,12 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
+## 2026-11-04：D6 Ctrl+C 默认行为（ADR-004）
+
+- 决定保留 `copyOrInterrupt` 为 Ctrl+C 默认（有选区复制并清除，否则发 0x03，与 Windows Terminal 一致），写入 [ADR-004](ADR-004-Ctrl+C默认行为.md)。退路：settings.json 里 `"copyOrInterrupt": ""`。
+- 修复：`validateSettings` 把空快捷键当错误，导致按文档解绑（`copyOrInterrupt` / `pasteCtrlV` 设为 `""`）的用户之后保存 settings.json 失败（改字号、导入配色）。空字符串现为合法的「不绑定」，不参与冲突检查。
+- macOS ctest 132/132。
+
 ## 2026-11-04：DS-14 连接编辑器（D1）
 
 设计：[DS-14-连接编辑器.md](DS-14-连接编辑器.md)。基线 `d638d60`。

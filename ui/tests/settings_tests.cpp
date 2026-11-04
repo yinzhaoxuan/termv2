@@ -30,7 +30,12 @@ int main() {
 
   SettingsFile clash = d;
   clash.keybindings["paste"] = clash.keybindings["copy"];  // 冲突
-  CHECK(!validateSettings(clash).empty());
+  auto conflicts = validateSettings(clash);
+  CHECK(conflicts.size() == 1);
+  if (!conflicts.empty()) {
+    CHECK(conflicts.front().field == "keybindings");
+    CHECK(conflicts.front().message == "快捷键冲突: Ctrl+Shift+C 同时绑定 copy 与 paste");
+  }
 
   fs::path dir = fs::temp_directory_path() / "uicfg_settings_test";
   fs::remove_all(dir); fs::create_directories(dir);
@@ -51,6 +56,24 @@ int main() {
   CHECK(saveSettings(f, r.data, false, &err));
   { auto r2 = loadSettings(f); CHECK(r2.data.wordChars && *r2.data.wordChars == "/-_."); }
   CHECK(r.data.keybindings.at("pasteCtrlV") == "Ctrl+V");
+
+  {  // ADR-004：多个空绑定合法，保存和重载均保留，不补回默认快捷键
+    SettingsFile unbound = r.data;
+    unbound.keybindings["copyOrInterrupt"] = "";
+    unbound.keybindings["pasteCtrlV"] = "";
+    CHECK(validateSettings(unbound).empty());
+    CHECK(saveSettings(f, unbound, false, &err));
+    {
+      std::ifstream in(f);
+      auto saved = nlohmann::json::parse(in);
+      CHECK(saved.at("keybindings").at("copyOrInterrupt") == "");
+      CHECK(saved.at("keybindings").at("pasteCtrlV") == "");
+    }
+    auto reloaded = loadSettings(f);
+    CHECK(reloaded.status == LoadStatus::Ok);
+    CHECK(reloaded.data.keybindings.at("copyOrInterrupt").empty());
+    CHECK(reloaded.data.keybindings.at("pasteCtrlV").empty());
+  }
 
   // 字体族
   CHECK(presetFontFamilies().size() == 3 && presetFontFamilies()[0] == d.fontFamily);

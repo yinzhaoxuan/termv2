@@ -1,6 +1,6 @@
 # termv2 剩余工作
 
-更新：2026-11-04，DS-14 之后。
+更新：2026-11-04，ADR-004（D6）之后。
 读者：接手开发的人或 agent。先读 [HANDOFF.md](HANDOFF.md)（目录、构建、架构），再读本文决定做什么。逐日进度在 [STATUS.md](STATUS.md)，与 iTerm2 的差距清单在根目录 [REVIEW.md](../REVIEW.md) §8（已回写到 2026-11-04）。
 
 ## 0. 先知道这些
@@ -34,7 +34,6 @@
 
 ### 2.2 小项
 
-- **D6**：Ctrl+C 默认 `copyOrInterrupt`（`ui/src/settings.cpp`）要么写成设计决策（ADR），要么改回设计默认。
 - **D8**：诊断包导出与脱敏（日志里有主机名、指纹、agent 管道路径）。
 - **D5**：快捷键展示。
 - **NEW-04 / DS-10**：OSC 52 读的逐次确认界面。做完之前 ConPTY 与 Direct 都保持 `supportsOsc52Read=false`。

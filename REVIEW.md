@@ -368,7 +368,7 @@ C 批全部仍开放。C1 有第 16–18 轮的文字记录（ADR-002 / STATUS�
 - [x] D3 配色方案：传入 `PaneBackendConfig.colors`，支持导入 .itermcolors，让 appearanceProfileId 生效（GAP-07、§3.2）——DS-9：settings.json `appearanceProfiles`、`.itermcolors` 导入到默认 Profile、渲染改读核心生效色。Profile 编辑界面等 D1。
 - [x] D4 回滚行数和内存可配置；统一后端与核心的默认值（GAP-09）——DS-9：Profile 的 `scrollbackLines` / `memoryLimitMiB`，默认统一为 10000 行 / 64 MiB。会话账本仍是 E3。
 - [~] D5 快捷键展示（编辑放 v0.2+）；实现搜索之前，Ctrl+Shift+F 不分配默认值（§6）——Ctrl+Shift+F 已接搜索、不再吞键；展示仍无。
-- [ ] D6 Ctrl+C 默认行为写入设计决策或恢复为设计默认（GAP-07）
+- [x] D6 Ctrl+C 默认行为写入设计决策或恢复为设计默认（GAP-07）——ADR-004：保留 copyOrInterrupt，`""` 退回纯中断；同时修正空快捷键导致 settings.json 保存失败。
 - [~] D7 OSC 52 读/写开关（默认关闭）——settings.json 隐藏字段 `osc52`；Direct 的读能力已关（`43850d0`）；无界面、无逐次读确认（NEW-04）。
 - [~] D8 元数据滚动日志（5 MiB × 3）、诊断包导出（GAP-13）——滚动日志与字段 `48e0a06`；诊断包导出和脱敏工具仍缺。
 

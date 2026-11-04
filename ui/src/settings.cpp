@@ -37,7 +37,7 @@ const std::pair<const char*, const char*> kDefaults[] = {
     {"paste", "Ctrl+Shift+V"},
     {"pasteCtrlV", "Ctrl+V"},          // 设为 "" 则 Ctrl+V 原样发 0x16（vim 块选择）
     {"pasteShiftInsert", "Shift+Insert"},
-    {"copyOrInterrupt", "Ctrl+C"},     // 有选区复制并清除，无选区照常发 0x03
+    {"copyOrInterrupt", "Ctrl+C"},     // 有选区复制并清除，无选区照常发 0x03；设为 "" 则恢复纯中断（ADR-004）
     {"searchHistory", "Ctrl+Shift+F"},
     {"searchConnections", "Ctrl+Shift+L"},
     {"fontBigger", "Ctrl+Plus"},
@@ -131,7 +131,7 @@ std::vector<ValidationError> validateSettings(const SettingsFile& data) {
     errs.push_back({"fontFamily", "字体名不能为空、不能含控制字符，且不超过 31 个字符"});
   std::map<std::string, std::string> chordToAction;
   for (const auto& [action, chord] : data.keybindings) {
-    if (chord.empty()) { errs.push_back({action, "快捷键不能为空"}); continue; }
+    if (chord.empty()) continue;  // 空字符串表示不绑定，不参与冲突检查（ADR-004）
     auto it = chordToAction.find(chord);
     if (it != chordToAction.end())
       errs.push_back({"keybindings", "快捷键冲突: " + chord + " 同时绑定 " + it->second + " 与 " + action});
