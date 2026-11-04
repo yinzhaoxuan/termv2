@@ -69,4 +69,4 @@
 | `398f799` | DS-8 余项：ABI 版本规则 + ABI-02 布局测试 | [ADR-005-itcore-ABI版本规则.md](ADR-005-itcore-ABI版本规则.md) |
 | `ce2c79d` | DS-17 会话 / 应用两级内存账本（E3） | [DS-17-内存账本.md](DS-17-内存账本.md) |
 | `89e5f52` | Windows 实机手测清单；CI 上传 `it2w_shell.exe` | [WINDOWS-手测清单.md](WINDOWS-手测清单.md) |
-| （待提交） | 文档回写：HANDOFF、README、REVIEW、ROADMAP | STATUS 2026-11-05 |
+| `bf0adc1` | 文档回写：HANDOFF、README、REVIEW、ROADMAP | STATUS 2026-11-05 |
