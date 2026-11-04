@@ -363,7 +363,7 @@ C 批全部仍开放。C1 有第 16–18 轮的文字记录（ADR-002 / STATUS�
 - [ ] C6 每份报告绑定提交 SHA 与环境版本
 
 ### D. 日常操作（P2）
-- [ ] D1 连接新建、编辑、删除，分组管理（GAP-07）
+- [x] D1 连接新建、编辑、删除，分组管理（GAP-07）——DS-14：会话树右键菜单 + 编辑器对话框，含 Hyper-V 虚拟机选择、外观 Profile 与 SSH 传输；外部修改保护。拖拽排序、复制连接、环境变量编辑未做。Windows 实机待验。
 - [~] D2 历史搜索：快捷键已定义，需实现搜索、跳转、软换行映射、取消和限额（GAP-07）——纯文本搜索已有（SRCH-01..03）；淘汰后高亮回归 `2fcaac3`（NEW-03）。正则留 v0.2，大历史单步耗时待实测。
 - [x] D3 配色方案：传入 `PaneBackendConfig.colors`，支持导入 .itermcolors，让 appearanceProfileId 生效（GAP-07、§3.2）——DS-9：settings.json `appearanceProfiles`、`.itermcolors` 导入到默认 Profile、渲染改读核心生效色。Profile 编辑界面等 D1。
 - [x] D4 回滚行数和内存可配置；统一后端与核心的默认值（GAP-09）——DS-9：Profile 的 `scrollbackLines` / `memoryLimitMiB`，默认统一为 10000 行 / 64 MiB。会话账本仍是 E3。

@@ -29,6 +29,9 @@
 #include <string>
 #include <vector>
 
+#include "connection_dialog.h"
+#include "resource.h"
+#include "win32_text.h"
 #include "uicfg/close_confirm.h"
 #include "uicfg/layout_ops.h"
 #include "uicfg/launch.h"
@@ -63,21 +66,8 @@ void appendNote(std::string& note, const std::string& text) {
   note += text;
 }
 
-// ---------- UTF-8 / UTF-16 ----------
-std::wstring W(const std::string& s) {
-  if (s.empty()) return {};
-  int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
-  std::wstring w(n, L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), w.data(), n);
-  return w;
-}
-std::string U(const std::wstring& w) {
-  if (w.empty()) return {};
-  int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
-  std::string s(n, '\0');
-  WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), s.data(), n, nullptr, nullptr);
-  return s;
-}
+using shellwin::W;
+using shellwin::U;
 
 constexpr wchar_t kMainClass[] = L"it2w_shell_main";
 constexpr wchar_t kPaneHostClass[] = L"it2w_shell_pane";
@@ -118,6 +108,7 @@ struct App {
   ConfigDirLock lock;
   ConnectionsFile conns;
   bool connsReadOnly = false;
+  FileStamp connsStamp;
   SettingsFile settings;
   bool settingsReadOnly = false;
   std::set<std::string> shownAppearanceWarnings;  // 相同警告文本仅提示一次
@@ -720,6 +711,15 @@ void pasteClipboard() {
 
 uishell::PaneBackendFactory makeFactory();
 
+// DS-9 / DS-14 共用：已打开窗格只更新颜色，不改启动快照或资源上限。
+void applyPaneColors(const std::optional<std::string>& connectionId = std::nullopt) {
+  for (auto& [id, pane] : g->panes) {
+    (void)id;
+    if (pane->backend && (!connectionId || pane->connectionId == *connectionId))
+      pane->backend->setColors(appearanceForPane(pane->connectionId).colors);
+  }
+}
+
 // 保存与实时换色：只替换颜色，已打开窗格的资源上限不变。
 void applyAppearance(const std::string& okNote) {
   std::string error;
@@ -727,10 +727,178 @@ void applyAppearance(const std::string& okNote) {
   else if (!saveSettings(g->configDir / "settings.json", g->settings, false, &error))
     g->statusNote = "保存 settings.json 失败：" + error;
   else g->statusNote = okNote;
-  for (auto& [id, pane] : g->panes) {
-    if (pane->backend) pane->backend->setColors(appearanceForPane(pane->connectionId).colors);
-  }
+  applyPaneColors();
   updateStatusBar();
+}
+
+// ---------- 连接与分组编辑 ----------
+bool saveConnectionCopy(ConnectionsFile next, std::string* error) {
+  if (!saveConnectionsChecked(g->configDir / "connections.json", next, g->connsReadOnly, &g->connsStamp, error)) return false;
+  g->conns = std::move(next);
+  return true;
+}
+void connectionsChanged(const std::string& note) {
+  g->statusNote = note; refreshTree(); updateStatusBar();
+}
+void editConnection(const std::optional<Connection>& base, const std::string& groupId) {
+  if (g->connsReadOnly) return;
+  ConnectionDialogInput input;
+  input.title = base ? L"编辑连接" : L"新建连接";
+  input.form = base ? formFromConnection(*base) : newConnectionForm(groupId);
+  input.groups.emplace_back("", "未分组");
+  for (const auto& group : g->conns.groups) input.groups.emplace_back(group.id, group.name);
+  if (!input.form.groupId.empty() && std::none_of(input.groups.begin(), input.groups.end(),
+      [&](const auto& group) { return group.first == input.form.groupId; }))
+    input.groups.emplace_back(input.form.groupId, input.form.groupId + "（不存在）");
+  input.appearanceProfiles.push_back("appearance-default");
+  for (const auto& [id, profile] : g->settings.appearanceProfiles) {
+    (void)profile;
+    if (id != input.appearanceProfiles.front()) input.appearanceProfiles.push_back(id);
+  }
+  const auto& appearance = input.form.appearanceProfileId;
+  if (std::find(input.appearanceProfiles.begin(), input.appearanceProfiles.end(), appearance) == input.appearanceProfiles.end()) {
+    input.appearanceProfiles.push_back(appearance); input.currentAppearanceUndefined = true;
+  }
+#ifndef IT2W_SHELL_STUB_BACKEND
+  input.canListVms = true;
+#endif
+  input.fieldControls = {
+    {"name", IDC_NAME}, {"groupId", IDC_GROUP}, {"appearanceProfileId", IDC_APPEARANCE},
+    {"endpoint.host", IDC_HOST}, {"endpoint.port", IDC_PORT}, {"endpoint.hyperv.vmId", IDC_VM},
+    {"ssh.user", IDC_USER}, {"ssh.auth.mode", IDC_AUTH}, {"ssh.auth.identityFile", IDC_KEY},
+    {"ssh.transport", IDC_TRANSPORT}, {"ssh.connectTimeoutSeconds", IDC_TIMEOUT},
+    {"local.executable", IDC_EXECUTABLE}, {"local.arguments", IDC_ARGUMENTS}, {"local.workingDirectory", IDC_DIRECTORY}
+  };
+  std::optional<Connection> saved;
+  input.commit = [base, &saved](const ConnectionForm& form) -> std::optional<ValidationError> {
+    auto next = g->conns;
+    auto applied = applyConnectionForm(form, base, next);
+    if (!applied.errors.empty()) return applied.errors.front();
+    const auto& c = *applied.connection;
+    if (!updateConnection(next, c)) next.connections.push_back(c);
+    if (auto errors = validateInFile(next, c); !errors.empty()) return errors.front();
+    std::string error;
+    if (!saveConnectionCopy(std::move(next), &error)) return ValidationError{"", error};
+    saved = c;
+    return std::nullopt;
+  };
+  if (runConnectionDialog(g->main, g->inst, input) && saved) {
+    connectionsChanged("已保存连接「" + saved->name + "」");
+    if (base && base->appearanceProfileId != saved->appearanceProfileId) applyPaneColors(saved->id);
+  }
+}
+void editGroup(const std::string& groupId) {
+  if (g->connsReadOnly) return;
+  std::string initial;
+  if (!groupId.empty()) {
+    auto found = std::find_if(g->conns.groups.begin(), g->conns.groups.end(), [&](const Group& group) { return group.id == groupId; });
+    if (found == g->conns.groups.end()) return;
+    initial = found->name;
+  }
+  auto result = runTextPrompt(g->main, g->inst, groupId.empty() ? L"新建分组" : L"重命名分组", L"分组名称", initial,
+      [groupId](const std::string& name) -> std::string {
+        if (auto error = groupNameError(g->conns, name, groupId)) return *error;
+        auto next = g->conns;
+        if (groupId.empty()) addGroup(next, name);
+        else if (!renameGroup(next, groupId, name)) return "分组不存在";
+        std::string error;
+        if (!saveConnectionCopy(std::move(next), &error)) return error;
+        return {};
+      });
+  if (result) connectionsChanged("已保存分组");
+}
+void deleteTreeEntry(TreeAction action, const std::string& id) {
+  if (g->connsReadOnly) return;
+  std::string prompt;
+  if (action == TreeAction::DeleteConnection) {
+    const auto* c = findConn(id); if (!c) return;
+    prompt = deleteConnectionPrompt(*c, g->snaps.runningByConnection()[id]);
+  } else {
+    auto found = std::find_if(g->conns.groups.begin(), g->conns.groups.end(), [&](const Group& group) { return group.id == id; });
+    if (found == g->conns.groups.end()) return;
+    const auto count = std::count_if(g->conns.connections.begin(), g->conns.connections.end(), [&](const Connection& c) { return c.groupId == id; });
+    prompt = deleteGroupPrompt(*found, static_cast<int>(count));
+  }
+  if (MessageBoxW(g->main, W(prompt).c_str(), L"确认删除", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
+  auto next = g->conns;
+  if (action == TreeAction::DeleteConnection) deleteConnection(next, id); else deleteGroup(next, id);
+  std::string error;
+  if (!saveConnectionCopy(std::move(next), &error)) {
+    MessageBoxW(g->main, W(error).c_str(), L"保存失败", MB_OK | MB_ICONERROR); return;
+  }
+  if (action == TreeAction::DeleteGroup) g->collapsedGroups.erase(id);
+  connectionsChanged(action == TreeAction::DeleteConnection ? "已删除连接" : "已删除分组");
+}
+TreeTarget treeTarget(const std::optional<App::TreeNode>& node) {
+  if (!node) return TreeTarget::Empty;
+  if (node->isGroup) return node->id.empty() ? TreeTarget::Ungrouped : TreeTarget::Group;
+  return node->id.empty() ? TreeTarget::LocalShell : TreeTarget::Connection;
+}
+void treeAction(TreeAction action, const std::optional<App::TreeNode>& node) {
+  if (action == TreeAction::Connect) { if (node && !node->isGroup) openTab(node->id); return; }
+  if (g->connsReadOnly) return;
+  switch (action) {
+    case TreeAction::NewConnection: {
+      std::string groupId;
+      if (node && node->isGroup) groupId = node->id;
+      else if (node) { if (const auto* c = findConn(node->id)) groupId = c->groupId; }
+      editConnection(std::nullopt, groupId); break;
+    }
+    case TreeAction::EditConnection:
+      if (node) { if (const auto* c = findConn(node->id)) editConnection(*c, c->groupId); }
+      break;
+    case TreeAction::NewGroup: editGroup(""); break;
+    case TreeAction::RenameGroup: if (node) editGroup(node->id); break;
+    case TreeAction::DeleteConnection: case TreeAction::DeleteGroup:
+      if (node) deleteTreeEntry(action, node->id);
+      break;
+    case TreeAction::Connect: break;
+  }
+}
+void showTreeMenu(POINT point, bool keyboard) {
+  if (keyboard) {
+    RECT rect{};
+    HTREEITEM item = TreeView_GetSelection(g->tree);
+    if (item && TreeView_GetItemRect(g->tree, item, &rect, TRUE)) {
+      point = {rect.left, rect.bottom}; ClientToScreen(g->tree, &point);
+    } else { GetWindowRect(g->tree, &rect); point = {rect.left, rect.top}; }
+  } else {
+    TVHITTESTINFO hit{}; hit.pt = point; ScreenToClient(g->tree, &hit.pt);
+    TreeView_HitTest(g->tree, &hit);
+    TreeView_SelectItem(g->tree, hit.hItem);
+  }
+  const auto node = treeNodeOf(TreeView_GetSelection(g->tree));
+  const auto items = treeMenuFor(treeTarget(node), g->connsReadOnly);
+  HMENU menu = CreatePopupMenu(); if (!menu) return;
+  for (size_t i = 0; i < items.size(); ++i) {
+    const auto& item = items[i];
+    if (item.label.empty()) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    else AppendMenuW(menu, MF_STRING | (item.enabled ? MF_ENABLED : MF_GRAYED), static_cast<UINT_PTR>(i + 1), W(item.label).c_str());
+  }
+  int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, point.x, point.y, 0, g->main, nullptr);
+  DestroyMenu(menu);
+  if (chosen > 0 && static_cast<size_t>(chosen) <= items.size() && items[chosen - 1].enabled)
+    treeAction(items[chosen - 1].action, node);
+}
+LRESULT CALLBACK TreeSubclass(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
+  if (m == WM_CONTEXTMENU) {
+    POINT point{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+    // 这是键盘上下文菜单的唯一入口。
+    // 鼠标右键由 NM_RCLICK 处理；键盘菜单由系统给出 (-1,-1)。
+    if (point.x == -1 && point.y == -1) showTreeMenu(point, true);
+    return 0;
+  }
+  if (m == WM_KEYDOWN && (w == VK_F2 || w == VK_DELETE)) {
+    const auto node = treeNodeOf(TreeView_GetSelection(h));
+    const auto target = treeTarget(node);
+    if (target == TreeTarget::Connection)
+      treeAction(w == VK_F2 ? TreeAction::EditConnection : TreeAction::DeleteConnection, node);
+    else if (target == TreeTarget::Group)
+      treeAction(w == VK_F2 ? TreeAction::RenameGroup : TreeAction::DeleteGroup, node);
+    return 0;
+  }
+  if (m == WM_NCDESTROY) RemoveWindowSubclass(h, TreeSubclass, 1);
+  return DefSubclassProc(h, m, w, l);
 }
 
 void importColors() {
@@ -1202,6 +1370,7 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       g->tabs = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_FOCUSNEVER, 0, 0, 0, 0, h, (HMENU)kIdTabs, g->inst, nullptr);
       g->statusBar = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, h, (HMENU)kIdStatus, g->inst, nullptr);
       SetWindowSubclass(g->tabs, TabSubclass, 1, 0);
+      SetWindowSubclass(g->tree, TreeSubclass, 1, 0);
       g->histEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_CLIPSIBLINGS | ES_AUTOHSCROLL, 0, 0, 0, 0, h, (HMENU)kIdHistSearch, g->inst, nullptr);
       SendMessageW(g->histEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"搜索历史");
       g->histStatus = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_CLIPSIBLINGS | SS_RIGHT | SS_CENTERIMAGE | SS_NOPREFIX, 0, 0, 0, 0, h, (HMENU)kIdHistStatus, g->inst, nullptr);
@@ -1246,6 +1415,9 @@ LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         layoutPanes(); if (Tab* t = g->tabBar.activeTab()) focusPane(t->activePaneId);
       }
       if (nm->hwndFrom == g->tree) {
+        if (nm->code == NM_RCLICK) {
+          POINT point{}; GetCursorPos(&point); showTreeMenu(point, false); return TRUE;
+        }
         if (nm->code == NM_DBLCLK || nm->code == NM_RETURN) {
           if (auto n = treeNodeOf(TreeView_GetSelection(g->tree)); n && !n->isGroup) { openTab(n->id); return 1; }
         }
@@ -1457,6 +1629,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   for (const auto& error : cleanup.errors)
     OutputDebugStringW(W("it2w_shell: 清理残留 SSH 快照失败：" + error + "\n").c_str());
   auto lc = loadConnections(app.configDir / "connections.json");
+  try { app.connsStamp = fileStamp(app.configDir / "connections.json"); }
+  catch (const fs::filesystem_error& e) {
+    lc.readOnly = true;
+    appendNote(app.statusNote, "无法读取 connections.json 文件戳，已禁止编辑：" + std::string(e.what()));
+  }
   app.conns = std::move(lc.data); app.connsReadOnly = lc.readOnly;
   const auto report = reportValidation(app.conns, lc.validation);
   appendNote(app.statusNote, report.statusNote);

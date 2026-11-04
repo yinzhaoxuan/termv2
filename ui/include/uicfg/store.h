@@ -56,6 +56,17 @@ LoadResult loadConnections(const std::filesystem::path& file);
 bool saveConnections(const std::filesystem::path& file, ConnectionsFile& data,
                      bool readOnly, std::string* error);
 
+// DS-14：检测运行期间的外部修改；不以空戳掩盖文件系统错误。
+struct FileStamp {
+  bool exists = false;
+  std::uintmax_t size = 0;
+  std::filesystem::file_time_type mtime{};
+  bool operator==(const FileStamp&) const = default;
+};
+FileStamp fileStamp(const std::filesystem::path&);
+bool saveConnectionsChecked(const std::filesystem::path&, ConnectionsFile&, bool readOnly,
+                            FileStamp* expected, std::string* error);
+
 // 原子保存底层：临时文件落盘 + 替换（Windows 含 FlushFileBuffers / 占用重试）
 bool writeDurable(const std::filesystem::path& tmp, const std::string& bytes, std::string* err);
 bool replaceFile(const std::filesystem::path& tmp, const std::filesystem::path& target, std::string* err);

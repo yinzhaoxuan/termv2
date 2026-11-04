@@ -9,7 +9,7 @@ set(UICFG_NLOHMANN_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohm
 if(UICFG_USE_SYSTEM_NLOHMANN)
   find_package(nlohmann_json 3.11 REQUIRED)
 endif()
-add_library(uicfg src/validate.cpp src/store.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/appearance.cpp src/itermcolors.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
+add_library(uicfg src/validate.cpp src/store.cpp src/connection_form.cpp src/launch.cpp src/snapshot_cleanup.cpp src/known_hosts.cpp src/workspace.cpp src/settings.cpp src/appearance.cpp src/itermcolors.cpp src/layout_ops.cpp src/link_policy.cpp src/close_confirm.cpp src/tab_model.cpp src/session_tree.cpp src/reconnect.cpp src/shell_logic.cpp src/shell_models.cpp)
 target_include_directories(uicfg PUBLIC include)
 target_include_directories(uicfg PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../app/common)
 if(UICFG_USE_SYSTEM_NLOHMANN)
@@ -25,6 +25,13 @@ foreach(t validate_tests store_tests launch_tests compose_environment_tests snap
   add_executable(${t} tests/${t}.cpp)
   target_link_libraries(${t} uicfg)
   add_test(NAME uicfg_${t} COMMAND ${t})
+endforeach()
+
+# DS-14：表单与编辑操作按模式单独登记。
+add_executable(connection_form_tests tests/connection_form_tests.cpp)
+target_link_libraries(connection_form_tests PRIVATE uicfg)
+foreach(mode roundtrip fields creation groups menus prompts stamps arguments)
+  add_test(NAME uicfg_connection_form_${mode} COMMAND connection_form_tests ${mode})
 endforeach()
 
 # DS-13：存储、校验与两种 SSH 启动路径分别登记。
@@ -52,7 +59,7 @@ endforeach()
 # 生成阶段解析，无需顶层改动）；单独 cmake -S ui 时用占位后端，只验证外壳本身。
 if(WIN32)
   enable_language(RC)
-  add_executable(it2w_shell WIN32 shell_win32/main.cpp shell_win32/it2w_shell.rc)
+  add_executable(it2w_shell WIN32 shell_win32/main.cpp shell_win32/connection_dialog.cpp shell_win32/it2w_shell.rc)
   target_compile_definitions(it2w_shell PRIVATE UNICODE _UNICODE NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
   target_link_libraries(it2w_shell PRIVATE uicfg comctl32 comdlg32 dwrite shell32 ole32 user32 gdi32)
   if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)

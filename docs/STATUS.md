@@ -2,6 +2,18 @@
 
 交接说明见 [HANDOFF.md](HANDOFF.md)（目录、构建、main 上已落地的提交，以及仍开放的项）。本文件是进度流水；根目录 `REVIEW*.md` 的勾选框停在 2026-11-02，晚于该日期的勾选以交接文档第 3、4 节为准。
 
+## 2026-11-04：DS-14 连接编辑器（D1）
+
+设计：[DS-14-连接编辑器.md](DS-14-连接编辑器.md)。基线 `d638d60`。
+
+- **会话树右键菜单**（另有 F2 / Delete / 菜单键）：连接、编辑、删除；新建连接、新建 / 重命名 / 删除分组。connections.json 只读时除「连接」外置灰并说明原因。
+- **编辑器对话框**（`.rc` 里的 DIALOGEX 模板，代码在 `ui/shell_win32/connection_dialog.cpp`）：SSH 手动地址 / Hyper-V / 本地程序三种类型，可选分组、外观 Profile（DS-9）、SSH 传输（DS-13）。Hyper-V「选择…」在后台线程列出虚拟机与网卡。校验失败时红字提示并把焦点放到对应控件，对话框不关。
+- **不丢数据**：编辑器管不到的字段原样保留（环境变量、closePolicy、addressFamily、未改动的非法 transport 原文）；含换行或空字符串的参数设为只读。
+- **外部修改保护**：启动时记下 connections.json 的存在 / 大小 / 修改时间，保存前比对，不一致就拒绝并提示重启（`saveConnectionsChecked`）。
+- 改了外观 Profile 的连接，已打开的窗格立即换色；其他改动对之后新建 / 重连的窗格生效。
+- macOS ctest **132/132**（新增 uicfg_connection_form_{roundtrip,fields,creation,groups,menus,prompts,stamps,arguments}）。
+- **未验证**：`connection_dialog.cpp`、`main.cpp`、`.rc` 未在本机编译（等 CI `mingw`；`.rc` 的 UTF-8 中文是主要编译风险）；Windows 手测见 DS-14 §7（GAP-07 路径：新建 Ubuntu 连接 → 保存 → 连接 → 编辑 → 再次连接）。
+
 ## 2026-11-04：DS-13 按连接选择 SSH 传输（增补二 D-5）
 
 设计：[DS-13-按连接选择传输.md](DS-13-按连接选择传输.md)。基线 `6db9448`。
@@ -9,7 +21,7 @@
 - connections.json 的 `ssh.transport`：`"compatible"`（ConPTY + `ssh.exe`）或 `"direct"`（进程内 libssh2），Hyper-V 内层 SSH 同样适用。写明的值优先；省略时跟随环境变量 `ITERM2WIN_SSH_DIRECT`（降为全局默认）。**默认值不变**：两者都没有时仍走兼容模式。
 - 加载校验：未知值或非字符串 → `ssh.transport` 错误；`"direct"` 配 KeyFile / Interactive → `ssh.auth.mode` 错误。两者都只阻止该连接启动，不让文件变 Corrupt。
 - 传输偏好经 `SshLaunchDesc` → `it2w::SshLaunchOptions.transport` 带到后端，每次 attempt 由 `wantDirectSsh` 选择；构建不含 Direct 时照旧失败、不回落。两条报错文字改为指向连接字段。
-- macOS ctest 全部通过（新增 uicfg_ssh_transport_{store,validate,launch}、PANE-30）。
+- macOS ctest 124/124，CI 全绿（含 mingw）（新增 uicfg_ssh_transport_{store,validate,launch}、PANE-30）。
 - **未验证**：Windows 手测见 DS-13 §6；改了 `win32_pane_backend.cpp`，需要手动触发一次 CI `mingw-direct`。
 
 ## 2026-11-04：DS-9 最小外观 Profile（D3、D4）

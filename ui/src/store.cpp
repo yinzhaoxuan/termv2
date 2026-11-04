@@ -250,4 +250,29 @@ bool saveConnections(const fs::path& file, ConnectionsFile& data, bool readOnly,
   return true;
 }
 
+FileStamp fileStamp(const fs::path& file) {
+  if (!fs::exists(file)) return {};
+  return {true, fs::file_size(file), fs::last_write_time(file)};
+}
+
+bool saveConnectionsChecked(const fs::path& file, ConnectionsFile& data, bool readOnly,
+                            FileStamp* expected, std::string* error) {
+  try {
+    if (!expected) {
+      if (error) *error = "缺少 connections.json 文件戳，拒绝写回";
+      return false;
+    }
+    if (fileStamp(file) != *expected) {
+      if (error) *error = "connections.json 已在程序外被修改；为避免覆盖，请重启后再编辑";
+      return false;
+    }
+    if (!saveConnections(file, data, readOnly, error)) return false;
+    *expected = fileStamp(file);
+    return true;
+  } catch (const fs::filesystem_error& e) {
+    if (error) *error = "读取 connections.json 文件戳失败：" + std::string(e.what());
+    return false;
+  }
+}
+
 }  // namespace uicfg
