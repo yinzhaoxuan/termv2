@@ -65,4 +65,4 @@
 | `96f8abd` | DS-15 诊断包导出与脱敏（D8） | [DS-15-诊断包导出.md](DS-15-诊断包导出.md) |
 | `65f5d0d` | DS-16 快捷键展示（D5） | [DS-16-快捷键展示.md](DS-16-快捷键展示.md) |
 | `1356bb6` | DS-10 OSC 52 读逐次确认（NEW-04） | [DS-10-OSC52读确认.md](DS-10-OSC52读确认.md) |
-| （待提交） | NEW-05 余项：`SessionStatus.droppedOutputBytes` 与状态栏提示 | ADR-001 §2.8 |
+| `f36ac44` | NEW-05 余项：`SessionStatus.droppedOutputBytes` 与状态栏提示 | ADR-001 §2.8 |
