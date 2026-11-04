@@ -65,4 +65,4 @@
 | `22ee722` | DS-12 Direct 首次信任 | [DS-12-Direct首次信任.md](DS-12-Direct首次信任.md) |
 | `6db9448` | DS-9 外观 Profile：配色单一来源、appearanceProfiles、回滚/内存、.itermcolors 导入（D3、D4） | [DS-9-外观Profile.md](DS-9-外观Profile.md) |
 | `26a7618` | DS-13 按连接选择 SSH 传输（增补二 D-5） | [DS-13-按连接选择传输.md](DS-13-按连接选择传输.md) |
-| （待提交） | DS-14 连接编辑器（D1） | [DS-14-连接编辑器.md](DS-14-连接编辑器.md) |
+| `1fdee54` | DS-14 连接编辑器（D1） | [DS-14-连接编辑器.md](DS-14-连接编辑器.md) |
