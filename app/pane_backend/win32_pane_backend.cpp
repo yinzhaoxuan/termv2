@@ -125,13 +125,14 @@ bool localDirectoryExists(const std::wstring &directory) {
     return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-SshTransportFactory makeSshFactory(bool direct, std::string *err) {
 #if defined(IT2W_SSH_DIRECT) && IT2W_SSH_DIRECT
-    constexpr bool buildHasDirect = true;
+constexpr bool kBuildHasDirect = true;
 #else
-    constexpr bool buildHasDirect = false;
+constexpr bool kBuildHasDirect = false;
 #endif
-    switch (selectSshTransport(direct, buildHasDirect, err)) {
+
+SshTransportFactory makeSshFactory(bool direct, std::string *err) {
+    switch (selectSshTransport(direct, kBuildHasDirect, err)) {
     case SshTransportChoice::ConPty:
         return [](SshCallbacks cb) -> std::unique_ptr<SshSessionTransport> {
             return std::make_unique<SshTransport>(std::move(cb));
@@ -262,6 +263,9 @@ private:
     bool startSession();
     std::variant<LaunchSpec, std::string> buildLocalSpec(std::optional<LocalLaunchOptions> local, GridSize gs);
     bool failSyncStart(std::string text);
+    // 选定本 attempt 的 SSH 传输（ADR-006），记诊断，返回工厂；构建不含直连时返回空并在 *err 写明改法。
+    SshTransportFactory chooseSshFactory(std::optional<SshTransportMode> perConnection, SshAuthMode auth,
+                                         std::string *err);
     void fail(std::string text);
     void pushCellPixelSize();          // GridMetrics → itcore_set_cell_pixel_size
     void pump(); // 单轮预算；绝不派发消息/调用 PaneEvents
@@ -336,8 +340,8 @@ private:
     bool eventsPosted_ = false;
     // 仅诊断用：默认关闭，会向远端 stdin 注入 PING/伪应答。只认环境变量值 1。
     const bool osc52Ping_ = envFlagOn(std::getenv("ITERM2WIN_OSC52_PING"));
-    const bool envSshDirect_ = envFlagOn(std::getenv("ITERM2WIN_SSH_DIRECT"));
-    bool attemptDirect_ = false;
+    const std::optional<bool> envSshDirect_ = sshDirectEnv(std::getenv("ITERM2WIN_SSH_DIRECT"));
+    TransportChoice attemptTransport_;  // 本 attempt 的 SSH 传输及其来源；startSession 开头清零
     std::optional<std::wstring> localCommand_;  // --command，仅第一个本地窗格；重连（新 attempt）同样带上
     // 与关闭线程 / 传输回调共享的唯一状态（不含 this、不含 PaneEvents）
     std::shared_ptr<SessionShared> shared_ = std::make_shared<SessionShared>();
@@ -498,6 +502,7 @@ bool Win32PaneBackend::startSession() {
     clipboardGate_.reset();
     pendingClipboardRead_.reset();
     clipboardWriteNotified_ = false;
+    attemptTransport_ = {};
     auto hyperV = std::exchange(pendingHyperV_, std::nullopt);
     { std::lock_guard l(statusMu_); status_.recovery = {}; status_.hostKeyChanged = false; }
     itcore_options opt{};
@@ -594,7 +599,7 @@ bool Win32PaneBackend::startSession() {
                 p.hvResult_ = a;
                 // HyperVTransport 已将 SnapshotError 展平成文本；按本次连接的模式标注。
                 constexpr std::string_view snapshotPrefix = "SSH 配置快照无效：";
-                if (p.attemptDirect_ && a.kind == HvAction::Fail && a.text.starts_with(snapshotPrefix))
+                if (p.attemptTransport_.direct && a.kind == HvAction::Fail && a.text.starts_with(snapshotPrefix))
                     p.hvResult_->text.replace(0, snapshotPrefix.size(), "SSH 配置无效（直连）：");
                 if (a.kind == HvAction::Connect) {
                     std::lock_guard l(p.statusMu_);
@@ -607,8 +612,7 @@ bool Win32PaneBackend::startSession() {
             });
         };
         std::string err;
-        attemptDirect_ = wantDirectSsh(h.ssh.transport, envSshDirect_);
-        auto factory = makeSshFactory(attemptDirect_, &err);
+        auto factory = chooseSshFactory(h.ssh.transport, h.ssh.target.auth, &err);
         if (!factory) { fail(err); return false; }
         auto ht = std::make_unique<HyperVT>();
         ht->t = std::make_unique<HyperVTransport>(cb, std::move(factory));
@@ -629,8 +633,7 @@ bool Win32PaneBackend::startSession() {
         };
         cb.onDiagnostic = onDiag;
         cb.onOutputTap = outputTap;
-        attemptDirect_ = wantDirectSsh(o->transport, envSshDirect_);
-        auto factory = makeSshFactory(attemptDirect_, &err);
+        auto factory = chooseSshFactory(o->transport, o->target.auth, &err);
         if (!factory) { fail(err); return false; }
         auto st = std::make_unique<SshT>();
         st->t = factory(cb);
@@ -639,10 +642,24 @@ bool Win32PaneBackend::startSession() {
         shared_->transport = transport_;
         if (auto se = raw->start(SessionId{sessionId_}, AttemptId{attempt_}, *o)) {
             const bool direct = raw->mode() == SshTransportMode::Direct;
-            return failSyncStart(formatSshPreStartError(direct, se->kind, se->field, se->reason));
+            return failSyncStart(withDirectSourceHint(formatSshPreStartError(direct, se->kind, se->field, se->reason),
+                                                      attemptTransport_));
         }
     }
     return true;
+}
+
+SshTransportFactory Win32PaneBackend::chooseSshFactory(std::optional<SshTransportMode> perConnection,
+                                                       SshAuthMode auth, std::string *err) {
+    attemptTransport_ = resolveSshTransport(perConnection, envSshDirect_, cfg_->sshDefaultTransport,
+                                            kBuiltinSshDefault, kBuildHasDirect, auth == SshAuthMode::Agent);
+    const std::string line = formatPaneDiagLine(sessionId_, attempt_, "ssh.transport", 0, std::nullopt, 0,
+                                                transportDiagText(attemptTransport_));
+    pumpLog(nullptr, line.c_str());
+    appendPaneDiag(line);
+    auto factory = makeSshFactory(attemptTransport_.direct, err);
+    if (!factory && err) *err += directSourceHint(attemptTransport_.source);
+    return factory;
 }
 
 bool Win32PaneBackend::failSyncStart(std::string text) {
@@ -685,7 +702,7 @@ void Win32PaneBackend::onTransportState(TransportState s, std::optional<Transpor
             const std::string line = formatPaneDiagLine(sessionId_, attempt_, "session.prestart", 0, std::nullopt, 0, *now);
             pumpLog(nullptr, line.c_str());
             appendPaneDiag(line);
-            fail(std::move(*now));
+            fail(withDirectSourceHint(std::move(*now), attemptTransport_));
             return;
         }
         finishSession();
@@ -717,7 +734,9 @@ void Win32PaneBackend::completePump(uint64_t dropped) {
     {
         std::lock_guard l(statusMu_);
         status_.state = terminal_.failed ? uishell::SessionState::Failed : uishell::SessionState::Exited;
-        status_.errorText = terminal_.error;
+        // 连接自身失败（不是用户关闭）时，说明直连是怎么选中的。
+        status_.errorText = terminal_.failed && !closing_ ? withDirectSourceHint(terminal_.error, attemptTransport_)
+                                                          : terminal_.error;
         status_.droppedOutputBytes = terminal_.droppedOutputBytes;
         status_.exitCode = terminal_.exitCode;
         status_.hasForegroundJob = false;
@@ -1710,6 +1729,11 @@ void Win32PaneBackend::teardown() {
 
 bool shutdownPaneBackends(unsigned timeoutMs) {
     return SessionCloser::shutdownAll(std::chrono::milliseconds(timeoutMs));
+}
+
+TransportChoice defaultSshTransport(std::optional<SshDefaultTransport> settings, bool authIsAgent) {
+    return resolveSshTransport(std::nullopt, sshDirectEnv(std::getenv("ITERM2WIN_SSH_DIRECT")), settings,
+                               kBuiltinSshDefault, kBuildHasDirect, authIsAgent);
 }
 
 uishell::PaneBackendFactory makeWin32PaneBackendFactory(PaneBackendConfig cfg) {

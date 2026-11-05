@@ -9,13 +9,25 @@
 | 终端核心 `ports/core` | VT 解析、屏幕与历史（10000 行 / 64 MiB 默认）、SGR 子参数与下划线样式、UCD 16 宽度、OSC 8 / 52、DA / DECRQSS / XTVERSION / XTGETTCAP（VT220 身份）、选区、搜索、编码（键 / 鼠标 / 粘贴） | Linux / macOS ctest；CORE-01/02 外部向量未入仓 |
 | 渲染 `renderer` | D2D / DWrite，脏行画布，光标与 IME，配色读自核心（DS-9） | 逻辑单测；像素效果未实机 |
 | 窗格后端 `app/pane_backend` | pump 状态机（ADR-001）、ConPTY / 兼容 SSH / Direct SSH / Hyper-V、诊断日志 5 MiB × 3、OSC 52 读逐次确认（DS-10）、丢弃字节上报、会话 / 应用内存账本（DS-17） | 纯逻辑单测；Windows 只经 CI mingw 编译 |
-| 传输 `platform/windows` | ConPTY、`ssh.exe` 快照、libssh2 Direct（含首次信任 DS-12）、Hyper-V 解析 | Direct 只在手动触发的 `mingw-direct` 里编译 |
+| 传输 `platform/windows` | ConPTY、`ssh.exe` 快照、libssh2 Direct（含首次信任 DS-12）、Hyper-V 解析；默认传输按 ADR-006 选择（内置默认仍兼容） | Direct 由 CI `mingw-direct` 编译（ADR-006 起每次推送） |
 | 主界面 `ui` | 会话树与连接编辑器（DS-14）、标签 / 分屏、历史搜索、多行粘贴确认、外观 Profile 与 `.itermcolors`（DS-9）、按连接选择传输（DS-13）、快捷键展示（DS-16）、诊断包导出（DS-15） | uicfg 单测；Win32 代码只经 CI mingw 编译 |
 
 - **测试**：macOS 本机 ctest 172 项全过；CI 每次推送跑 linux / asan / tsan / mingw。
 - **最大缺口**：上表「未实机」的部分全部没有在 Windows 上跑过。手测清单汇总在 [TODO.md](TODO.md) §1（每个设计文档的「只能在 Windows 上验」一节）。手测结果请写进本文件，并附「导出诊断包…」里的提交号与 Windows 版本（REVIEW C6）。
 - **许可**：GPL-3.0-or-later（[LICENSE-AUDIT.md](LICENSE-AUDIT.md)）。
 - **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认待 ADR（TODO §2.1）。OSC 52 读写默认全关。
+
+## 2026-11-05：ADR-006 SSH 默认传输（阶段 1）
+
+见 [ADR-006-SSH默认传输.md](ADR-006-SSH默认传输.md)。用户已批准；阶段 1 不改变现有用户的行为（内置默认仍是兼容）。
+
+- 选择规则：连接 `ssh.transport` > 环境变量 `ITERM2WIN_SSH_DIRECT`（`1` 直连 / `0` 兼容，新增 `0`）> settings.json 隐藏字段 `sshDefaultTransport`（`auto` / `compatible` / `direct`）> 内置默认 `kBuiltinSshDefault`。`auto`：构建含 Direct 且 agent 认证 → 直连，否则兼容。纯函数 `resolveSshTransport` 取代 `wantDirectSsh`。
+- 直连失败、且不是连接自己写明的：`errorText` 末尾说明来源（环境变量 / settings / 默认）和改回 `ssh.exe` 的办法。「此构建未包含直连 SSH。」和「直连 v0 仅支持 agent 认证」两条文字只说原因，改法按来源追加。
+- 每次启动 SSH 写诊断 `ssh.transport direct=0/1 source=…`；诊断包配置摘要加 `sshDefaultTransport`；settings 值非法时启动状态栏提示一次，原值保存时原样写回。
+- 连接编辑器：传输第一项显示「跟随全局默认（当前：直连 / 兼容）」，切换认证方式时刷新。
+- CI：`mingw-direct` 每次推送都跑，缓存 `build-mingw-direct/ssh-a-deps`。发布包用这个构建。
+- 测试：`resolveSshTransport` 全表（连接 × 环境变量三态 × settings 四态 × 内置三态 × 构建 × 认证）、`sshDirectEnv`、来源提示与诊断文字；settings 往返与 8 种非法值；编辑器标签；诊断包摘要。macOS ctest 172 项全过。
+- **未验证**：`win32_pane_backend.cpp`、`connection_dialog.cpp`、`main.cpp` 的改动要等 CI `mingw` / `mingw-direct`；缓存是否命中要看第二次运行；Windows 手测见手测清单 P1-3 新增的五项。
 
 ## 2026-11-05：实现审查修复
 

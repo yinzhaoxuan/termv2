@@ -62,14 +62,20 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # ADR-006 阶段 1：发布包用这个构建，所以每次推送都编，不再只靠手动触发。
   mingw-direct:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: |
           sudo apt-get update
           sudo apt-get install -y mingw-w64 g++-mingw-w64-x86-64-posix
+      # OpenSSL / libssh2 的 ExternalProject 目录（源码、构建、安装与 stamp）。版本、SHA-256、补丁和工具链
+      # 都在键里；命中时 stamp 未变，ExternalProject 跳过重建。缓存失效只会退回完整构建。
+      - uses: actions/cache@v4
+        with:
+          path: build-mingw-direct/ssh-a-deps
+          key: ssh-a-deps-${{ runner.os }}-${{ hashFiles('cmake/SshDirectDeps.cmake', 'cmake/ssh_a_openssh_only.cmake', 'cmake/mingw-w64.cmake', 'cmake/mingw-w64-ssh-a-libssh2.cmake') }}
       - run: cmake --preset mingw-direct
       - run: cmake --build --preset mingw-direct -j2
       - uses: actions/upload-artifact@v4

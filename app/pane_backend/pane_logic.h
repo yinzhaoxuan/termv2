@@ -320,10 +320,38 @@ private:
 // 环境开关只有值恰好为 "1" 才开启。
 bool envFlagOn(const char *value);
 
-// 连接未写明传输时用环境默认值（ITERM2WIN_SSH_DIRECT=1）。
-bool wantDirectSsh(std::optional<it2w::SshTransportMode> perConnection, bool envDefault);
+// ---- SSH 传输选择（DS-13、ADR-006）----
+// 没写 ssh.transport 的连接用的全局默认。Auto：构建含直连且 agent 认证 → 直连，否则兼容。
+enum class SshDefaultTransport { Auto, Compatible, Direct };
+// ADR-006 阶段 1 仍为兼容；阶段 2 的门槛都满足后改成 Auto。
+inline constexpr SshDefaultTransport kBuiltinSshDefault = SshDefaultTransport::Compatible;
 
-// 请求直连但构建未包含时必须报错，不回落到 ConPTY。
+enum class TransportSource { Connection, Environment, Settings, Builtin };
+struct TransportChoice {
+    bool direct = false;
+    TransportSource source = TransportSource::Builtin;
+    bool operator==(const TransportChoice &) const = default;
+};
+
+// ITERM2WIN_SSH_DIRECT：恰为 "1" → 直连，恰为 "0" → 兼容，其他值或未设 → nullopt（不参与）。
+std::optional<bool> sshDirectEnv(const char *value);
+
+// 优先级：连接 > 环境变量 > settings.json > 内置默认。只有 Auto 看构建和认证方式；
+// 显式要直连而构建不含时仍返回 direct，由 selectSshTransport 报错，不回落。
+TransportChoice resolveSshTransport(std::optional<it2w::SshTransportMode> perConnection,
+                                    std::optional<bool> env,
+                                    std::optional<SshDefaultTransport> settings,
+                                    SshDefaultTransport builtin,
+                                    bool buildHasDirect, bool authIsAgent);
+
+// 直连是怎么被选中的、怎样改回 ssh.exe（一句完整的话）。
+std::string directSourceHint(TransportSource);
+// 直连失败的 errorText：直连不是连接自己写明的时候，追加来源说明；其余原样返回。
+std::string withDirectSourceHint(std::string error, const TransportChoice &);
+// 诊断行 ssh.transport 的内容，如 "direct=1 source=settings"。
+std::string transportDiagText(const TransportChoice &);
+
+// 请求直连但构建未包含时必须报错，不回落到 ConPTY。err 只说明原因，改法由调用方按来源追加。
 enum class SshTransportChoice { ConPty, Direct, Unavailable };
 SshTransportChoice selectSshTransport(bool wantDirect, bool buildHasDirect, std::string *err = nullptr);
 

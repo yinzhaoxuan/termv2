@@ -8,7 +8,7 @@
 ## 0. 准备
 
 - [ ] **取构建产物**。GitHub → Actions → CI，选最新一次 main 的运行，下载 artifact `it2w_shell-mingw-<提交>`（`it2w_shell.exe` 与 `licenses/`）。
-- [ ] **手动触发 `mingw-direct`**：Actions → CI → Run workflow（main）。确认编译通过（DS-12、DS-13、DS-10 的 Direct 代码至今没编译过），并下载 `it2w_shell-mingw-direct-<提交>`。Direct 相关的测试（P1-3、P1-4、P1-5）用这个 exe。
+- [ ] **取 Direct 构建**：同一次运行里的 `it2w_shell-mingw-direct-<提交>`（ADR-006 之后每次推送都编）。Direct 相关的测试（P1-3、P1-4、P1-5、P2-4 读）用这个 exe；它也是发布包用的构建。
 - [ ] 两个 exe 分别放进不同目录（各带自己的 `licenses/`）。配置目录二者共用：`%APPDATA%\it2w`。如果以前用过旧版本，**先备份这个目录**。
 - [ ] 测试机记录：Windows 版本与内部版本号（`winver`），conhost 版本，显示缩放（100% / 150%），是否装了中文输入法。
 - [ ] 准备一台 Linux SSH 服务器：一个用户用密钥登录（公钥已 `ssh-add` 进 Windows OpenSSH agent），另一个用户只允许密码。有条件再准备一台 Hyper-V 虚拟机（Linux，开 sshd）。
@@ -66,8 +66,13 @@
 - [ ] 「直连」+ 密钥文件：编辑器保存时报错、焦点落在认证；手改 JSON 绕过时，启动时状态栏报连接配置无效。
 - [ ] 用**普通** mingw exe（不含 Direct）连一条「直连」连接：窗格 Failed，文字提示「此构建未包含直连 SSH」。
 - [ ] Direct 下 `vim`、`top`、改窗口大小（远端 `stty size` 跟着变）、`exit` 都正常。
+- [ ] 设 `ITERM2WIN_SSH_DIRECT=0` 后启动：没写传输的连接走 `ssh.exe`，即使 settings.json 写了 `"sshDefaultTransport": "direct"`；写「直连」的连接仍走 Direct。
+- [ ] 不设环境变量，settings.json 写 `"sshDefaultTransport": "auto"` 后重启：没写传输的 agent 连接走 Direct，密钥文件 / 密码连接走 `ssh.exe`。编辑器里第一项显示「跟随全局默认（当前：直连）」，把认证切到「密钥文件」后变成「（当前：兼容）」。
+- [ ] 同上，把 agent 服务停掉再连 agent 连接：窗格 Failed，文字末尾说明「此连接因 settings.json 的 sshDefaultTransport 使用直连」及改法；不会自己改用 `ssh.exe`。
+- [ ] settings.json 写 `"sshDefaultTransport": "Direct"`（大小写错）：启动时状态栏提示「sshDefaultTransport 无效，已按默认处理」，连接走 `ssh.exe`；之后在界面里改快捷键等触发保存，文件里的 `"Direct"` 原样保留。
+- [ ] `pane-diag.log` 每次连接有一行 `ssh.transport direct=… source=…`，来源与上面各步一致；「导出诊断包…」的配置摘要有 `sshDefaultTransport = …`。
 
-来源：DS-13 §6、ADR-003。
+来源：DS-13 §6、ADR-003、ADR-006。
 
 ### P1-4 Direct 首次信任（用 mingw-direct 的 exe）
 - [ ] 连一台 `%APPDATA%\it2w\ssh\known_hosts` 里没有的主机：窗格出现「核对指纹…」；点开显示类型与 `SHA256:` 指纹，默认按钮是取消。

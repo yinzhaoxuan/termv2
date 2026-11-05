@@ -25,17 +25,25 @@ Hyper-V 连接的内层 SSH 同样按这个字段选择。写明的值优先于�
 "ssh": { "user": "gavin", "auth": { "mode": "agent" }, "transport": "direct" }
 ```
 
-没写 `transport` 的连接跟随**全局默认**：在 Windows PowerShell 中，于启动产品前设置环境变量：
+没写 `transport` 的连接跟随**全局默认**（[ADR-006](ADR-006-SSH默认传输.md)），按下面顺序取第一个有值的：
+
+1. 环境变量 `ITERM2WIN_SSH_DIRECT`：恰为 `1` → 直连，恰为 `0` → 兼容；`true` / `ON` 等其他值视为没设。窗格构造时读一次。
+2. settings.json 的隐藏字段 `sshDefaultTransport`：`"auto"` / `"compatible"` / `"direct"`。只影响此后新建的窗格；值非法时按内置默认处理，启动时状态栏提示一次，原值保存时原样写回。
+3. 内置默认：目前是兼容（ADR-006 阶段 1）。满足 ADR-006 阶段 2 的门槛后改为 `auto`。
+
+`auto`：构建含 Direct 且认证方式是 agent → 直连；否则兼容。它是启动前的静态选择，不是失败后回落。
 
 ```powershell
-$env:ITERM2WIN_SSH_DIRECT = '1'
+$env:ITERM2WIN_SSH_DIRECT = '1'   # 或 '0'：全部退回 ssh.exe
 .\it2w_shell.exe
 ```
 
-**仅值恰为 `1` 时开启**；`true` / `ON` 等值不生效。环境变量在窗格构造时读取一次；connections.json 只在产品启动时读入，改了 `transport` 要重启产品才生效。
-两者都没有时使用兼容传输（默认值不变）。选了 Direct 而构建未包含它时明确报错。
+连接编辑器的传输下拉框第一项显示「跟随全局默认（当前：直连 / 兼容）」，按编辑中的认证方式实时计算。每次启动 SSH 时 `pane-diag.log` 记一条 `ssh.transport direct=0/1 source=connection/env/settings/builtin`。
+
+connections.json 只在产品启动时读入，改了 `transport` 要重启产品才生效。
+显式选了 Direct（连接、环境变量或 settings 的 `direct`）而构建未包含它时明确报错。
 `"transport": "direct"` 配 KeyFile / Interactive 认证会在加载校验时被拒绝，窗格不启动。
-连接、主机密钥或认证失败均**不自动回落**。要改用兼容模式，把该连接的 `transport` 改为 `"compatible"`，或移除环境变量后重新启动产品。
+连接、主机密钥或认证失败均**不自动回落**。直连不是连接自己写明的时候，失败文字末尾会说明它从哪来（环境变量、settings 或默认）以及怎么改回 `ssh.exe`。
 
 窗格诊断（含 `ssh.direct.*`）写入 `<configDir>/logs/pane-diag.log`，约 5 MiB × 3 滚动（当前文件加 `.1`、`.2`）。
 `configDir` 来自窗格配置；shell 未传入时与默认配置目录一样使用 `%APPDATA%\it2w`，该目录也不可用则不写。
@@ -58,13 +66,12 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
   兼容模式的 `-F` 快照包含 `HostKeyAlias`，`HostName` 仍是当前地址，并设 `CheckHostIP no`，避免 OpenSSH 再把瞬时 IP 写进 `known_hosts`。OpenSSH 按别名原文查找和保存，不附加端口。
   直连用同一字符串调用 `libssh2_knownhost_check`（别名不做 `[别名]:端口`）。普通 SSH 不设别名，仍按主机名或 `[主机]:端口` 查找。
   已经按 IP 信任过的虚拟机需要在兼容模式里再确认一次，之后换地址不用重做。手动回退地址也用这台 VM 的别名。
-- **首次信任**（DS-12）：未知主机（含新的 Hyper-V 虚拟机）在窗格上给出「核对指纹…」，用户确认后写入 `known_hosts` 并重连；不 accept-new，密钥变化不提供信任按钮。是否把 Direct 改为默认传输另行决定（TODO §2.1）。
+- **首次信任**（DS-12）：未知主机（含新的 Hyper-V 虚拟机）在窗格上给出「核对指纹…」，用户确认后写入 `known_hosts` 并重连；不 accept-new，密钥变化不提供信任按钮。是否把 Direct 改为默认传输见 [ADR-006](ADR-006-SSH默认传输.md)（提议中）。
 
 ## 能力与限制
 
-- Direct 暂声明 `supportsOsc52Read=false`（REVIEW 增补二 D-1：逐次读确认 UI 之前不开放）。
-  通道对 OSC 52 读查询透明，但应用层不应答，即使 `osc52.allowRead=true`。
-  Hyper-V 随内层传输；本地和兼容 SSH/Hyper-V 的 ConPTY 路径同样为 false。
+- Direct 声明 `supportsOsc52Read=true`：`osc52.allowRead=true` 时，每个读请求都弹确认框（DS-10，取代 D-1 的临时关闭）。
+  Hyper-V 随内层传输；本地和兼容 SSH/Hyper-V 的 ConPTY 路径收不到读请求，为 false。
   写剪贴板仍受 `osc52.allowWrite` 控制，见 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)。
 - PTY 使用 `xterm-256color`，网格至少 20×5；Starting 期间合并尺寸，并在 shell 启动前补齐最新尺寸。
   v0 的 PTY / window-change **像素尺寸填 0**。
@@ -73,7 +80,7 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
 - 远端退出码 255 仍是 `RemoteExit(255)`，不套用 ssh.exe 的客户端错误语义。
 - 字节透明不代表 tmux 控制模式或 Sixel 渲染已交付；v0 不新增 DCS / Sixel 能力旗标。
   不支持 agent/X11/端口转发、ProxyJump、主机证书或交互凭据提示；未实现 SSH/TCP keepalive。
-  模式选择是环境变量全局开关，尚无按连接选择或首次信任 UI。
+  传输按连接选择（DS-13），首次信任见 DS-12；默认传输的去向见 [ADR-006](ADR-006-SSH默认传输.md)（提议中）。
 
 ## 验收与随包文件
 

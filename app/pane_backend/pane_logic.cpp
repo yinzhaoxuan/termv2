@@ -316,14 +316,60 @@ void PendingEvents::flush(std::weak_ptr<char> life, Batch events) {
     }
 }
 bool envFlagOn(const char *value) { return value && std::string_view(value) == "1"; }
-bool wantDirectSsh(std::optional<it2w::SshTransportMode> perConnection, bool envDefault) {
-    return perConnection ? *perConnection == it2w::SshTransportMode::Direct : envDefault;
+std::optional<bool> sshDirectEnv(const char *value) {
+    if (!value) return std::nullopt;
+    const std::string_view v(value);
+    if (v == "1") return true;
+    if (v == "0") return false;
+    return std::nullopt;
+}
+TransportChoice resolveSshTransport(std::optional<it2w::SshTransportMode> perConnection,
+                                    std::optional<bool> env,
+                                    std::optional<SshDefaultTransport> settings,
+                                    SshDefaultTransport builtin,
+                                    bool buildHasDirect, bool authIsAgent) {
+    if (perConnection) return {*perConnection == it2w::SshTransportMode::Direct, TransportSource::Connection};
+    if (env) return {*env, TransportSource::Environment};
+    const auto source = settings ? TransportSource::Settings : TransportSource::Builtin;
+    switch (settings.value_or(builtin)) {
+    case SshDefaultTransport::Direct: return {true, source};
+    case SshDefaultTransport::Compatible: return {false, source};
+    case SshDefaultTransport::Auto: break;
+    }
+    return {buildHasDirect && authIsAgent, source};
+}
+std::string directSourceHint(TransportSource source) {
+    switch (source) {
+    case TransportSource::Connection:
+        return "改用 ssh.exe：在连接编辑器里把传输改为兼容。";
+    case TransportSource::Environment:
+        return "此连接因环境变量 ITERM2WIN_SSH_DIRECT=1 使用直连；改用 ssh.exe：在连接编辑器里把传输改为兼容，或去掉该环境变量。";
+    case TransportSource::Settings:
+        return "此连接因 settings.json 的 sshDefaultTransport 使用直连；改用 ssh.exe：在连接编辑器里把传输改为兼容，或把该字段改为 compatible。";
+    case TransportSource::Builtin:
+        return "此连接按默认使用直连；改用 ssh.exe：在连接编辑器里把传输改为兼容。";
+    }
+    return {};
+}
+std::string withDirectSourceHint(std::string error, const TransportChoice &choice) {
+    if (!choice.direct || choice.source == TransportSource::Connection || error.empty()) return error;
+    return error + "\n" + directSourceHint(choice.source);
+}
+std::string transportDiagText(const TransportChoice &choice) {
+    const char *source = "builtin";
+    switch (choice.source) {
+    case TransportSource::Connection: source = "connection"; break;
+    case TransportSource::Environment: source = "env"; break;
+    case TransportSource::Settings: source = "settings"; break;
+    case TransportSource::Builtin: break;
+    }
+    return std::string("direct=") + (choice.direct ? "1" : "0") + " source=" + source;
 }
 SshTransportChoice selectSshTransport(bool wantDirect, bool buildHasDirect, std::string *err) {
     if (err) err->clear();
     if (!wantDirect) return SshTransportChoice::ConPty;
     if (buildHasDirect) return SshTransportChoice::Direct;
-    if (err) *err = "此构建未包含直连 SSH；把连接的 ssh.transport 改为 compatible，或去掉 ITERM2WIN_SSH_DIRECT";
+    if (err) *err = "此构建未包含直连 SSH。";
     return SshTransportChoice::Unavailable;
 }
 void osc52DiagPingSequence(int (*reply)(void *, const char *, size_t), void *ctx,

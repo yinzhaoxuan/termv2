@@ -1764,37 +1764,65 @@ static void prestart_failure_leaves_starting() {
 
 static void ssh_direct_select() {
     for (bool buildHasDirect : {false, true}) {
-        for (const char *value : std::vector<const char *>{nullptr, "", "0", "true", "on", "yes", "01", " 1", "1 ", "1\n", "11"}) {
-            CHECK(!envFlagOn(value));
-            std::string err = "stale error";
-            CHECK(selectSshTransport(envFlagOn(value), buildHasDirect, &err) == SshTransportChoice::ConPty);
-            CHECK(err.empty());
-        }
+        std::string err = "stale error";
+        CHECK(selectSshTransport(false, buildHasDirect, &err) == SshTransportChoice::ConPty);
+        CHECK(err.empty());
     }
-    CHECK(envFlagOn("1"));
     std::string err = "stale error";
-    CHECK(selectSshTransport(envFlagOn("1"), true, &err) == SshTransportChoice::Direct);
+    CHECK(selectSshTransport(true, true, &err) == SshTransportChoice::Direct);
     CHECK(err.empty());
-    CHECK(selectSshTransport(envFlagOn("1"), false, &err) == SshTransportChoice::Unavailable);
-    CHECK(err == "此构建未包含直连 SSH；把连接的 ssh.transport 改为 compatible，或去掉 ITERM2WIN_SSH_DIRECT");
-    CHECK(selectSshTransport(false, false, &err) == SshTransportChoice::ConPty);
-    CHECK(err.empty());
+    CHECK(selectSshTransport(true, false, &err) == SshTransportChoice::Unavailable);
+    CHECK(err == "此构建未包含直连 SSH。");
     CHECK(selectSshTransport(true, false) == SshTransportChoice::Unavailable);
 }
 
+// ADR-006：环境变量三态、四级优先级、Auto 只看构建与认证方式。
 static void ssh_connection_transport() {
     using Mode = it2w::SshTransportMode;
-    for (bool envDefault : {false, true}) {
-        CHECK(wantDirectSsh(std::nullopt, envDefault) == envDefault);
-        CHECK(!wantDirectSsh(Mode::ConPty, envDefault));
-        CHECK(wantDirectSsh(Mode::Direct, envDefault));
-        for (bool buildHasDirect : {false, true}) {
-            CHECK(selectSshTransport(wantDirectSsh(Mode::ConPty, envDefault), buildHasDirect) ==
-                  SshTransportChoice::ConPty);
-            CHECK(selectSshTransport(wantDirectSsh(Mode::Direct, envDefault), buildHasDirect) ==
-                  (buildHasDirect ? SshTransportChoice::Direct : SshTransportChoice::Unavailable));
-        }
+    using D = SshDefaultTransport;
+    using S = TransportSource;
+    CHECK(sshDirectEnv("1") == std::optional<bool>(true));
+    CHECK(sshDirectEnv("0") == std::optional<bool>(false));
+    for (const char *value : std::vector<const char *>{nullptr, "", "true", "on", "01", " 1", "1 ", "1\n", "00", "false"})
+        CHECK(!sshDirectEnv(value));
+
+    const std::optional<bool> envs[] = {std::nullopt, false, true};
+    const std::optional<D> settingsValues[] = {std::nullopt, D::Auto, D::Compatible, D::Direct};
+    for (bool build : {false, true}) for (bool agent : {false, true})
+    for (auto env : envs) for (auto settings : settingsValues) for (D builtin : {D::Auto, D::Compatible, D::Direct}) {
+        // 连接写明的值压过一切。
+        CHECK(resolveSshTransport(Mode::Direct, env, settings, builtin, build, agent) == (TransportChoice{true, S::Connection}));
+        CHECK(resolveSshTransport(Mode::ConPty, env, settings, builtin, build, agent) == (TransportChoice{false, S::Connection}));
+        const auto got = resolveSshTransport(std::nullopt, env, settings, builtin, build, agent);
+        if (env) { CHECK(got == (TransportChoice{*env, S::Environment})); continue; }
+        const D effective = settings.value_or(builtin);
+        const bool direct = effective == D::Direct || (effective == D::Auto && build && agent);
+        CHECK(got == (TransportChoice{direct, settings ? S::Settings : S::Builtin}));
     }
+    // 内置默认在阶段 1 仍是兼容：什么都没设时不走直连。
+    CHECK(kBuiltinSshDefault == D::Compatible);
+    CHECK(!resolveSshTransport(std::nullopt, std::nullopt, std::nullopt, kBuiltinSshDefault, true, true).direct);
+    // 显式要直连而构建不含：仍报 direct，由 selectSshTransport 报 Unavailable，不回落。
+    CHECK(selectSshTransport(resolveSshTransport(std::nullopt, std::nullopt, D::Direct, D::Compatible, false, true).direct, false) ==
+          SshTransportChoice::Unavailable);
+    // Auto 在不含直连的构建里永远是兼容，不会选出不可用的传输。
+    CHECK(!resolveSshTransport(std::nullopt, std::nullopt, D::Auto, D::Compatible, false, true).direct);
+
+    // 失败文字：直连不是连接写明的才追加来源说明；兼容与空文字原样返回。
+    CHECK(withDirectSourceHint("E", {true, S::Connection}) == "E");
+    CHECK(withDirectSourceHint("E", {false, S::Settings}) == "E");
+    CHECK(withDirectSourceHint("", {true, S::Builtin}).empty());
+    for (S source : {S::Environment, S::Settings, S::Builtin})
+        CHECK(withDirectSourceHint("E", {true, source}) == "E\n" + directSourceHint(source));
+    CHECK(directSourceHint(S::Environment).find("ITERM2WIN_SSH_DIRECT") != std::string::npos);
+    CHECK(directSourceHint(S::Settings).find("sshDefaultTransport") != std::string::npos);
+    for (S source : {S::Connection, S::Environment, S::Settings, S::Builtin})
+        CHECK(directSourceHint(source).find("把传输改为兼容") != std::string::npos);
+
+    CHECK(transportDiagText({true, S::Settings}) == "direct=1 source=settings");
+    CHECK(transportDiagText({false, S::Environment}) == "direct=0 source=env");
+    CHECK(transportDiagText({true, S::Connection}) == "direct=1 source=connection");
+    CHECK(transportDiagText({false, S::Builtin}) == "direct=0 source=builtin");
 }
 
 // Running 阶段核心一直拒收：有限次重试后丢弃，不再 FedMore 空转；终态带上不完整输出。

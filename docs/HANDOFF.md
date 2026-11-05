@@ -92,11 +92,11 @@ Linux 上只跑探针的可移植自测：`-DIT2W_SSH_A_PROBE_ONLY=ON -DIT2W_SSH
 
 ### 运行时环境变量
 
-`envFlagOn`（`app/pane_backend/pane_logic.cpp`）只认**值恰好是 `1`**。`true`、`ON`、`01` 都是关。窗格构造时读一次，重连沿用。
+`envFlagOn`（`app/pane_backend/pane_logic.cpp`）只认**值恰好是 `1`**。`true`、`ON`、`01` 都是关。`ITERM2WIN_SSH_DIRECT` 改用 `sshDirectEnv`：恰为 `1` 或 `0` 才算设了，其他值视为没设。都在窗格构造时读一次，重连沿用。
 
 | 变量 | 作用 |
 |---|---|
-| `ITERM2WIN_SSH_DIRECT` | 只作**全局默认**：connections.json 里没写 `ssh.transport` 的连接，值为 `1` 时走 `DirectSshTransport`，否则走兼容传输。写了 `"direct"` / `"compatible"` 的连接以连接为准（DS-13）。选中 Direct 而构建没编进它就明确报错（「此构建未包含直连 SSH」），**不回落**到 `ssh.exe`。 |
+| `ITERM2WIN_SSH_DIRECT` | 没写 `ssh.transport` 的连接的**全局覆盖**：`1` → 直连，`0` → 兼容，其他值或未设 → 交给 settings.json `sshDefaultTransport`，再交给内置默认（目前兼容）。写了 `"direct"` / `"compatible"` 的连接以连接为准（DS-13、ADR-006）。选中 Direct 而构建没编进它就明确报错（「此构建未包含直连 SSH。」加改法），**不回落**到 `ssh.exe`。 |
 | `ITERM2WIN_OSC52_PING` | `1` 时打开 OSC 52 诊断：Reply 路径先发三段诊断再发真实应答；原始输出里 `]52;` 至多记 64 字节 hex。D-5 之后，ConPTY 写线程也只在这个开关下打 `OutputDebugStringA`（`[conpty] reply written=N`）。默认关。没有单独的 ODS 变量。 |
 | `SSH_AUTH_SOCK` | Direct 只接受以 `\\.\pipe\` 开头的值，否则用 `\\.\pipe\openssh-ssh-agent`。不用 Pageant。 |
 | `APPDATA` | 诊断目录。shell 未把 `configDir` 传进窗格时，用 `SHGetFolderPath(CSIDL_APPDATA)`，失败再读 `APPDATA`，得到 `%APPDATA%\it2w\logs\pane-diag.log`。两者都失败则不写。 |
@@ -229,7 +229,7 @@ B 批退出标准（REVIEW §7）：从主程序走通本地 PowerShell、手动
 
 逐项勾选以根目录 `REVIEW.md` §8 为准（已回写到 2026-11-05），剩余工作与推荐顺序以 [TODO.md](TODO.md) 为准。概括：
 
-- **已落地**：A 批全部（含 A5、A1 目录锁清理）、A′、B1–B5、D1 连接编辑器、D3 / D4 外观 Profile、D5 快捷键展示（只读）、D6（ADR-004）、D8 诊断包、E2 / NEW-02、E3 内存账本、E4 / E5（CI、预设、README）、E6 许可、E7 文档整理、NEW-03、NEW-04（DS-10）、NEW-05、DS-8 的 ABI 规则（ADR-005）。设计文档都在 `docs/DS-*.md` / `docs/ADR-*.md`。
+- **已落地**：A 批全部（含 A5、A1 目录锁清理）、A′、B1–B5、D1 连接编辑器、D3 / D4 外观 Profile、D5 快捷键展示（只读）、D6（ADR-004）、D8 诊断包、E2 / NEW-02、E3 内存账本、E4 / E5（CI、预设、README）、E6 许可、E7 文档整理、NEW-03、NEW-04（DS-10）、NEW-05、DS-8 的 ABI 规则（ADR-005）、SSH 默认传输阶段 1（ADR-006）。设计文档都在 `docs/DS-*.md` / `docs/ADR-*.md`。
 - **仍开放**：C1–C6 全部实机验证（[WINDOWS-手测清单.md](WINDOWS-手测清单.md)）；D2 搜索的正则与大历史耗时；D7 OSC 52 开关仍是 settings.json 隐藏字段、没有界面；E1 执行器 / UI 线程模型 ADR（需实测）；E8 GlyphCache 与连字；DS-7 的 TERM / terminfo 对齐（需实机）；E6 余项（MinGW 运行时许可文本打包）；D-5 的 QA 证据入仓。
 
 ### 4.4 D-5 余项
@@ -243,7 +243,7 @@ B 批退出标准（REVIEW §7）：从主程序走通本地 PowerShell、手动
 
 ### 4.5 Direct 改成默认传输之前
 
-两个前置条件都已落地：首次信任界面（DS-12，`22ee722`）与按连接选择传输（DS-13）。还缺的是 Windows 实机记录（DS-12 §6、DS-13 §6）和一次 `mingw-direct` 编译。是否把 Direct 改成默认、全局默认放在哪里，按 TODO §2.1 先写 ADR 再动代码。在那之前不要把 `IT2W_SSH_DIRECT` 或运行时默认改成 Direct。
+已由 [ADR-006](ADR-006-SSH默认传输.md) 决定，分两阶段。阶段 1 已落地：`auto`（agent → 直连）、settings.json `sshDefaultTransport`、环境变量 `1` / `0`、失败文字说明来源、发布包用 `mingw-direct`、CI 每次编 Direct。内置默认 `kBuiltinSshDefault` 仍是兼容。阶段 2 把它改成 `Auto`，前提是 ADR-006 §决策 4 的四道门槛都过了（编译、手测、一个工作日的实际使用、退回路径）。在那之前不要改 `kBuiltinSshDefault`。
 
 ### 4.6 Windows 实机待验
 
@@ -314,9 +314,17 @@ REVIEW §8.F1–F13 是同一批能力的另一份清单（Shell Integration、�
 
 | 节 | 内容 |
 |---|---|
-| 决策 | 方案 A；构建默认 OFF；运行时按连接 `ssh.transport` 选择，`ITERM2WIN_SSH_DIRECT=1` 为全局默认（DS-13）；v0 仅 agent；未知主机经首次信任界面写入 known_hosts（DS-12），不 accept-new；不做 POSIX 实连；agent 只用 OpenSSH 管道。 |
+| 决策 | 方案 A；构建默认 OFF，发布包用 `mingw-direct`；运行时按连接 > 环境变量 > settings.json > 内置默认选择（DS-13、ADR-006）；v0 仅 agent；未知主机经首次信任界面写入 known_hosts（DS-12），不 accept-new；不做 POSIX 实连；agent 只用 OpenSSH 管道。 |
 | Hyper-V 主机密钥身份 | `hv-<规范化 VM GUID>`；兼容模式 `HostKeyAlias` + `CheckHostIP no`；Direct 查找串与 OpenSSH 一致，别名不加端口。 |
 | 能力与边界 | `supportsOsc52Read=true`，读请求逐次确认（DS-10）；关闭 ≤3s；不增加 DCS/Sixel 旗标；像素尺寸 0；序列透明不等于渲染能力。对应源码见 `UPSTREAM.md`。 |
+
+### ADR-006 SSH 默认传输
+
+| 节 | 内容 |
+|---|---|
+| 决策 | 没写传输的连接：环境变量（`1` / `0`）> settings.json `sshDefaultTransport` > 内置默认；`auto` = 构建含 Direct 且 agent 认证时直连。静态选择，失败不回落。 |
+| 阶段 | 阶段 1（已落地）内置默认仍兼容；阶段 2 改成 `auto`，门槛见 §决策 4。 |
+| 可见性 | 直连非连接写明时失败文字说明来源；编辑器「跟随全局默认（当前：…）」；诊断 `ssh.transport`。 |
 
 ### ADR-004 Ctrl+C / ADR-005 ABI 规则
 
@@ -325,7 +333,7 @@ REVIEW §8.F1–F13 是同一批能力的另一份清单（Shell Integration、�
 
 ### 使用时会碰到的行为
 
-- 选了 Direct 又连不上时，不会自动改走 `ssh.exe`。要兼容模式就在编辑器里把该连接的传输改成「兼容」，或去掉环境变量后重启（`ssh-direct.md`）。
+- 选了 Direct 又连不上时，不会自动改走 `ssh.exe`。要兼容模式就在编辑器里把该连接的传输改成「兼容」，或设 `ITERM2WIN_SSH_DIRECT=0` / settings.json `"sshDefaultTransport": "compatible"` 后重启（`ssh-direct.md`）。直连不是连接写明的时候，失败文字会说明它从哪来。
 - OSC 52 读只在 Direct 上能收到，`osc52.allowRead=true` 时每次弹框确认；ConPTY 路径收不到请求，远端 nvim / vim 若靠 OSC 52 读粘贴会超时，请用终端自己的粘贴（Ctrl+Shift+V 或右键）。
 - `ITERM2WIN_OSC52_PING=1` 会把诊断序列写进远端 stdin（ADR-001 R8）。默认关着。
 - 诊断日志含主机名、指纹、agent 路径；对外发送用「导出诊断包…」（DS-15）。
@@ -342,4 +350,4 @@ REVIEW §8.F1–F13 是同一批能力的另一份清单（Shell Integration、�
 3. **剩下的开发项**见 TODO §2.2：E1、E8、DS-7 需要实机；E6 余项依赖构建机。F-0..F-5 只写设计（ROADMAP）。
 4. **工作方式**：先在 `docs/DS-*.md` 写设计，再实现；平台无关的逻辑放 `ui/src`（uicfg）、`app/pane_backend/pane_logic.*`、`renderer/layout/` 并单测，Win32 文件只做薄胶水；CI 的 mingw 是唯一的 Windows 编译检查。改完回写 STATUS 顶部与 TODO，提交信息写清行为、测试结果与「未验证」项；动了 itcore 公开头文件要按 ADR-005 写明兼容性。
 
-构建自检：Linux 上 `ctest`（注意 nlohmann 和 CORE-01/02 向量）；要给 Windows 用的包用 MinGW 交叉编译；要手测 Direct 用 `mingw-direct` 预设（或 CI 手动触发的 `mingw-direct` 产物），在连接里写 `"transport": "direct"` 或运行时设 `ITERM2WIN_SSH_DIRECT=1`。
+构建自检：Linux 上 `ctest`（注意 nlohmann 和 CORE-01/02 向量）；要给 Windows 用的包用 MinGW 交叉编译；要手测 Direct 用 `mingw-direct` 预设（或 CI `mingw-direct` 任务的产物，每次推送都生成），在连接里写 `"transport": "direct"` 或运行时设 `ITERM2WIN_SSH_DIRECT=1`。

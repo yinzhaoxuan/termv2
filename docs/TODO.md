@@ -7,13 +7,13 @@
 
 - **构建与测试**：`cmake --preset dev && cmake --build --preset dev -j8 && ctest --preset dev -j8`。macOS 和 Linux 上能跑全部可移植测试（172 项）；`asan`、`tsan` 预设同理。见根 [README](../README.md)。
 - **Windows 代码在本地编不了**（`ui/shell_win32/main.cpp`、`app/pane_backend/win32_pane_backend.cpp`、`platform/windows/{conpty,ssh,ssh_direct,hyperv}`）。开发机没有 MinGW。靠 GitHub Actions 的 `mingw` 任务做编译检查：每次推送到 main 自动跑。
-- **Direct SSH 代码**只在 `IT2W_SSH_DIRECT=ON` 时编译。CI 的 `mingw-direct` 任务**只能手动触发**（Actions → CI → Run workflow），改了 `platform/windows/ssh_direct/` 就要手动跑一次。
+- **Direct SSH 代码**只在 `IT2W_SSH_DIRECT=ON` 时编译。CI 的 `mingw-direct` 任务自 ADR-006 起每次推送都跑（OpenSSL / libssh2 有缓存），产物也是发布包用的构建。
 - **写法约定**：平台无关的决策逻辑放在 `ui/src`（uicfg）、`app/pane_backend/pane_logic.*` 或 `platform/windows/common/`，并加单测；Win32 文件只做薄胶水。设计先写进 `docs/DS-*.md`，再写代码。提交信息用 `type(scope): 中文说明`，正文写清行为、测试结果和「未验证」项。改完回写 STATUS 顶部。
 - **不要做的事**：Direct 改默认要先按 §2.1 写 ADR 并有实机记录，在那之前不要把 `IT2W_SSH_DIRECT` 或运行时默认改成 Direct。v0.1 的 A/B/C 没收口之前，F-0..F-5（ROADMAP）只写设计。
 
 ## 1. 立即要做（不写代码）
 
-1. **手动触发一次 CI 的 `mingw-direct`**，验证 DS-12、DS-13、DS-10 的 Direct 构建能编译链接。
+1. **确认 CI 的 `mingw-direct` 通过**（ADR-006 起自动跑）：DS-10、DS-12、DS-13、ADR-006 的 Direct 代码第一次编译。
 2. **Windows 实机手测**：按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 从上往下做（已把下面各处的手测项合并并排好优先级；CI 的 mingw / mingw-direct 任务会上传 `it2w_shell.exe` 供下载）。代码都在 main 上，只缺实机记录。结果写进 STATUS，并绑定提交号和 Windows / conhost 版本（REVIEW C6）：
    - `986cdf7` 的清单：STATUS 2026-11-04「A5、A1 余量、DS-2、B1–B5」一节末尾（PowerShell 本地连接、Hyper-V 各分支、恢复不自动连接、多行粘贴确认、启动清理快照）。
    - DS-17 的清单：[DS-17-内存账本.md](DS-17-内存账本.md) §6。
@@ -31,11 +31,10 @@
 
 ## 2. 下一步开发（按推荐顺序）
 
-### 2.1 决定是否把 Direct 改成默认传输
+### 2.1 Direct 改成默认传输（ADR-006 阶段 2）
 
-- 前置条件都已在 main：首次信任界面（DS-12）、按连接选择传输（DS-13）。缺的是 Windows 实机记录（DS-12 §6、DS-13 §6、HANDOFF §4.6）和 `mingw-direct` 编译。
-- 要决定：发布包是否 `IT2W_SSH_DIRECT=ON`；没写 `ssh.transport` 的连接默认走哪种；全局默认放在 settings.json 还是继续用环境变量（ADR-003 §决策 1 需要改写）。
-- 不写代码，先写 ADR。
+- 已决定并完成阶段 1（[ADR-006](ADR-006-SSH默认传输.md)）：`auto` 按认证方式选（agent → 直连）；settings.json `sshDefaultTransport` 与环境变量 `1` / `0`；失败文字说明来源；发布包用 `mingw-direct`；CI 每次推送编 Direct。内置默认仍是兼容。
+- 阶段 2 只改 `kBuiltinSshDefault`（`app/pane_backend/pane_logic.h`）为 `Auto`。门槛见 ADR-006 §决策 4：`mingw-direct` 通过；手测清单 P1-3 / P1-4 / P1-5 / P2-4 的 Direct 项和 Direct 上的 P3-2；一个工作日的 `auto` 实际使用；两条退回路径验证过。
 
 ### 2.2 交付与资源
 
@@ -71,4 +70,5 @@
 | `ce2c79d` | DS-17 会话 / 应用两级内存账本（E3） | [DS-17-内存账本.md](DS-17-内存账本.md) |
 | `89e5f52` | Windows 实机手测清单；CI 上传 `it2w_shell.exe` | [WINDOWS-手测清单.md](WINDOWS-手测清单.md) |
 | `bf0adc1` | 文档回写：HANDOFF、README、REVIEW、ROADMAP | STATUS 2026-11-05 |
-| 本轮末 | 实现审查修复：ConPTY 常驻 closer、写线程 join、Ctrl 符号键 | [审查清单-2026-11-05.md](审查清单-2026-11-05.md) |
+| `08e36f2` | 实现审查修复：ConPTY 常驻 closer、写线程 join、Ctrl 符号键 | [审查清单-2026-11-05.md](审查清单-2026-11-05.md) |
+| 本轮末 | ADR-006 阶段 1：SSH 默认传输的来源与优先级、`sshDefaultTransport`、CI 每次编 Direct | [ADR-006-SSH默认传输.md](ADR-006-SSH默认传输.md) |

@@ -20,6 +20,11 @@ struct Osc52Settings {
   bool operator==(const Osc52Settings&) const = default;
 };
 
+// ADR-006：没写 ssh.transport 的连接的全局默认（隐藏字段 sshDefaultTransport，不进界面）。
+enum class SshDefaultTransport { Auto, Compatible, Direct };
+// "auto" / "compatible" / "direct"
+const char* sshDefaultTransportName(SshDefaultTransport);
+
 // 字段可选，缺省时继承；rawObject 保留未知键；invalidField 记录首个错误字段，整个 Profile 忽略。
 struct AppearanceProfile {
   std::optional<std::uint32_t> foreground, background, cursor;
@@ -49,6 +54,10 @@ struct SettingsFile {
   std::optional<bool> confirmMultilinePaste;
   std::optional<std::string> confirmMultilinePasteRaw;
   bool confirmMultilinePasteOrDefault() const { return confirmMultilinePaste.value_or(true); }
+  // 隐藏字段 sshDefaultTransport：缺省或非法 = nullopt（用内置默认）；仅在文件中存在时写回，非法原值保留
+  std::optional<SshDefaultTransport> sshDefaultTransport;
+  std::optional<std::string> sshDefaultTransportRaw;
+  bool sshDefaultTransportInvalid() const { return sshDefaultTransportRaw.has_value(); }
   // DS-9：id → 外观 Profile；新建窗格应用全部字段，已打开窗格可实时换色。
   std::map<std::string, AppearanceProfile> appearanceProfiles;
   // 字段存在但不是对象时的原始 JSON（序列化文本）；保存时原样写回。

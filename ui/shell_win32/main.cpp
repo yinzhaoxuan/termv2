@@ -824,6 +824,18 @@ bool saveConnectionCopy(ConnectionsFile next, std::string* error) {
 void connectionsChanged(const std::string& note) {
   g->statusNote = note; refreshTree(); updateStatusBar();
 }
+#ifndef IT2W_SHELL_STUB_BACKEND
+// settings.json 的 sshDefaultTransport → 后端枚举；缺省或非法 = nullopt（后端用内置默认）。
+std::optional<it2app::SshDefaultTransport> backendSshDefault(const SettingsFile& s) {
+  if (!s.sshDefaultTransport) return std::nullopt;
+  switch (*s.sshDefaultTransport) {
+    case SshDefaultTransport::Auto: return it2app::SshDefaultTransport::Auto;
+    case SshDefaultTransport::Compatible: return it2app::SshDefaultTransport::Compatible;
+    case SshDefaultTransport::Direct: return it2app::SshDefaultTransport::Direct;
+  }
+  return std::nullopt;
+}
+#endif
 void editConnection(const std::optional<Connection>& base, const std::string& groupId) {
   if (g->connsReadOnly) return;
   ConnectionDialogInput input;
@@ -845,6 +857,9 @@ void editConnection(const std::optional<Connection>& base, const std::string& gr
   }
 #ifndef IT2W_SHELL_STUB_BACKEND
   input.canListVms = true;
+  input.defaultTransportDirect = [](AuthMode auth) -> std::optional<bool> {
+    return it2app::defaultSshTransport(backendSshDefault(g->settings), auth == AuthMode::Agent).direct;
+  };
 #endif
   input.fieldControls = {
     {"name", IDC_NAME}, {"groupId", IDC_GROUP}, {"appearanceProfileId", IDC_APPEARANCE},
@@ -1781,11 +1796,15 @@ uishell::PaneBackendFactory makeFactory() {
   // g->settings 的字体和当前后端工厂不同，才按新字体惰性重建后端工厂（换字体本身不重建）。
   // --command（dd38652）：UI 记录第一个本地窗格是否已创建；已创建后重建的后端工厂不再带 localCommand，
   // 未创建前即使换过字体也照样带上——命令恰好执行一次。
-  struct State { uishell::PaneBackendFactory inner; std::string family; double size = 0; bool localTaken = false; Osc52Settings osc52; };
+  struct State {
+    uishell::PaneBackendFactory inner; std::string family; double size = 0; bool localTaken = false; Osc52Settings osc52;
+    std::optional<it2app::SshDefaultTransport> sshDefault;
+  };
   auto st = std::make_shared<State>();
   return [st](const std::string& connectionId, uishell::PaneEvents ev) -> std::unique_ptr<uishell::PaneBackend> {
     if (!st->inner || st->family != g->settings.fontFamily || st->size != g->settings.fontSize ||
-        st->osc52 != g->settings.osc52OrDefault()) {  // osc52：只影响此后新建的窗格
+        st->osc52 != g->settings.osc52OrDefault() ||   // osc52、sshDefaultTransport：只影响此后新建的窗格
+        st->sshDefault != backendSshDefault(g->settings)) {
       it2app::PaneBackendConfig cfg;
       cfg.resolveAppearance = appearanceForPane;
       cfg.resolveLocal = resolveLocal;
@@ -1799,8 +1818,11 @@ uishell::PaneBackendFactory makeFactory() {
       cfg.osc52.allowWrite = o52.allowWrite;
       cfg.osc52.allowRead = o52.allowRead;
       cfg.osc52.maxBytes = o52.maxBytes;  // 原样传，核心钳到 768 KiB
+      const auto sshDefault = backendSshDefault(g->settings);
+      cfg.sshDefaultTransport = sshDefault;  // ADR-006
       st->inner = it2app::makeWin32PaneBackendFactory(std::move(cfg));
       st->family = g->settings.fontFamily; st->size = g->settings.fontSize; st->osc52 = o52;
+      st->sshDefault = sshDefault;
     }
     if (connectionId.empty() && !st->localTaken) { st->localTaken = true; g->startupCommand.reset(); }
     return st->inner(connectionId, std::move(ev));
@@ -1856,6 +1878,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   if (app.settings.osc52Invalid()) {  // 隐藏字段 osc52 不合法：按全关，提示一次（文件里的原值保存时原样写回）
     appendNote(app.statusNote, "osc52 配置无效，已按全关处理");
     OutputDebugStringW(L"it2w_shell: settings.json osc52 配置无效，已按全关处理\n");
+  }
+  if (app.settings.sshDefaultTransportInvalid()) {  // 隐藏字段，原值保存时原样写回
+    appendNote(app.statusNote, "settings.json 的 sshDefaultTransport 无效，已按默认处理");
+    OutputDebugStringW(L"it2w_shell: settings.json sshDefaultTransport 无效，已按默认处理\n");
   }
   // 即使非法 Profile 尚未被连接引用，启动也提示一次。
   reportAppearanceWarning(resolveAppearance(app.settings, "appearance-default").warning);

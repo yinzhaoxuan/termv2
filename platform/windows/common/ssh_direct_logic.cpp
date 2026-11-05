@@ -237,7 +237,7 @@ std::string directAgentPipe(std::string_view sshAuthSock) {
 }
 std::optional<SnapshotError> validateDirectAuthMode(SshAuthMode auth) {
     if (auth == SshAuthMode::Agent) return std::nullopt;
-    return SnapshotError{"auth", "直连 v0 仅支持 agent；请 ssh-add 后使用，或在连接里写 \"transport\": \"compatible\"，或去掉 ITERM2WIN_SSH_DIRECT"};
+    return SnapshotError{"auth", "直连 v0 仅支持 agent 认证；请 ssh-add 后使用 agent"};
 }
 
 SshExitInfo mapDirectFailure(DirectFailure failure) {

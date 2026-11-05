@@ -104,4 +104,4 @@ bool appendKnownHost(const std::filesystem::path& file, const std::string& line,
 | uicfg | `knownHostsLine` 各种非法输入；`appendKnownHost` 新建文件、末尾无换行时补换行、重复行不重复写、写失败时原文件不变；`hostKeyTrustPrompt` 文案；`paneOverlay` 的按钮文字与 HostKeyChanged 的追加文字。 |
 | Windows 手测 | 未信任主机 → 核对指纹 → 写入后连上；取消不写；再连直接成功；改服务器密钥后 → HostKeyChanged、无信任按钮；Hyper-V 新虚拟机按 `hv-<guid>` 写入，换 DHCP 地址后仍能连上。 |
 
-Direct 代码只在 `IT2W_SSH_DIRECT=ON` 时编译。CI 的 `mingw-direct` 任务只能手动触发，改完要在 GitHub Actions 页面手动跑一次。
+Direct 代码只在 `IT2W_SSH_DIRECT=ON` 时编译。CI 的 `mingw-direct` 任务当时只能手动触发；ADR-006 之后每次推送都跑。

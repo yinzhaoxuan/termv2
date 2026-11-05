@@ -151,6 +151,11 @@ FormApplyResult applyConnectionForm(const ConnectionForm& f, const std::optional
   return result;
 }
 
+std::string transportFollowLabel(std::optional<bool> defaultDirect) {
+  if (!defaultDirect) return "跟随全局默认";
+  return *defaultDirect ? "跟随全局默认（当前：直连）" : "跟随全局默认（当前：兼容）";
+}
+
 std::optional<std::string> groupNameError(const ConnectionsFile& cf, const std::string& name,
                                         const std::string& exceptGroupId) {
   const auto value = trim(name);

@@ -44,6 +44,18 @@ AuthMode selectedAuth(HWND dlg) {
   int index = selection(dlg, IDC_AUTH);
   return index >= 0 && index < static_cast<int>(std::size(kAuthModes)) ? kAuthModes[index] : AuthMode::Agent;
 }
+std::string followLabel(const ConnectionDialogInput& input, AuthMode auth) {
+  const auto& fn = input.defaultTransportDirect;
+  return transportFollowLabel(fn ? fn(auth) : std::optional<bool>{});
+}
+// 认证方式变了，「跟随全局默认」的实际结果可能跟着变（ADR-006 的 Auto 只对 agent 选直连）。
+void refreshFollowLabel(HWND dlg, const ConnectionDialogInput& input) {
+  const int current = selection(dlg, IDC_TRANSPORT);
+  SendDlgItemMessageW(dlg, IDC_TRANSPORT, CB_DELETESTRING, 0, 0);
+  SendDlgItemMessageW(dlg, IDC_TRANSPORT, CB_INSERTSTRING, 0,
+      reinterpret_cast<LPARAM>(W(followLabel(input, selectedAuth(dlg))).c_str()));
+  select(dlg, IDC_TRANSPORT, current);
+}
 void updateVisibility(HWND dlg) {
   auto kind = selectedKind(dlg);
   const bool ssh = kind != FormKind::Local, hv = kind == FormKind::SshHyperV;
@@ -115,7 +127,8 @@ void initialize(HWND dlg, ConnectionState& state) {
   setText(dlg, IDC_USER, f.user); setText(dlg, IDC_KEY, f.identityFile);
   for (const char* label : {"agent", "密钥文件", "交互（密码等）"}) addChoice(dlg, IDC_AUTH, label);
   for (int i = 0; i < static_cast<int>(std::size(kAuthModes)); ++i) if (kAuthModes[i] == f.auth) select(dlg, IDC_AUTH, i);
-  for (const char* label : {"跟随全局默认", "兼容（ssh.exe）", "直连"}) addChoice(dlg, IDC_TRANSPORT, label);
+  addChoice(dlg, IDC_TRANSPORT, followLabel(input, f.auth));
+  for (const char* label : {"兼容（ssh.exe）", "直连"}) addChoice(dlg, IDC_TRANSPORT, label);
   select(dlg, IDC_TRANSPORT, !f.transport ? 0 : (*f.transport == SshTransport::Compatible ? 1 : 2));
   setText(dlg, IDC_TIMEOUT, f.connectTimeout); setText(dlg, IDC_EXECUTABLE, f.executable);
   setText(dlg, IDC_ARGUMENTS, f.argumentsText); setText(dlg, IDC_DIRECTORY, f.workingDirectory);
@@ -234,7 +247,10 @@ INT_PTR CALLBACK ConnectionDlgProc(HWND dlg, UINT msg, WPARAM w, LPARAM l) {
     case WM_COMMAND:
       switch (LOWORD(w)) {
         case IDC_KIND: case IDC_AUTH:
-          if (HIWORD(w) == CBN_SELCHANGE) updateVisibility(dlg);
+          if (HIWORD(w) == CBN_SELCHANGE) {
+            updateVisibility(dlg);
+            if (LOWORD(w) == IDC_AUTH) refreshFollowLabel(dlg, state->input);
+          }
           return TRUE;
         case IDC_KEY_BROWSE: browseFile(dlg, IDC_KEY, false); return TRUE;
         case IDC_EXECUTABLE_BROWSE: browseFile(dlg, IDC_EXECUTABLE, true); return TRUE;

@@ -289,6 +289,11 @@ static void uneditableArguments() {
   c.local->arguments.clear(); f = formFromConnection(c);
   CHECK(f.argumentsEditable && f.argumentsText.empty());
 }
+static void transportLabel() {
+  CHECK(transportFollowLabel(std::nullopt) == "跟随全局默认");
+  CHECK(transportFollowLabel(true) == "跟随全局默认（当前：直连）");
+  CHECK(transportFollowLabel(false) == "跟随全局默认（当前：兼容）");
+}
 int main(int argc, char** argv) {
   const std::string mode = argc > 1 ? argv[1] : "all";
   if (mode == "roundtrip" || mode == "all") roundtrip();
@@ -299,5 +304,6 @@ int main(int argc, char** argv) {
   if (mode == "prompts" || mode == "all") prompts();
   if (mode == "stamps" || mode == "all") stamps();
   if (mode == "arguments" || mode == "all") uneditableArguments();
+  if (mode == "transport" || mode == "all") transportLabel();
   return fails != 0;
 }

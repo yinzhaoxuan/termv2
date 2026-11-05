@@ -54,6 +54,12 @@ const std::pair<const char*, const char*> kDefaults[] = {
 
 enum class Parse { Ok, Newer, Bad };
 
+std::optional<SshDefaultTransport> parseSshDefaultTransport(const std::string& value) {
+  for (auto t : {SshDefaultTransport::Auto, SshDefaultTransport::Compatible, SshDefaultTransport::Direct})
+    if (value == sshDefaultTransportName(t)) return t;
+  return std::nullopt;
+}
+
 Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
   try {
     std::ifstream in(p, std::ios::binary);
@@ -73,6 +79,11 @@ Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
       const auto& value = j["confirmMultilinePaste"];
       if (value.is_boolean()) f.confirmMultilinePaste = value.get<bool>();
       else { f.confirmMultilinePaste = true; f.confirmMultilinePasteRaw = value.dump(); }
+    }
+    if (j.contains("sshDefaultTransport")) {
+      const auto& value = j["sshDefaultTransport"];
+      f.sshDefaultTransport = value.is_string() ? parseSshDefaultTransport(value.get<std::string>()) : std::nullopt;
+      if (!f.sshDefaultTransport) f.sshDefaultTransportRaw = value.dump();
     }
     if (j.contains("appearanceProfiles")) {
       f.appearanceProfilesPresent = true;
@@ -94,6 +105,15 @@ Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
 }
 
 }  // namespace
+
+const char* sshDefaultTransportName(SshDefaultTransport t) {
+  switch (t) {
+    case SshDefaultTransport::Auto: return "auto";
+    case SshDefaultTransport::Compatible: return "compatible";
+    case SshDefaultTransport::Direct: return "direct";
+  }
+  return "auto";
+}
 
 const std::vector<std::string>& presetFontFamilies() {
   static const std::vector<std::string> v{"Cascadia Mono", "Consolas", "Courier New"};
@@ -185,6 +205,8 @@ bool saveSettings(const fs::path& file, SettingsFile& data, bool readOnly, std::
     j["osc52"] = {{"allowWrite", data.osc52->allowWrite}, {"allowRead", data.osc52->allowRead}, {"maxBytes", data.osc52->maxBytes}};
   if (data.confirmMultilinePasteRaw) j["confirmMultilinePaste"] = json::parse(*data.confirmMultilinePasteRaw, nullptr, false);
   else if (data.confirmMultilinePaste) j["confirmMultilinePaste"] = *data.confirmMultilinePaste;
+  if (data.sshDefaultTransportRaw) j["sshDefaultTransport"] = json::parse(*data.sshDefaultTransportRaw, nullptr, false);
+  else if (data.sshDefaultTransport) j["sshDefaultTransport"] = sshDefaultTransportName(*data.sshDefaultTransport);
   if (data.appearanceProfilesRaw) j["appearanceProfiles"] = json::parse(*data.appearanceProfilesRaw);
   else if (data.appearanceProfilesPresent || !data.appearanceProfiles.empty()) {
     auto profiles = json::object();

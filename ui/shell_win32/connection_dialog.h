@@ -15,6 +15,8 @@ struct ConnectionDialogInput {
   bool currentAppearanceUndefined = false;  // 当前外观 ID 未定义时显示提示后缀。
   bool canListVms = false;  // 占位后端为 false。
   std::map<std::string, int> fieldControls;  // 校验字段 → 控件 ID。
+  // ADR-006：没写传输时按此认证方式此刻会不会走直连；未设置（占位后端）时下拉框只写「跟随全局默认」。
+  std::function<std::optional<bool>(uicfg::AuthMode)> defaultTransportDirect;
   // 确定时调用：nullopt = 已保存并关闭对话框；否则显示错误并聚焦对应字段。
   std::function<std::optional<uicfg::ValidationError>(const uicfg::ConnectionForm&)> commit;
 };

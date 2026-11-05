@@ -158,7 +158,7 @@ static void summary() {
   const auto text = joined(configSummaryLines(conns, LoadStatus::Ok, validation, settings, LoadStatus::RecoveredBackup));
   CHECK(contains(text, "已读取，revision 7，4 个连接（SSH 手动 1 / Hyper-V 2 / 本地 1），校验未通过 1 个"));
   CHECK(contains(text, "传输 = 跟随默认 1 / 兼容 1 / 直连 1"));
-  CHECK(contains(text, "settings.json = 已从备份恢复；字体 Cascadia Mono 12；osc52 = 写开 / 读关 / 123；confirmMultilinePaste = 默认"));
+  CHECK(contains(text, "settings.json = 已从备份恢复；字体 Cascadia Mono 12；osc52 = 写开 / 读关 / 123；confirmMultilinePaste = 默认；sshDefaultTransport = 默认"));
   CHECK(contains(text, "外观 Profile = 2 个（无效 1）"));
   CHECK(contains(text, "改过的快捷键 = copyOrInterrupt, pasteCtrlV"));
   for (const auto& [category, value] : redactionContextFrom(conns, {}).known) { (void)category; CHECK(!contains(text, value)); }
@@ -166,15 +166,23 @@ static void summary() {
   conns.connections[0].ssh->transport = "transport-secret";
   settings.osc52Raw = "\"raw-secret\""; settings.osc52 = Osc52Settings{};
   settings.confirmMultilinePasteRaw = "\"paste-secret\"";
+  settings.sshDefaultTransportRaw = "\"transport-default-secret\"";
   settings.appearanceProfilesRaw = "\"profiles-secret\"";
   auto invalid = joined(configSummaryLines(conns, LoadStatus::NewerSchema, {}, settings, LoadStatus::Corrupt));
   CHECK(contains(invalid, "高版本（只读）") && contains(invalid, "损坏（使用默认值）"));
-  CHECK(contains(invalid, "无效，按全关") && contains(invalid, "confirmMultilinePaste = 无效（默认）") && contains(invalid, " / 无效 1"));
+  CHECK(contains(invalid, "无效，按全关") && contains(invalid, "confirmMultilinePaste = 无效（默认）") &&
+        contains(invalid, "sshDefaultTransport = 无效（默认）") && contains(invalid, " / 无效 1"));
   CHECK(!contains(invalid, "secret"));
   for (bool on : {true, false}) {
     settings.confirmMultilinePasteRaw.reset(); settings.confirmMultilinePaste = on;
     CHECK(contains(joined(configSummaryLines({}, LoadStatus::NotFound, {}, settings, LoadStatus::Ok)),
         std::string("confirmMultilinePaste = ") + (on ? "开" : "关")));
+  }
+  settings.sshDefaultTransportRaw.reset();
+  for (auto t : {SshDefaultTransport::Auto, SshDefaultTransport::Compatible, SshDefaultTransport::Direct}) {
+    settings.sshDefaultTransport = t;
+    CHECK(contains(joined(configSummaryLines({}, LoadStatus::NotFound, {}, settings, LoadStatus::Ok)),
+        std::string("sshDefaultTransport = ") + sshDefaultTransportName(t)));
   }
 }
 static void bundle() {

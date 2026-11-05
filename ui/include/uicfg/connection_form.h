@@ -30,6 +30,9 @@ struct FormApplyResult {
 FormApplyResult applyConnectionForm(const ConnectionForm&, const std::optional<Connection>& base,
                                    const ConnectionsFile&);
 
+// 传输下拉框第一项。defaultDirect：没写传输时此刻会不会走直连（ADR-006）；nullopt = 无法判断（占位后端）。
+std::string transportFollowLabel(std::optional<bool> defaultDirect);
+
 std::optional<std::string> groupNameError(const ConnectionsFile&, const std::string& name,
                                         const std::string& exceptGroupId = {});
 // 名称非法时不修改；addGroup 返回空 ID，renameGroup 返回 false。

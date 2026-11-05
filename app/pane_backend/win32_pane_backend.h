@@ -49,9 +49,13 @@ struct PaneBackendConfig {
     std::optional<std::string> wordChars;
     // B4：OSC 52 剪贴板（默认关；读要单独打开，会把本机剪贴板交给远端程序）
     Osc52Config osc52;
+    // ADR-006：settings.json 的 sshDefaultTransport；nullopt（缺省或非法）用内置默认 kBuiltinSshDefault。
+    std::optional<SshDefaultTransport> sshDefaultTransport;
 };
 
 uishell::PaneBackendFactory makeWin32PaneBackendFactory(PaneBackendConfig cfg);
+// 没写传输的连接此刻会走哪种传输（连接编辑器的「跟随全局默认（当前：…）」）。读环境变量与构建开关。
+TransportChoice defaultSshTransport(std::optional<SshDefaultTransport> settings, bool authIsAgent);
 // 程序退出时（所有窗格销毁之后、WinMain 返回之前）在 UI 线程调用：等待所有会话关闭线程结束。
 // 超时返回 false，剩余线程保持 detach，子进程由 Job 对象 KILL_ON_JOB_CLOSE 随进程退出回收。
 bool shutdownPaneBackends(unsigned timeoutMs = 3000);

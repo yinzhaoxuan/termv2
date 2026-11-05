@@ -168,6 +168,33 @@ int main() {
     }
   }
 
+  {  // ADR-006 sshDefaultTransport：隐藏字段，缺省 = 内置默认；非法值保留原文写回
+    using T = SshDefaultTransport;
+    auto write = [&](const nlohmann::json& j) { std::ofstream o(f, std::ios::binary | std::ios::trunc); o << j; };
+    auto read = [&] { std::ifstream in(f); return nlohmann::json::parse(in); };
+    CHECK(!d.sshDefaultTransport && !d.sshDefaultTransportInvalid());
+    write({{"schemaVersion", 1}});
+    auto missing = loadSettings(f);
+    CHECK(missing.status == LoadStatus::Ok && !missing.data.sshDefaultTransport && !missing.data.sshDefaultTransportInvalid());
+    CHECK(saveSettings(f, missing.data, false, &err) && !read().contains("sshDefaultTransport"));
+    for (auto [text, value] : {std::pair{"auto", T::Auto}, {"compatible", T::Compatible}, {"direct", T::Direct}}) {
+      CHECK(std::string(sshDefaultTransportName(value)) == text);
+      write({{"schemaVersion", 1}, {"sshDefaultTransport", text}});
+      auto loaded = loadSettings(f);
+      CHECK(loaded.status == LoadStatus::Ok && loaded.data.sshDefaultTransport == std::optional<T>(value));
+      CHECK(!loaded.data.sshDefaultTransportInvalid());
+      CHECK(saveSettings(f, loaded.data, false, &err) && read().at("sshDefaultTransport") == text);
+    }
+    for (const char* raw : {"\"Direct\"", "\"\"", "\" auto\"", "null", "1", "true", "[]", "{\"mode\":\"direct\"}"}) {
+      const auto value = nlohmann::json::parse(raw);
+      write({{"schemaVersion", 1}, {"sshDefaultTransport", value}});
+      auto loaded = loadSettings(f);  // 单个隐藏字段非法不影响整个文件
+      CHECK(loaded.status == LoadStatus::Ok && !loaded.data.sshDefaultTransport);
+      CHECK(loaded.data.sshDefaultTransportRaw == std::optional<std::string>(value.dump()));
+      CHECK(saveSettings(f, loaded.data, false, &err) && read().at("sshDefaultTransport") == value);
+    }
+  }
+
   resetKeybindings(r.data);
   CHECK(r.data.keybindings.at("newTab") == "Ctrl+Shift+T");
 

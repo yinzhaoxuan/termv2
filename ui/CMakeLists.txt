@@ -38,7 +38,7 @@ endforeach()
 # DS-14：表单与编辑操作按模式单独登记。
 add_executable(connection_form_tests tests/connection_form_tests.cpp)
 target_link_libraries(connection_form_tests PRIVATE uicfg)
-foreach(mode roundtrip fields creation groups menus prompts stamps arguments)
+foreach(mode roundtrip fields creation groups menus prompts stamps arguments transport)
   add_test(NAME uicfg_connection_form_${mode} COMMAND connection_form_tests ${mode})
 endforeach()
 
