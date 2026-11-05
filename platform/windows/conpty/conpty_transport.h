@@ -112,6 +112,7 @@ private:
     HANDLE job_ = nullptr, process_ = nullptr;
     HANDLE reader_ = nullptr, writer_ = nullptr, monitor_ = nullptr, closer_ = nullptr;
     HANDLE writerWake_ = nullptr, readerResume_ = nullptr, monitorStop_ = nullptr, closedEvent_ = nullptr;
+    HANDLE closeRequest_ = nullptr;
     std::optional<std::wstring> snapshot_;
     uint32_t exitCode_ = 0;
     int resizeFailures_ = 0;

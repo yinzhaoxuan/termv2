@@ -66,6 +66,7 @@ ConPtyTransport::ConPtyTransport(TransportCallbacks cb) : cb_(std::move(cb)) {
     readerResume_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     monitorStop_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     closedEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    closeRequest_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 }
 
 ConPtyTransport::~ConPtyTransport() {
@@ -73,7 +74,10 @@ ConPtyTransport::~ConPtyTransport() {
         close(CloseReason::User);
         waitClosed(INFINITE);
     }
-    for (HANDLE *h : {&reader_, &writer_, &monitor_, &closer_, &writerWake_, &readerResume_, &monitorStop_, &closedEvent_})
+    // closedEvent_ 发出后 closer 仍需返回，先等所有线程退出再释放对象资源。
+    for (HANDLE h : {closer_, writer_, monitor_, reader_})
+        if (h) WaitForSingleObject(h, INFINITE);
+    for (HANDLE *h : {&reader_, &writer_, &monitor_, &closer_, &writerWake_, &readerResume_, &monitorStop_, &closedEvent_, &closeRequest_})
         closeH(*h);
 }
 
@@ -175,7 +179,21 @@ bool ConPtyTransport::start(SessionId sid, AttemptId aid, const LaunchSpec &spec
     // 10. 恢复并关闭线程句柄
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
-    // 11. 写线程与监视线程（进程退出 + 输入停滞计时）
+    // 11. 先备好关闭线程，工作线程只发关闭请求，避免清理时等待自身。
+    closer_ = CreateThread(nullptr, 0, closerMain, this, 0, nullptr);
+    if (!closer_) {
+        DWORD e = GetLastError();
+        diag("CreateThread(closer)", 0, 0, "Win32 错误 " + std::to_string(e), static_cast<int64_t>(e));
+        // 只有读线程在跑，start 调用线程可安全同步收口。
+        // 先占住 closeStarted_，读线程此后的 close() 直接返回。
+        fault_ = TransportFault::StartFailed;
+        closeReason_ = CloseReason::Fault;
+        closeStarted_ = true;
+        setState(TransportState::Running);
+        doClose();
+        return false;
+    }
+    // 写线程与监视线程（进程退出 + 输入停滞计时）
     writer_ = CreateThread(nullptr, 0, writerMain, this, 0, nullptr);
     monitor_ = CreateThread(nullptr, 0, monitorMain, this, 0, nullptr);
     if (!writer_ || !monitor_) {
@@ -356,10 +374,14 @@ void ConPtyTransport::close(CloseReason why) {
     if (s == TransportState::Starting) { closeReason_ = why; closeRequested_ = true; return; }
     if (closeStarted_.exchange(true)) return;  // 幂等
     closeReason_ = why;
-    closer_ = CreateThread(nullptr, 0, closerMain, this, 0, nullptr);
-    if (!closer_) doClose();  // 无法建线程时在当前线程执行（调用方不得是 UI 线程）
+    SetEvent(closeRequest_);  // closer 已在 start 时建好，不在请求线程上执行清理。
 }
-DWORD WINAPI ConPtyTransport::closerMain(LPVOID p) { static_cast<ConPtyTransport *>(p)->doClose(); return 0; }
+DWORD WINAPI ConPtyTransport::closerMain(LPVOID p) {
+    auto *self = static_cast<ConPtyTransport *>(p);
+    WaitForSingleObject(self->closeRequest_, INFINITE);
+    self->doClose();
+    return 0;
+}
 
 void ConPtyTransport::doClose() {
     closeStartMs_ = nowMs();
@@ -377,10 +399,12 @@ void ConPtyTransport::doClose() {
     // 3. 写线程：停止并取消阻塞中的 WriteFile
     writerStop_ = true;
     SetEvent(writerWake_);
+    bool writerTimedOut = false;
     if (writer_) {
         for (int i = 0; i < 20 && WaitForSingleObject(writer_, 50) == WAIT_TIMEOUT; ++i) CancelSynchronousIo(writer_);
-        if (WaitForSingleObject(writer_, 0) == WAIT_TIMEOUT) diag("writer-cancel-timeout", nowMs() - t);
-    }
+        writerTimedOut = WaitForSingleObject(writer_, 0) == WAIT_TIMEOUT;
+        if (writerTimedOut) diag("writer-cancel-timeout", nowMs() - t);
+    } else closeH(inWrite_);  // 启动失败时没有写线程接管输入管道。
     t = stage("close.writer", t);
     // 4. 终止整个进程树
     if (job_) TerminateJobObject(job_, 1);
@@ -388,6 +412,11 @@ void ConPtyTransport::doClose() {
     // 5. ClosePseudoConsole（幂等）
     closePseudoConsoleOnce();
     t = stage("close.closePseudoConsole", t);
+    // 管道对端已关；仍须等写线程退出，不能把取消超时当作关闭完成。
+    if (writer_) {
+        while (WaitForSingleObject(writer_, 50) == WAIT_TIMEOUT) CancelSynchronousIo(writer_);
+    }
+    if (writerTimedOut) t = stage("close.writer-join", t);
     // 6. 读线程读到 EOF 后关闭 outRead
     bool timedOut = false;
     uint64_t budgetLeft = kCloseBudgetMs > (nowMs() - closeStartMs_) ? kCloseBudgetMs - (nowMs() - closeStartMs_) : 0;
@@ -402,6 +431,7 @@ void ConPtyTransport::doClose() {
     { Lock l(lock_); if (output_.incomplete()) diag("close.drain-discarded", 0, output_.discardedBytes(), "数据不完整"); }
     t = stage("close.reader", t);
     // 7. 进程退出码，关闭 hProcess，最后关闭 hJob
+    if (monitor_) WaitForSingleObject(monitor_, INFINITE);  // 先退出监视，才能释放它等待的 process_。
     if (process_) {
         WaitForSingleObject(process_, INFINITE);  // Job 已终止，应很快返回
         DWORD code = 0;
@@ -410,7 +440,6 @@ void ConPtyTransport::doClose() {
         closeH(process_);
         if (cb_.onExited) cb_.onExited(sid_, aid_, exitCode_);
     }
-    if (monitor_) WaitForSingleObject(monitor_, INFINITE);
     { Lock l(lock_); closeH(job_); }  // 与 activeProcessCount 串行
     t = stage("close.process", t);
     // 9. 删除 SSH 配置快照

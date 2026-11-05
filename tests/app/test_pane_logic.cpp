@@ -355,6 +355,24 @@ static void keys() {
     CHECK(a.kind == KeyPlan::Key && a.coreMods == 4u && a.unicode == 'x');
     auto c = planKey('A', 4, 1, 'a');
     CHECK(c.kind == KeyPlan::Key && c.coreMods == 2u && c.unicode == 'a');
+    auto bracket = planKey(0xDB /*VK_OEM_4*/, 4, 0x1B, '[');
+    CHECK(bracket.kind == KeyPlan::Key && bracket.coreMods == 2u && bracket.unicode == '[');
+    auto caret = planKey('6', 1 | 4, 0x1E, '^');           // Ctrl+Shift+6
+    CHECK(caret.kind == KeyPlan::Key && caret.unicode == '^' && caret.coreMods == (1u | 2u));
+    auto altgr = planKey('8', 2 | 4, '[', '8');           // 德语 AltGr+8
+    CHECK(altgr.kind == KeyPlan::Text && altgr.text == "[");
+    {   // 从按键计划到核心编码，Ctrl+[ 应产生单个 ESC。
+        itcore_options o{ITCORE_ABI_VERSION, sizeof(itcore_options), 80, 24, 100, 1u << 20};
+        itcore_core *core = nullptr;
+        CHECK(itcore_create(&o, &core) == 0 && core);
+        itcore_key_event ev{};
+        ev.struct_size = sizeof(ev);
+        ev.vk = bracket.vk; ev.modifiers = bracket.coreMods; ev.unicode = bracket.unicode;
+        itcore_buffer *b = nullptr;
+        CHECK(itcore_encode_key(core, &ev, &b) == 0 && b && b->length == 1 && b->data[0] == 0x1B);
+        itcore_buffer_release(b);
+        itcore_destroy(core);
+    }
     auto up = planKey(0x26, 1 | 4, 0, 0);
     CHECK(up.kind == KeyPlan::Key && up.vk == 0x26 && up.coreMods == (1u | 2u) && up.unicode == 0);
     auto f = planKey(0x70, 0, 0, 0);

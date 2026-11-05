@@ -61,7 +61,7 @@ std::string ctrl_letter(uint32_t unicode, uint32_t modifiers) {
     char ch = 0;
     bool ok = true;
     if (unicode >= 'a' && unicode <= 'z') ch = static_cast<char>(unicode - 'a' + 1);
-    else if (unicode >= 'A' && unicode <= 'Z') ch = static_cast<char>(unicode - 'A' + 1);
+    else if (unicode >= '@' && unicode <= '_') ch = static_cast<char>(unicode & 0x1F);
     else if (unicode == ' ') ch = 0;
     else if (unicode == '?') ch = 0x7f;
     else ok = false;

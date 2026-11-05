@@ -17,6 +17,13 @@
 - **许可**：GPL-3.0-or-later（[LICENSE-AUDIT.md](LICENSE-AUDIT.md)）。
 - **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认待 ADR（TODO §2.1）。OSC 52 读写默认全关。
 
+## 2026-11-05：实现审查修复
+
+见 [审查清单-2026-11-05.md](审查清单-2026-11-05.md)。
+
+- ConPTY（`platform/windows/conpty/conpty_transport.cpp`）：closer 改为在 `start()` 时建好的常驻线程，`close()` 只置位 `closeRequest_`，工作线程发起关闭不会再等待自己；`doClose` 在 `ClosePseudoConsole` 后一直等写线程退出才置位 `closedEvent_`；monitor 先于关闭 `process_` join；无写线程时关闭 `inWrite_`；析构函数先等所有线程退出。只做了静态复查，待 CI mingw 编译和 Windows 实机验证。
+- 核心编码：Ctrl+`@ [ \ ] ^ _` 发 `00 1B–1F`。新增 encode 与 planKey 链路测试，ctest 171 项全部通过。
+
 ## 2026-11-05：Windows 实机手测清单与文档回写
 
 - [WINDOWS-手测清单.md](WINDOWS-手测清单.md)：把各设计文档、STATUS B 批、HANDOFF §4.6、REVIEW C 批的手测项合并，按 P0–P3 排好，写明期望、出处与回报格式。CI 的 mingw / mingw-direct 任务改为上传 `it2w_shell.exe` 与 `licenses/`（`89e5f52`，首个 artifact 已生成）。

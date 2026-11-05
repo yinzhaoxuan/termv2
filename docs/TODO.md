@@ -24,6 +24,7 @@
    - DS-13 的清单：[DS-13-按连接选择传输.md](DS-13-按连接选择传输.md) §6。
    - DS-9 的清单：[DS-9-外观Profile.md](DS-9-外观Profile.md) §7。
    - `22ee722` 的清单：[DS-12-Direct首次信任.md](DS-12-Direct首次信任.md) §6。
+   - 2026-11-05 实现审查：[审查清单-2026-11-05.md](审查清单-2026-11-05.md) 验证记录末两项（CI mingw 编译修复后的 ConPTY；关闭异常路径故障注入）。
    - 更早的：HANDOFF §4.6（DebugView 里的 ODS、`vim -u NONE` 的 `v:termresponse`、波浪下划线、洪峰关闭）以及 REVIEW §8 C1–C6。
 3. **QA 证据入仓**（增补二 D-5 余项）：CAP-01 第 16–18 轮、S6 手测的结果表（不含原始 hex）。原始文件在旧 Linux 机器的 `/workspace/qa/`。
 4. **CORE-01/02 向量**（E4 余项）：`core01_02.json` 也在那台机器的 `/workspace/qa/vectors/`。拷进仓库后可在 CI 打开 `-DIT2W_REQUIRE_VECTORS=ON`。
@@ -70,3 +71,4 @@
 | `ce2c79d` | DS-17 会话 / 应用两级内存账本（E3） | [DS-17-内存账本.md](DS-17-内存账本.md) |
 | `89e5f52` | Windows 实机手测清单；CI 上传 `it2w_shell.exe` | [WINDOWS-手测清单.md](WINDOWS-手测清单.md) |
 | `bf0adc1` | 文档回写：HANDOFF、README、REVIEW、ROADMAP | STATUS 2026-11-05 |
+| 本轮末 | 实现审查修复：ConPTY 常驻 closer、写线程 join、Ctrl 符号键 | [审查清单-2026-11-05.md](审查清单-2026-11-05.md) |

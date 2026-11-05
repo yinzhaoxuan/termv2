@@ -101,6 +101,21 @@ static void test_key() {
     ev.modifiers = ITCORE_MOD_CTRL; ev.unicode = 'c';
     CHECK(itcore_encode_key(c, &ev, &b) == 0 && buf_str(b).size() == 1 && buf_str(b)[0] == 3);
     itcore_buffer_release(b);
+    // Ctrl 符号映射，包括必须保留的 NUL 字节；数字键不设别名。
+    const struct { uint32_t unicode; char control; } symbols[] = {
+        {'@', 0x00}, {'[', 0x1B}, {'\\', 0x1C}, {']', 0x1D}, {'^', 0x1E}, {'_', 0x1F}
+    };
+    for (const auto &s : symbols) {
+        ev.unicode = s.unicode;
+        CHECK(itcore_encode_key(c, &ev, &b) == 0 && buf_str(b) == std::string(1, s.control));
+        itcore_buffer_release(b);
+    }
+    ev.modifiers = ITCORE_MOD_CTRL | ITCORE_MOD_ALT; ev.unicode = '[';
+    CHECK(itcore_encode_key(c, &ev, &b) == 0 && buf_str(b) == "\x1b\x1b");
+    itcore_buffer_release(b);
+    ev.modifiers = ITCORE_MOD_CTRL; ev.unicode = '1';
+    CHECK(itcore_encode_key(c, &ev, &b) == 0 && buf_str(b) == "1");
+    itcore_buffer_release(b);
     itcore_destroy(c);
 }
 
