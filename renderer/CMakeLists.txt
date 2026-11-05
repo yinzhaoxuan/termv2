@@ -40,10 +40,10 @@ add_executable(test_renderer_cursor_geometry ${PROJECT_SOURCE_DIR}/tests/rendere
 target_link_libraries(test_renderer_cursor_geometry PRIVATE itcore_mock itrender_layout)
 add_test(NAME renderer_cursor_geometry COMMAND test_renderer_cursor_geometry)
 
-# 字形缓存（LRU + shelf 图集）与字体回退规划
-add_executable(test_renderer_glyph_cache ${PROJECT_SOURCE_DIR}/tests/renderer/test_glyph_cache.cpp)
-target_link_libraries(test_renderer_glyph_cache PRIVATE itrender_layout)
-add_test(NAME renderer_glyph_cache COMMAND test_renderer_glyph_cache)
+# DS-18：分段、塑形项规划、按格定位、塑形缓存、光标隔离、文本计时统计
+add_executable(test_renderer_text_runs ${PROJECT_SOURCE_DIR}/tests/renderer/test_text_runs.cpp)
+target_link_libraries(test_renderer_text_runs PRIVATE itrender_layout)
+add_test(NAME renderer_text_runs COMMAND test_renderer_text_runs)
 
 # 拖动选区命中/选区矩形 与 IME 预编辑布局、候选窗锚点
 add_executable(test_renderer_selection_ime ${PROJECT_SOURCE_DIR}/tests/renderer/test_selection_ime.cpp)

@@ -6,7 +6,7 @@
 #include "cell_style.h"
 #include "frame_policy.h"
 #include "cursor_geometry.h"
-#include "glyph_cache.h"
+#include "text_runs.h"
 #include "ime_layout.h"
 #include <unordered_map>
 #include <vector>
