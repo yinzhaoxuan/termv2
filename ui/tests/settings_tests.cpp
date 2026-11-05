@@ -77,7 +77,7 @@ int main() {
   }
 
   // 字体族
-  CHECK(presetFontFamilies().size() == 3 && presetFontFamilies()[0] == d.fontFamily);
+  CHECK(presetFontFamilies().size() == 4 && presetFontFamilies()[0] == d.fontFamily && presetFontFamilies()[1] == "Cascadia Code");
   CHECK(normalizeFontFamily("  Consolas ") == std::string("Consolas"));
   CHECK(normalizeFontFamily("更纱黑体 Mono SC") == std::string("更纱黑体 Mono SC"));
   CHECK(!normalizeFontFamily("") && !normalizeFontFamily("   ") && !normalizeFontFamily("A\tB"));
@@ -165,6 +165,30 @@ int main() {
       CHECK(saveSettings(f, loaded.data, false, &err) && read().at("confirmMultilinePaste") == value);
       auto again = loadSettings(f);
       CHECK(again.data.confirmMultilinePasteOrDefault() && again.data.confirmMultilinePasteRaw == loaded.data.confirmMultilinePasteRaw);
+    }
+  }
+
+  {  // DS-18 fontLigatures：隐藏字段，缺省关；非布尔按关并保留原文写回
+    auto write = [&](const nlohmann::json& j) { std::ofstream o(f, std::ios::binary | std::ios::trunc); o << j; };
+    auto read = [&] { std::ifstream in(f); return nlohmann::json::parse(in); };
+    CHECK(!d.fontLigatures && !d.fontLigaturesOrDefault());
+    write({{"schemaVersion", 1}});
+    auto missing = loadSettings(f);
+    CHECK(!missing.data.fontLigatures && !missing.data.fontLigaturesOrDefault());
+    CHECK(saveSettings(f, missing.data, false, &err) && !read().contains("fontLigatures"));
+    for (bool on : {true, false}) {
+      write({{"schemaVersion", 1}, {"fontLigatures", on}});
+      auto loaded = loadSettings(f);
+      CHECK(loaded.data.fontLigatures == std::optional<bool>(on) && loaded.data.fontLigaturesOrDefault() == on);
+      CHECK(saveSettings(f, loaded.data, false, &err) && read().at("fontLigatures") == on);
+    }
+    for (const char* raw : {"1", "\"true\"", "null", "{}"}) {
+      const auto value = nlohmann::json::parse(raw);
+      write({{"schemaVersion", 1}, {"fontLigatures", value}});
+      auto loaded = loadSettings(f);
+      CHECK(loaded.status == LoadStatus::Ok && !loaded.data.fontLigaturesOrDefault());
+      CHECK(loaded.data.fontLigaturesRaw == std::optional<std::string>(value.dump()));
+      CHECK(saveSettings(f, loaded.data, false, &err) && read().at("fontLigatures") == value);
     }
   }
 

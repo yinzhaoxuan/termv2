@@ -80,6 +80,11 @@ Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
       if (value.is_boolean()) f.confirmMultilinePaste = value.get<bool>();
       else { f.confirmMultilinePaste = true; f.confirmMultilinePasteRaw = value.dump(); }
     }
+    if (j.contains("fontLigatures")) {
+      const auto& value = j["fontLigatures"];
+      if (value.is_boolean()) f.fontLigatures = value.get<bool>();
+      else { f.fontLigatures = false; f.fontLigaturesRaw = value.dump(); }
+    }
     if (j.contains("sshDefaultTransport")) {
       const auto& value = j["sshDefaultTransport"];
       f.sshDefaultTransport = value.is_string() ? parseSshDefaultTransport(value.get<std::string>()) : std::nullopt;
@@ -116,7 +121,8 @@ const char* sshDefaultTransportName(SshDefaultTransport t) {
 }
 
 const std::vector<std::string>& presetFontFamilies() {
-  static const std::vector<std::string> v{"Cascadia Mono", "Consolas", "Courier New"};
+  // Cascadia Code 自带连字（DS-18，配合 settings.json 的 fontLigatures）；Windows 10 需另装
+  static const std::vector<std::string> v{"Cascadia Mono", "Cascadia Code", "Consolas", "Courier New"};
   return v;
 }
 
@@ -205,6 +211,8 @@ bool saveSettings(const fs::path& file, SettingsFile& data, bool readOnly, std::
     j["osc52"] = {{"allowWrite", data.osc52->allowWrite}, {"allowRead", data.osc52->allowRead}, {"maxBytes", data.osc52->maxBytes}};
   if (data.confirmMultilinePasteRaw) j["confirmMultilinePaste"] = json::parse(*data.confirmMultilinePasteRaw, nullptr, false);
   else if (data.confirmMultilinePaste) j["confirmMultilinePaste"] = *data.confirmMultilinePaste;
+  if (data.fontLigaturesRaw) j["fontLigatures"] = json::parse(*data.fontLigaturesRaw, nullptr, false);
+  else if (data.fontLigatures) j["fontLigatures"] = *data.fontLigatures;
   if (data.sshDefaultTransportRaw) j["sshDefaultTransport"] = json::parse(*data.sshDefaultTransportRaw, nullptr, false);
   else if (data.sshDefaultTransport) j["sshDefaultTransport"] = sshDefaultTransportName(*data.sshDefaultTransport);
   if (data.appearanceProfilesRaw) j["appearanceProfiles"] = json::parse(*data.appearanceProfilesRaw);

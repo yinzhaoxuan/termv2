@@ -230,7 +230,7 @@ B 批退出标准（REVIEW §7）：从主程序走通本地 PowerShell、手动
 逐项勾选以根目录 `REVIEW.md` §8 为准（已回写到 2026-11-05），剩余工作与推荐顺序以 [TODO.md](TODO.md) 为准。概括：
 
 - **已落地**：A 批全部（含 A5、A1 目录锁清理）、A′、B1–B5、D1 连接编辑器、D3 / D4 外观 Profile、D5 快捷键展示（只读）、D6（ADR-004）、D8 诊断包、E2 / NEW-02、E3 内存账本、E4 / E5（CI、预设、README）、E6 许可、E7 文档整理、NEW-03、NEW-04（DS-10）、NEW-05、DS-8 的 ABI 规则（ADR-005）、SSH 默认传输阶段 1（ADR-006）。设计文档都在 `docs/DS-*.md` / `docs/ADR-*.md`。
-- **仍开放**：C1–C6 全部实机验证（[WINDOWS-手测清单.md](WINDOWS-手测清单.md)）；D2 搜索的正则与大历史耗时；D7 OSC 52 开关仍是 settings.json 隐藏字段、没有界面；E1 执行器 / UI 线程模型 ADR（需实测）；E8 GlyphCache 与连字；DS-7 的 TERM / terminfo 对齐（需实机）；E6 余项（MinGW 运行时许可文本打包）；D-5 的 QA 证据入仓。
+- **仍开放**：C1–C6 全部实机验证（[WINDOWS-手测清单.md](WINDOWS-手测清单.md)）；D2 搜索的正则与大历史耗时；D7 OSC 52 开关仍是 settings.json 隐藏字段、没有界面；E1 执行器 / UI 线程模型 ADR（需实测）；E8 字形运行渲染（DS-18 已实现，待 Windows 手测）；DS-7 的 TERM / terminfo 对齐（需实机）；E6 余项（MinGW 运行时许可文本打包）；D-5 的 QA 证据入仓。
 
 ### 4.4 D-5 余项
 
@@ -347,7 +347,7 @@ REVIEW §8.F1–F13 是同一批能力的另一份清单（Shell Integration、�
 
 1. **先做 Windows 实机验证。** 11-04 以来的功能都还没在 Windows 上跑过，`mingw-direct` 也一次没编译。按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 从 P0 做起，结果写进 STATUS，绑定提交号与 Windows 版本（诊断包里有）。
 2. **不要把 Direct 改成默认**，直到上一步的 Direct 相关项通过，并按 TODO §2.1 写了 ADR。
-3. **剩下的开发项**见 TODO §2.2：E1、E8、DS-7 需要实机；E6 余项依赖构建机。F-0..F-5 只写设计（ROADMAP）。
+3. **剩下的开发项**见 TODO §2.2：E1、DS-7 需要实机，E8 已实现、待实机验证；E6 余项依赖构建机。F-0..F-5 只写设计（ROADMAP）。
 4. **工作方式**：先在 `docs/DS-*.md` 写设计，再实现；平台无关的逻辑放 `ui/src`（uicfg）、`app/pane_backend/pane_logic.*`、`renderer/layout/` 并单测，Win32 文件只做薄胶水；CI 的 mingw 是唯一的 Windows 编译检查。改完回写 STATUS 顶部与 TODO，提交信息写清行为、测试结果与「未验证」项；动了 itcore 公开头文件要按 ADR-005 写明兼容性。
 
 构建自检：Linux 上 `ctest`（注意 nlohmann 和 CORE-01/02 向量）；要给 Windows 用的包用 MinGW 交叉编译；要手测 Direct 用 `mingw-direct` 预设（或 CI `mingw-direct` 任务的产物，每次推送都生成），在连接里写 `"transport": "direct"` 或运行时设 `ITERM2WIN_SSH_DIRECT=1`。

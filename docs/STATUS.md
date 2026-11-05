@@ -17,6 +17,18 @@
 - **许可**：GPL-3.0-or-later（[LICENSE-AUDIT.md](LICENSE-AUDIT.md)）。
 - **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认待 ADR（TODO §2.1）。OSC 52 读写默认全关。
 
+## 2026-11-05：DS-18 字形运行渲染（E8）
+
+见 [DS-18-字形运行渲染.md](DS-18-字形运行渲染.md)（四轮审查后批准）。
+
+- 文本从逐格 `DrawTextW` 改为按段塑形、按格定位：`AnalyzeScript` / `AnalyzeBidi`（只取层级，不重排）/ `MapCharacters` → `planItems`（每个不降级的核心格完整落在一个塑形项里）→ `GetGlyphs` / `GetGlyphPlacements` → `placeOnGrid` → `DrawGlyphRun`。不做位图图集。
+- 连字：settings.json 隐藏字段 `fontLigatures`（默认关），字体预设加「Cascadia Code」。块光标格单独成段，反色字形复用底层的绘制计划。
+- 彩色字形：COLR v0 经 `TranslateColorGlyphRun`，0xFFFF 层用当前文本颜色。
+- 塑形缓存 4 MiB（键含核心格分组）；`pane-diag.log` 每 10 秒一条 `render.stats`（文本 CPU 时间按无文本 / 部分 / 全屏分类的 p50 / p95 / max、缓存命中率、降级计数）。诊断包摘要加 `fontLigatures`。
+- 旧路径原样保留：`ITERM2WIN_TEXT_PATH=drawtext`，作基线与退路，下个版本删除。删除了从未使用的 `glyph_cache.h`（图集、`plan_runs`）。
+- 测试：`text_runs.h` 纯函数（分段、RTL 判定、`planItems` 不变量、定位、缓存、隔离、计划、计时统计）；settings、诊断包。macOS ctest 172 项全过。
+- **未验证**：`renderer.cpp` 的 DirectWrite 胶水只能由 CI `mingw` 编译；画面、连字、emoji、复杂文字和耗时见手测清单 P2-2a、P3-2a。
+
 ## 2026-11-05：ConPTY 复审修复
 
 见 [审查清单-2026-11-05-复审.md](审查清单-2026-11-05-复审.md)。

@@ -118,6 +118,18 @@
 
 来源：DS-9 §7、HANDOFF §4.6。
 
+### P2-2a 字形运行渲染（DS-18）
+默认走新路径（`DrawGlyphRun`）；设 `ITERM2WIN_TEXT_PATH=drawtext` 后启动走旧路径（逐格 `DrawText`），用来对比。
+- [ ] 两条路径对比（同一内容截图）：中文、粗斜体、下划线样式、搜索高亮、选区、DECSCNM（`printf '\e[?5h'`）、闪烁（`printf '\e[5mblink\e[0m'`）一致。只允许 DS-18 §5.4 的差异：同色同背景段内，斜体、组合符的墨迹可以越过格边界，在颜色、背景变化处被裁掉。专门看：斜体后跟空格、斜体跨背景色边界、选区边缘、`printf '\e[8mhidden\e[0m'` 旁边。
+- [ ] 字体选「Cascadia Code」，settings.json 写 `"fontLigatures": true` 后重启：`->`、`=>`、`!=`、`===` 连成一个字形；块光标移进连字中间，那一格单独显示、反色正确，移走后连字恢复；闪烁、切换焦点时连字不变形；选中连字的一半时按格断开。`fontLigatures` 不写或写 false 时不连字。
+- [ ] emoji（😀、👍🏽、👨‍👩‍👧、🇨🇳）彩色、占两格、不挤后面的字；块光标停在 emoji 上时固定色层保持原色。
+- [ ] 回退与组合符：中文、`⌘`、数学符号显示正常、列不错位；`e` + U+0301、`a` + U+0323 + U+0302 的组合符盖在基字符上；换一个不含组合符的等宽字体时，该格按旧方式显示，不出现虚线圈。
+- [ ] 复杂文字：阿拉伯文、希伯来文逐格显示（与旧路径相同）；天城文、蒙古文记录与旧路径的差异和截图；中英阿混排一行列不错位；LRM、RLM、RLE…PDF、RLI…PDI 夹在拉丁文中间时不可见、列不错位。跨 script 的组合序列（拉丁字母 + 天城文元音符号）按旧方式显示。
+- [ ] 100% / 125% / 150% / 200% 缩放，以及窗口在不同 DPI 的屏幕间拖动：字形不出格、基线一致；改字号后正确。
+- [ ] `pane-diag.log` 每 10 秒（有画面变化时）有一条 `render.stats path=glyphrun …`；`ITERM2WIN_TEXT_PATH=drawtext` 时为 `path=drawtext`。
+
+来源：DS-18 §10。
+
 ### P2-3 快捷键、Ctrl+C、诊断包
 - [ ] 系统菜单「快捷键…」：26 个动作齐全；在 settings.json 改一个、解绑一个（设为 `""`）、制造一个冲突，重启后状态列分别显示「已修改」「未绑定」「冲突」；「打开配置目录」能打开。
 - [ ] 选中一段文字按 Ctrl+C：复制并清除选区；没有选区时 Ctrl+C 中断前台程序（`ping -t` 能被停下）。settings.json 设 `"copyOrInterrupt": ""` 后，Ctrl+C 总是中断，且之后改字号仍能保存设置。
@@ -151,6 +163,12 @@
 - [ ] 四个窗格同时持续输出时，键盘输入的回显延迟可接受（REVIEW C3 要求记录延迟分位数，能测则测）。
 
 来源：HANDOFF §4.6、ADR-001、REVIEW C3 / C5。
+
+### P3-2a 文本渲染耗时（DS-18 §9）
+- [ ] 同一台机器、全屏、默认字号，新路径和 `ITERM2WIN_TEXT_PATH=drawtext` 各跑一遍：`cat` 一个 50 MB 的混合文本（ASCII + 中文）；`vim` 整屏翻页 100 次；`htop` 一分钟。从 `pane-diag.log` 的 `render.stats` 取 `cold=0` 窗口里 `full_us` 的 p95（第三个数）。期望：新路径不高于旧路径，且 ≤ 8000（8 ms）。同时记下 `cache=` 命中率和 `shape_fail`、`legacy_cells`。
+- [ ] 可选：PresentMon 记录端到端延迟（`render.stats` 只测文本的 CPU 提交时间）。
+
+来源：DS-18 §9。
 
 ### P3-3 诊断输出
 - [ ] DebugView：默认不刷 `[conpty] reply written=`；设 `ITERM2WIN_OSC52_PING=1` 后才有。

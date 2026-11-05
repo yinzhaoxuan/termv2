@@ -349,6 +349,8 @@ std::vector<std::string> configSummaryLines(const ConnectionsFile& conns, LoadSt
   if (settings.osc52Invalid()) switches << "（无效，按全关）";
   switches << "；confirmMultilinePaste = " << (settings.confirmMultilinePasteRaw ? "无效（默认）" :
       !settings.confirmMultilinePaste ? "默认" : (*settings.confirmMultilinePaste ? "开" : "关"));
+  switches << "；fontLigatures = " << (settings.fontLigaturesRaw ? "无效（关）" :
+      !settings.fontLigatures ? "默认（关）" : (*settings.fontLigatures ? "开" : "关"));
   switches << "；sshDefaultTransport = " << (settings.sshDefaultTransportInvalid() ? "无效（默认）" :
       !settings.sshDefaultTransport ? "默认" : sshDefaultTransportName(*settings.sshDefaultTransport));
   std::size_t invalidProfiles = 0;

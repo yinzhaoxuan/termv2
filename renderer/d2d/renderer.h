@@ -9,6 +9,7 @@
 #include "search_highlight.h"
 #include "frame_policy.h"
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,6 +33,10 @@ std::vector<uint8_t> preedit_widths(const Preedit &p);
 std::vector<std::string> preedit_clusters(const Preedit &p);
 // 预编辑几何（下划线 / 内部光标 / 候选窗锚点），平台无关
 ImeLayout preedit_layout(const GridMetrics &m, const Preedit &p, uint16_t cols, uint16_t rows);
+
+struct TextRun;    // text_runs.h（DS-18）
+struct RunPlan;
+struct ShapedRun;
 
 // 当前 D3D 设备类型（UI 状态栏显示）
 enum class DeviceKind { None, Hardware, Warp, Stub };
@@ -67,6 +72,10 @@ public:
     void clear_search_highlight();
     // 动画（光标闪烁 / SGR 5）需要的下一次重绘时间点；0 = 不需要
     bool wants_animation() const { return animating_; }
+    // DS-18：连字开关（默认关）；变化时清塑形缓存并整屏重画
+    void set_ligatures(bool on);
+    // DS-18 §9：render.stats 每个窗口期回调一次（UI 线程，present_frame 内）；后端写进 pane-diag.log
+    void set_diag_sink(std::function<void(const std::string &)> sink) { diag_sink_ = std::move(sink); }
 
     // 脏行重绘 + Present；无变化或节流 Skip 返回 false（脏区保留）
     // mode：VSync=空闲稳态等垂直同步；Immediate=续跑中不堵 UI；Force=改尺寸等强制 Present(1,0)
@@ -89,6 +98,12 @@ private:
     void shutdown_device();
     struct Impl;
     static bool create_formats(Impl &I, const std::wstring &family, float size_pt, float scale = 0.f, int cell_h_px = 0, float baseline_px = 0.f);
+    // DS-18：塑形一段（分析、回退、GetGlyphs）；失败返回空。按计划画一段；逐格旧方式画一个字素
+    static std::shared_ptr<const ShapedRun> shape_run(Impl &I, const TextRun &run);
+    static void draw_plan(Impl &I, const GridMetrics &m, uint16_t row, const TextRun &run, const RunPlan &plan, uint32_t color);
+    static void draw_cell_text(Impl &I, const GridMetrics &m, const std::wstring &text, int format, GridMetrics::Rect rc,
+                               uint8_t ncols, uint32_t color);
+    std::function<void(const std::string &)> diag_sink_;
     ISwapChainHost *host_ = nullptr;
     GridMetrics metrics_{};
     const itcore_snapshot *snap_ = nullptr;  // 非拥有

@@ -40,7 +40,7 @@
 
 - **E6 余项**：MinGW-w64 winpthreads / CRT 许可文本打包进 `licenses/`（[LICENSE-AUDIT](LICENSE-AUDIT.md) §5）；`case_fold_table.inc` 补生成脚本。
 - **E1**：会话执行器，或基于实测把 UI 线程模型写成 ADR（ADR-001 备选 A2）。
-- **E8**：GlyphCache 图集与 glyph run（连字的前提）。
+- **E8**：已按 [DS-18](DS-18-字形运行渲染.md) 实现（按段塑形、按格定位、可选连字、彩色 emoji、塑形缓存、`render.stats`），只差 Windows 手测（手测清单 P2-2a、P3-2a）。新路径确认无回归后，下个版本删掉旧路径（`ITERM2WIN_TEXT_PATH=drawtext`）。
 - **DS-7 余项**：TERM、terminfo 与 DA 身份三者对齐，需要实机（GAP-10）。
 
 ## 3. v0.2 以后（只写设计）

@@ -114,6 +114,14 @@ inline std::vector<bool> rtlCells(const std::vector<uint8_t> &levels, const std:
   return out;
 }
 
+// ---- §5.0 hasAll 不计的零宽格式字符 ----
+// ZWNJ / ZWJ、方向标记与嵌入 / 隔离控制、ALM、变体选择符、字边界标记。它们不需要字体有字形。
+inline bool isZeroWidthFormat(uint32_t cp) {
+  return cp == 0x200C || cp == 0x200D || cp == 0x200E || cp == 0x200F || cp == 0x061C || cp == 0x2060 || cp == 0xFEFF ||
+         (cp >= 0x202A && cp <= 0x202E) || (cp >= 0x2066 && cp <= 0x2069) || (cp >= 0xFE00 && cp <= 0xFE0F) ||
+         (cp >= 0xE0100 && cp <= 0xE01EF);
+}
+
 // ---- §4.2 / §5.0 塑形项规划 ----
 struct ScriptRange { TextSpan span; uint16_t script = 0; uint8_t shapes = 0; };  // 对应 DWRITE_SCRIPT_ANALYSIS
 struct FontRange { TextSpan span; uint16_t font = 0; };                          // font：平台层的字体表下标

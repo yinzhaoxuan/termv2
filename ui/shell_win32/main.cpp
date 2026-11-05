@@ -1799,12 +1799,13 @@ uishell::PaneBackendFactory makeFactory() {
   struct State {
     uishell::PaneBackendFactory inner; std::string family; double size = 0; bool localTaken = false; Osc52Settings osc52;
     std::optional<it2app::SshDefaultTransport> sshDefault;
+    bool ligatures = false;
   };
   auto st = std::make_shared<State>();
   return [st](const std::string& connectionId, uishell::PaneEvents ev) -> std::unique_ptr<uishell::PaneBackend> {
     if (!st->inner || st->family != g->settings.fontFamily || st->size != g->settings.fontSize ||
         st->osc52 != g->settings.osc52OrDefault() ||   // osc52、sshDefaultTransport：只影响此后新建的窗格
-        st->sshDefault != backendSshDefault(g->settings)) {
+        st->sshDefault != backendSshDefault(g->settings) || st->ligatures != g->settings.fontLigaturesOrDefault()) {
       it2app::PaneBackendConfig cfg;
       cfg.resolveAppearance = appearanceForPane;
       cfg.resolveLocal = resolveLocal;
@@ -1820,9 +1821,11 @@ uishell::PaneBackendFactory makeFactory() {
       cfg.osc52.maxBytes = o52.maxBytes;  // 原样传，核心钳到 768 KiB
       const auto sshDefault = backendSshDefault(g->settings);
       cfg.sshDefaultTransport = sshDefault;  // ADR-006
+      cfg.fontLigatures = g->settings.fontLigaturesOrDefault();  // DS-18，隐藏字段
       st->inner = it2app::makeWin32PaneBackendFactory(std::move(cfg));
       st->family = g->settings.fontFamily; st->size = g->settings.fontSize; st->osc52 = o52;
       st->sshDefault = sshDefault;
+      st->ligatures = g->settings.fontLigaturesOrDefault();
     }
     if (connectionId.empty() && !st->localTaken) { st->localTaken = true; g->startupCommand.reset(); }
     return st->inner(connectionId, std::move(ev));

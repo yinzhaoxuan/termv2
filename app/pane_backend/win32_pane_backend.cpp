@@ -441,6 +441,12 @@ bool Win32PaneBackend::attach(void *parentHwnd, const uishell::PixelRect &rc, fl
         std::fprintf(stderr, "[pane] DirectWrite 字体度量失败（%ls %.1fpt，renderer init=%s），格尺寸按字号估算\n", font_.family.c_str(), double(font_.sizePt), initOk ? "ok" : "failed");
     metrics_ = itren::GridMetrics::from_font(fm, scale);
     renderer_->metrics() = metrics_;
+    renderer_->set_ligatures(cfg_->fontLigatures);
+    // DS-18 §9：render.stats 写进 pane-diag.log。回调在 present_frame 里（UI 线程），渲染器归本窗格所有
+    renderer_->set_diag_sink([this](const std::string &text) {
+        const std::string line = formatPaneDiagLine(sessionId_, attempt_, "render.stats", 0, std::nullopt, 0, text);
+        appendPaneDiag(line);
+    });
     sized_ = true;
     uint16_t c = 80, r = 24;
     metrics_.grid_size(rc.w, rc.h, c, r);

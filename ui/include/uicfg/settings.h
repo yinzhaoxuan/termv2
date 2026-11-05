@@ -54,6 +54,10 @@ struct SettingsFile {
   std::optional<bool> confirmMultilinePaste;
   std::optional<std::string> confirmMultilinePasteRaw;
   bool confirmMultilinePasteOrDefault() const { return confirmMultilinePaste.value_or(true); }
+  // DS-18 隐藏字段 fontLigatures：缺省或非布尔 = 关；仅在文件中存在时写回，非法原值保留。只影响此后新建的窗格
+  std::optional<bool> fontLigatures;
+  std::optional<std::string> fontLigaturesRaw;
+  bool fontLigaturesOrDefault() const { return fontLigatures.value_or(false); }
   // 隐藏字段 sshDefaultTransport：缺省或非法 = nullopt（用内置默认）；仅在文件中存在时写回，非法原值保留
   std::optional<SshDefaultTransport> sshDefaultTransport;
   std::optional<std::string> sshDefaultTransportRaw;

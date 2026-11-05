@@ -12,6 +12,8 @@
 #include <vector>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
+#include <string_view>
 
 namespace itren {
 const char *device_kind_name(DeviceKind k) {
@@ -27,6 +29,7 @@ const char *device_kind_name(DeviceKind k) {
 #  include <d2d1_1.h>
 #  include <d2d1.h>
 #  include <dwrite.h>
+#  include <dwrite_2.h>
 #  include <dxgi1_2.h>
 #  include <d3d11.h>
 #  pragma comment(lib, "d2d1")
@@ -36,6 +39,15 @@ const char *device_kind_name(DeviceKind k) {
 #endif
 
 namespace itren {
+
+#ifdef _WIN32
+// DS-18 §9：文本计时用的单调时钟（纳秒）
+static uint64_t qpc_now_ns() {
+    static const uint64_t freq = [] { LARGE_INTEGER f{}; QueryPerformanceFrequency(&f); return uint64_t(f.QuadPart ? f.QuadPart : 1); }();
+    LARGE_INTEGER c{}; QueryPerformanceCounter(&c);
+    return uint64_t(c.QuadPart) / freq * 1'000'000'000ull + uint64_t(c.QuadPart) % freq * 1'000'000'000ull / freq;
+}
+#endif
 
 struct D2DRenderer::Impl {
 #ifdef _WIN32
@@ -68,6 +80,23 @@ struct D2DRenderer::Impl {
     bool last_blink_on = true;
     BlinkRows blink_rows;                         // 含 SGR 5 格的行（相位翻转只重画这些行）
     bool last_cursor_on = true; int last_cursor_style = -1; bool last_focused = true;
+    // ---- DS-18 字形运行路径 ----
+    IDWriteFactory2 *dwrite2 = nullptr;           // 系统回退与彩色字形；取不到时只用旧路径
+    IDWriteTextAnalyzer *analyzer = nullptr;
+    IDWriteFontFallback *fallback = nullptr;
+    IDWriteFontFace *primary[4] = {};             // 回退无字体可用时的主字体面（按样式）
+    ID2D1SolidColorBrush *brush_layer = nullptr;  // 彩色字形的固定色层
+    bool glyph_path = false;                      // 可用且未被 ITERM2WIN_TEXT_PATH=drawtext 关闭
+    bool ligatures = false;
+    float em_px = 0.f;                            // 主字号（像素）= pt × 96/72 × dpi_scale（DS-18 §3）
+    ShapeCache shape_cache;
+    PlanCounters plan_counters;
+    RenderStatsWindow stats;
+    TextTimer timer{qpc_now_ns};
+    IsolateState last_iso;
+    IsolatedPlan iso_plan;
+    // 字体、DPI、连字开关、设备变化：塑形结果全部作废，下一个统计窗口标冷
+    void reset_shaping() { shape_cache.clear(); iso_plan.invalidate(); last_iso = {}; stats.markCold(); }
 #endif
 };
 
@@ -187,6 +216,28 @@ bool D2DRenderer::create_formats(Impl &I, const std::wstring &family, float size
     I.family = family; I.size_pt = size_pt;
     I.fm_valid = false;
     I.fmt_scale = scale; I.fmt_cell_h = cell_h_px; I.fmt_baseline = baseline_px;
+    // DS-18：字号只在这里乘一次 DPI；主字体面供回退无字体时使用；旧的塑形结果作废
+    I.em_px = size_pt * (96.f / 72.f) * (scale > 0 ? scale : 1.f);
+    for (auto *&f : I.primary) if (f) { f->Release(); f = nullptr; }
+    IDWriteFontCollection *col = nullptr;
+    if (SUCCEEDED(I.dwrite->GetSystemFontCollection(&col, FALSE)) && col) {
+        UINT32 idx = 0; BOOL exists = FALSE;
+        IDWriteFontFamily *fam = nullptr;
+        if (SUCCEEDED(col->FindFamilyName(family.c_str(), &idx, &exists)) && exists && SUCCEEDED(col->GetFontFamily(idx, &fam)) && fam) {
+            for (int i = 0; i < 4; ++i) {
+                IDWriteFont *font = nullptr;
+                if (SUCCEEDED(fam->GetFirstMatchingFont((i & 1) ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
+                                                        DWRITE_FONT_STRETCH_NORMAL,
+                                                        (i & 2) ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL, &font)) && font) {
+                    font->CreateFontFace(&I.primary[i]);
+                    font->Release();
+                }
+            }
+            fam->Release();
+        }
+        col->Release();
+    }
+    I.reset_shaping();
     return true;
 }
 
@@ -272,6 +323,17 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
         }
     }
     if (!create_formats(*impl_, impl_->family, impl_->size_pt)) return false;
+    {   // DS-18：新路径要 IDWriteFactory2（系统回退、彩色字形）和文本分析器；缺任何一个只用旧路径
+        auto &I = *impl_;
+        const char *path = std::getenv("ITERM2WIN_TEXT_PATH");
+        const bool forceDrawText = path && std::string_view(path) == "drawtext";
+        I.dwrite->QueryInterface(__uuidof(IDWriteFactory2), reinterpret_cast<void **>(&I.dwrite2));
+        if (I.dwrite2) I.dwrite2->GetSystemFontFallback(&I.fallback);
+        I.dwrite->CreateTextAnalyzer(&I.analyzer);
+        I.glyph_path = !forceDrawText && I.dwrite2 && I.fallback && I.analyzer;
+        if (!I.glyph_path)
+            std::fprintf(stderr, "[renderer] 文本走逐格 DrawText（%s）\n", forceDrawText ? "ITERM2WIN_TEXT_PATH=drawtext" : "缺 IDWriteFactory2 / 回退 / 分析器");
+    }
     device_kind_ = kind;
     impl_->saved_metrics = metrics_;
     impl_->dirty.invalidate(); impl_->layout.reset(); impl_->last_vis = -1;
@@ -279,6 +341,7 @@ bool D2DRenderer::init(const GridMetrics &metrics, const wchar_t *font_family, f
     impl_->d2d->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black), &impl_->brush_bg);
     impl_->d2d->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &impl_->brush_fg);
     impl_->d2d->CreateSolidColorBrush(rgb_f(impl_->theme.cursor), &impl_->brush_caret);
+    impl_->d2d->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &impl_->brush_layer);
     return true;
 }
 
@@ -288,8 +351,12 @@ void D2DRenderer::shutdown() {
     auto rel = [](auto *&p) { if (p) { p->Release(); p = nullptr; } };
     if (impl_) {
         if (impl_->d2d) impl_->d2d->SetTarget(nullptr);
-        rel(impl_->brush_caret); rel(impl_->brush_fg); rel(impl_->brush_bg);
+        rel(impl_->brush_caret); rel(impl_->brush_fg); rel(impl_->brush_bg); rel(impl_->brush_layer);
         for (auto *&f : impl_->formats) rel(f);
+        for (auto *&f : impl_->primary) rel(f);
+        rel(impl_->fallback); rel(impl_->analyzer); rel(impl_->dwrite2);
+        impl_->glyph_path = false;
+        impl_->reset_shaping();  // 塑形结果里的字体面各自持有引用，清缓存即释放
         rel(impl_->canvas);
         rel(impl_->format); rel(impl_->dwrite);
         rel(impl_->target); rel(impl_->d2d); rel(impl_->d2d_device); rel(impl_->d2d_factory);
@@ -416,7 +483,312 @@ namespace {
 bool is_lost(HRESULT hr) {
     return hr == D2DERR_RECREATE_TARGET || hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET;
 }
+
+// ---- DS-18 §4.2：文本分析的源与接收器（栈上对象，引用计数恒为 1）----
+class AnalysisSource final : public IDWriteTextAnalysisSource {
+public:
+    AnalysisSource(const wchar_t *text, UINT32 len) : text_(text), len_(len) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override {
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IDWriteTextAnalysisSource)) { *out = this; return S_OK; }
+        *out = nullptr; return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
+    HRESULT STDMETHODCALLTYPE GetTextAtPosition(UINT32 pos, WCHAR const **text, UINT32 *len) override {
+        if (pos >= len_) { *text = nullptr; *len = 0; } else { *text = text_ + pos; *len = len_ - pos; }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetTextBeforePosition(UINT32 pos, WCHAR const **text, UINT32 *len) override {
+        if (pos == 0 || pos > len_) { *text = nullptr; *len = 0; } else { *text = text_; *len = pos; }
+        return S_OK;
+    }
+    DWRITE_READING_DIRECTION STDMETHODCALLTYPE GetParagraphReadingDirection() override {
+        return DWRITE_READING_DIRECTION_LEFT_TO_RIGHT;  // 不做 bidi 重排（DS-18 §4.2）
+    }
+    HRESULT STDMETHODCALLTYPE GetLocaleName(UINT32 pos, UINT32 *len, WCHAR const **locale) override {
+        *len = pos < len_ ? len_ - pos : 0; *locale = L"en-us"; return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetNumberSubstitution(UINT32 pos, UINT32 *len, IDWriteNumberSubstitution **sub) override {
+        *len = pos < len_ ? len_ - pos : 0; *sub = nullptr; return S_OK;
+    }
+private:
+    const wchar_t *text_;
+    UINT32 len_;
+};
+
+class AnalysisSink final : public IDWriteTextAnalysisSink {
+public:
+    explicit AnalysisSink(UINT32 len) : levels(len, 0) {}
+    std::vector<ScriptRange> scripts;
+    std::vector<uint8_t> levels;  // 每个 UTF-16 单元的解析层级；只用来判断 RTL 格，不重排
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override {
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IDWriteTextAnalysisSink)) { *out = this; return S_OK; }
+        *out = nullptr; return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
+    HRESULT STDMETHODCALLTYPE SetScriptAnalysis(UINT32 pos, UINT32 len, DWRITE_SCRIPT_ANALYSIS const *sa) override {
+        scripts.push_back({{pos, len}, sa->script, uint8_t(sa->shapes)});
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetLineBreakpoints(UINT32, UINT32, DWRITE_LINE_BREAKPOINT const *) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetBidiLevel(UINT32 pos, UINT32 len, UINT8, UINT8 resolved) override {
+        for (UINT32 i = pos; i < pos + len && i < levels.size(); ++i) levels[i] = resolved;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetNumberSubstitution(UINT32, UINT32, IDWriteNumberSubstitution *) override { return S_OK; }
+};
+
+std::u16string utf8_to_u16(const char *s, size_t n) {
+    const int len = MultiByteToWideChar(CP_UTF8, 0, s, int(n), nullptr, 0);
+    std::u16string out(size_t(len > 0 ? len : 0), u'\0');
+    if (len > 0) MultiByteToWideChar(CP_UTF8, 0, s, int(n), reinterpret_cast<wchar_t *>(out.data()), len);
+    return out;
+}
+const wchar_t *wide(const std::u16string &s) { return reinterpret_cast<const wchar_t *>(s.data()); }
+
+// 列范围 × 一行的像素矩形（列数可超过 255）
+D2D1_RECT_F cols_rect(const GridMetrics &m, uint16_t col0, uint32_t ncols, uint16_t row) {
+    const auto a = m.cell_rect(col0, row, 1);
+    return D2D1::RectF(float(a.x), float(a.y), float(a.x) + float(ncols) * float(m.cell_w_px()), float(a.y + a.h));
+}
 }  // namespace
+
+void D2DRenderer::set_ligatures(bool on) {
+    if (impl_->ligatures == on) return;
+    impl_->ligatures = on;
+    impl_->reset_shaping();
+    impl_->dirty.invalidate();
+}
+
+// DS-18 §4.2–4.3：AnalyzeScript + AnalyzeBidi + MapCharacters → planItems → GetGlyphs / GetGlyphPlacements。
+std::shared_ptr<const ShapedRun> D2DRenderer::shape_run(Impl &I, const TextRun &run) {
+    const UINT32 len = UINT32(run.text.size());
+    if (!len || !I.analyzer || !I.fallback) return nullptr;
+    const wchar_t *text = wide(run.text);
+    AnalysisSource src(text, len);
+    AnalysisSink sink(len);
+    if (FAILED(I.analyzer->AnalyzeScript(&src, 0, len, &sink))) return nullptr;
+    if (FAILED(I.analyzer->AnalyzeBidi(&src, 0, len, &sink))) return nullptr;
+    std::sort(sink.scripts.begin(), sink.scripts.end(),
+              [](const ScriptRange &a, const ScriptRange &b) { return a.span.begin < b.span.begin; });
+
+    // 回退：字体面去重（同一字体面、同一缩放共用一个下标）
+    struct Face { std::shared_ptr<void> owner; IDWriteFontFace *raw; float scale; };
+    std::vector<Face> faces;
+    std::vector<FontRange> fonts;
+    const int fi = run.format & 3;
+    const DWRITE_FONT_WEIGHT weight = (fi & 1) ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL;
+    const DWRITE_FONT_STYLE style = (fi & 2) ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL;
+    for (UINT32 pos = 0; pos < len;) {
+        UINT32 mapped = 0; IDWriteFont *font = nullptr; FLOAT scale = 1.f;
+        HRESULT hr = I.fallback->MapCharacters(&src, pos, len - pos, nullptr, I.family.c_str(), weight, style,
+                                               DWRITE_FONT_STRETCH_NORMAL, &mapped, &font, &scale);
+        if (FAILED(hr) || mapped == 0) { if (font) font->Release(); return nullptr; }
+        IDWriteFontFace *face = nullptr;
+        if (font) {
+            hr = font->CreateFontFace(&face);
+            font->Release();
+            if (FAILED(hr) || !face) return nullptr;
+        } else {  // 没有任何字体含这些字符：用主字体画（豆腐块），列不变
+            face = I.primary[fi];
+            if (!face) return nullptr;
+            face->AddRef();
+            scale = 1.f;
+        }
+        int id = -1;
+        for (size_t i = 0; i < faces.size(); ++i)
+            if (faces[i].raw == face && faces[i].scale == scale) { id = int(i); break; }
+        if (id < 0) {
+            faces.push_back({std::shared_ptr<void>(face, [](void *f) { static_cast<IDWriteFontFace *>(f)->Release(); }), face, scale});
+            id = int(faces.size() - 1);
+        } else {
+            face->Release();
+        }
+        fonts.push_back({{pos, mapped}, uint16_t(id)});
+        pos += mapped;
+    }
+    auto hasAll = [&](uint16_t f, uint16_t k) {
+        const TextSpan sp = run.cellSpans[k];
+        for (UINT32 u = sp.begin; u < sp.end();) {
+            UINT32 cp = text[u], n = 1;
+            if (cp >= 0xD800 && cp < 0xDC00 && u + 1 < sp.end()) { cp = 0x10000 + ((cp - 0xD800) << 10) + (UINT32(text[u + 1]) - 0xDC00); n = 2; }
+            u += n;
+            if (isZeroWidthFormat(cp)) continue;
+            UINT16 gi = 0;
+            if (FAILED(faces[f].raw->GetGlyphIndices(&cp, 1, &gi)) || gi == 0) return false;
+        }
+        return true;
+    };
+    const ItemPlan plan = planItems(run.cellSpans, sink.scripts, fonts, rtlCells(sink.levels, run.cellSpans), hasAll);
+
+    auto out = std::make_shared<ShapedRun>();
+    out->legacyCells = plan.legacyCells;
+    // 连字关：只关可选连字（liga / calt / clig），script 必需的特性不受影响（DS-18 §4.3）
+    DWRITE_FONT_FEATURE off[3] = {{DWRITE_FONT_FEATURE_TAG_STANDARD_LIGATURES, 0},
+                                  {DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_ALTERNATES, 0},
+                                  {DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_LIGATURES, 0}};
+    DWRITE_TYPOGRAPHIC_FEATURES typo{off, 3};
+    for (const ItemRange &ir : plan.items) {
+        const Face &fc = faces[ir.font];
+        const ScriptRange &sr = sink.scripts[ir.scriptRange];
+        DWRITE_SCRIPT_ANALYSIS sa{sr.script, DWRITE_SCRIPT_SHAPES(sr.shapes)};
+        const UINT32 n = ir.span.length;
+        const wchar_t *t = text + ir.span.begin;
+        const DWRITE_TYPOGRAPHIC_FEATURES *features[1] = {&typo};
+        const UINT32 featureLens[1] = {n};
+        const DWRITE_TYPOGRAPHIC_FEATURES **feat = I.ligatures ? nullptr : features;
+        const UINT32 *featLen = I.ligatures ? nullptr : featureLens;
+        const UINT32 nFeat = I.ligatures ? 0 : 1;
+        std::vector<UINT16> cm(n), gi;
+        std::vector<DWRITE_SHAPING_TEXT_PROPERTIES> tp(n);
+        std::vector<DWRITE_SHAPING_GLYPH_PROPERTIES> gp;
+        UINT32 maxG = 3 * n / 2 + 16, actual = 0;
+        const UINT32 cap = 8 * n + 64;
+        HRESULT hr = E_FAIL;
+        for (int attempt = 0; attempt < 4; ++attempt) {  // 缓冲不足时加倍，最多重试 3 次
+            gi.resize(maxG); gp.resize(maxG);
+            hr = I.analyzer->GetGlyphs(t, n, fc.raw, FALSE, FALSE, &sa, L"en-us", nullptr, feat, featLen, nFeat,
+                                       maxG, cm.data(), tp.data(), gi.data(), gp.data(), &actual);
+            if (hr != HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER) || maxG >= cap) break;
+            maxG = std::min(maxG * 2, cap);
+        }
+        if (FAILED(hr) || actual == 0) return nullptr;
+        std::vector<FLOAT> adv(actual);
+        std::vector<DWRITE_GLYPH_OFFSET> off2(actual);
+        const float em = I.em_px * fc.scale;
+        hr = I.analyzer->GetGlyphPlacements(t, cm.data(), tp.data(), n, gi.data(), gp.data(), actual, fc.raw, em,
+                                            FALSE, FALSE, &sa, L"en-us", feat, featLen, nFeat, adv.data(), off2.data());
+        if (FAILED(hr)) return nullptr;
+        ShapedItem it;
+        it.span = ir.span; it.face = fc.owner; it.emPx = em; it.script = sr.script; it.shapes = sr.shapes;
+        it.glyphIndices.assign(gi.begin(), gi.begin() + actual);
+        it.advancesPx.assign(adv.begin(), adv.end());
+        it.offsetXPx.resize(actual); it.offsetYPx.resize(actual);
+        for (UINT32 g = 0; g < actual; ++g) { it.offsetXPx[g] = off2[g].advanceOffset; it.offsetYPx[g] = off2[g].ascenderOffset; }
+        it.clusterMap.assign(cm.begin(), cm.end());
+        out->items.push_back(std::move(it));
+    }
+    return out;
+}
+
+// 旧方式画一个字素（逐格 DrawTextW）：fit_glyph 只缩不放、居中；advance 按样式缓存。旧路径与降级格共用。
+void D2DRenderer::draw_cell_text(Impl &I, const GridMetrics &m, const std::wstring &ws, int fi, GridMetrics::Rect rc,
+                                 uint8_t cw, uint32_t color) {
+    D2D1_RECT_F clip = D2D1::RectF(float(rc.x), float(rc.y), float(rc.x + rc.w), float(rc.y + rc.h));
+    I.brush_fg->SetColor(rgb_f(color));
+    float adv = 0.f;
+    auto it = I.advance[fi].find(ws);
+    if (it != I.advance[fi].end()) adv = it->second;
+    else {
+        IDWriteTextLayout *tl = nullptr;
+        if (SUCCEEDED(I.dwrite->CreateTextLayout(ws.c_str(), UINT32(ws.size()), I.formats[fi], 1e4f, 1e4f, &tl)) && tl) {
+            DWRITE_TEXT_METRICS tm{};
+            if (SUCCEEDED(tl->GetMetrics(&tm))) adv = tm.widthIncludingTrailingWhitespace;
+            tl->Release();
+        }
+        if (I.advance[fi].size() > 4096) I.advance[fi].clear();
+        I.advance[fi].emplace(ws, adv);
+    }
+    GlyphFit gf = fit_glyph(adv, cw, float(m.cell_w_px()));
+    I.d2d->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_ALIASED);
+    D2D1_MATRIX_3X2_F old; I.d2d->GetTransform(&old);
+    if (gf.scale < 1.f) {
+        I.d2d->SetTransform(D2D1::Matrix3x2F::Scale(gf.scale, 1.f, D2D1::Point2F(clip.left, clip.top)) *
+                            D2D1::Matrix3x2F::Translation(gf.x_offset, 0.f) * old);
+    }
+    D2D1_RECT_F box = clip;
+    if (gf.scale < 1.f) box.right = clip.left + adv + 1.f;
+    I.d2d->DrawTextW(ws.c_str(), UINT32(ws.size()), I.formats[fi], box, I.brush_fg,
+                     D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+    I.d2d->SetTransform(old);
+    I.d2d->PopAxisAlignedClip();
+}
+
+namespace {
+// DS-18 §6：COLR v0 分层；paletteIndex 0xFFFF 用当前文本颜色（brush_fg），其他层用字体给的颜色。
+// 非彩色字体，或 TranslateColorGlyphRun 返回 DWRITE_E_NOCOLOR / 失败：按普通字形画。
+void draw_glyph_run(ID2D1DeviceContext *d2d, IDWriteFactory2 *f2, ID2D1SolidColorBrush *text, ID2D1SolidColorBrush *layer,
+                    D2D1_POINT_2F origin, const DWRITE_GLYPH_RUN &gr) {
+    bool colorFont = false;
+    IDWriteFontFace2 *face2 = nullptr;
+    if (f2 && SUCCEEDED(gr.fontFace->QueryInterface(__uuidof(IDWriteFontFace2), reinterpret_cast<void **>(&face2))) && face2) {
+        colorFont = face2->IsColorFont();
+        face2->Release();
+    }
+    if (colorFont) {
+        IDWriteColorGlyphRunEnumerator *e = nullptr;
+        if (SUCCEEDED(f2->TranslateColorGlyphRun(origin.x, origin.y, &gr, nullptr, DWRITE_MEASURING_MODE_NATURAL, nullptr, 0, &e)) && e) {
+            BOOL more = FALSE;
+            while (SUCCEEDED(e->MoveNext(&more)) && more) {
+                DWRITE_COLOR_GLYPH_RUN const *cr = nullptr;
+                if (FAILED(e->GetCurrentRun(&cr)) || !cr) break;
+                ID2D1Brush *b = text;
+                if (cr->paletteIndex != 0xFFFF && layer) {
+                    layer->SetColor(D2D1::ColorF(cr->runColor.r, cr->runColor.g, cr->runColor.b, cr->runColor.a));
+                    b = layer;
+                }
+                d2d->DrawGlyphRun(D2D1::Point2F(cr->baselineOriginX, cr->baselineOriginY), &cr->glyphRun, nullptr, b,
+                                  DWRITE_MEASURING_MODE_NATURAL);
+            }
+            e->Release();
+            return;
+        }
+        if (e) e->Release();
+    }
+    // ID2D1DeviceContext 的 5 参版本（带 glyphRunDescription）：避免基类 4 参重载被隐藏时编不过
+    d2d->DrawGlyphRun(origin, &gr, nullptr, text, DWRITE_MEASURING_MODE_NATURAL);
+}
+}  // namespace
+
+// DS-18 §5.4：按计划画一段。底层与块光标反色（§7）都走这里，只是颜色不同。
+void D2DRenderer::draw_plan(Impl &I, const GridMetrics &m, uint16_t row, const TextRun &run, const RunPlan &plan,
+                            uint32_t color) {
+    const int fi = run.format & 3;
+    auto legacy = [&](uint16_t k, ColRange clip) {
+        if (k >= run.cellSpans.size()) return;
+        const TextSpan sp = run.cellSpans[k];
+        const std::wstring ws(wide(run.text) + sp.begin, sp.length);
+        auto rc = m.cell_rect(clip.col0, row, 1);
+        rc.w = m.cell_w_px() * clip.ncols;
+        draw_cell_text(I, m, ws, fi, rc, uint8_t(clip.ncols > 255 ? 255 : clip.ncols), color);
+    };
+    if (plan.legacyWhole()) {  // 塑形失败：整段逐格旧方式
+        for (size_t k = 0; k < run.cellCols.size(); ++k) {
+            const uint16_t col = run.cellCols[k];
+            const uint16_t next = k + 1 < run.cellCols.size() ? run.cellCols[k + 1] : uint16_t(run.cols.col0 + run.cols.ncols);
+            legacy(uint16_t(k), {col, uint16_t(next - col)});
+        }
+        return;
+    }
+    const float baseline = float(m.cell_rect(0, row, 1).y) + I.fmt_baseline;
+    std::vector<DWRITE_GLYPH_OFFSET> offs;
+    for (const DrawPiece &p : plan.pieces) {
+        if (p.kind == DrawPiece::LegacyCell) { legacy(p.cell, p.clip); continue; }
+        const ShapedItem &it = plan.shaped->items[p.item];
+        const UINT32 n = p.glyphEnd - p.glyphBegin;
+        offs.resize(n);
+        for (UINT32 i = 0; i < n; ++i) offs[i] = {it.offsetXPx[p.glyphBegin + i], it.offsetYPx[p.glyphBegin + i]};
+        DWRITE_GLYPH_RUN gr{};
+        gr.fontFace = static_cast<IDWriteFontFace *>(it.face.get());
+        gr.fontEmSize = it.emPx;
+        gr.glyphCount = n;
+        gr.glyphIndices = it.glyphIndices.data() + p.glyphBegin;
+        gr.glyphAdvances = p.advancesPx.data();
+        gr.glyphOffsets = offs.data();
+        gr.isSideways = FALSE;
+        gr.bidiLevel = 0;
+        if (!gr.fontFace) continue;
+        I.brush_fg->SetColor(rgb_f(color));
+        const D2D1_POINT_2F origin = D2D1::Point2F(float(m.pad_x_px()) + p.originXPx, baseline);
+        I.d2d->PushAxisAlignedClip(cols_rect(m, p.clip.col0, p.clip.ncols, row), D2D1_ANTIALIAS_MODE_ALIASED);
+        D2D1_MATRIX_3X2_F old; I.d2d->GetTransform(&old);
+        if (p.scale != 1.f) I.d2d->SetTransform(D2D1::Matrix3x2F::Scale(p.scale, 1.f, origin) * old);
+        draw_glyph_run(I.d2d, I.dwrite2, I.brush_fg, I.brush_layer, origin, gr);
+        I.d2d->SetTransform(old);
+        I.d2d->PopAxisAlignedClip();
+    }
+}
 
 bool D2DRenderer::present_frame(PresentMode mode) {
     if (device_lost_ && !recover_device()) return false;
@@ -462,13 +834,24 @@ bool D2DRenderer::present_frame(PresentMode mode) {
     // 搜索高亮变化：只标脏行（next/prev 换当前命中、滚动视口、clear/RESTARTED）
     for (uint16_t y : search_dirty_) I.dirty.mark(y);
     search_dirty_.clear();
-    // 评审第 1 点：只画脏行
-    std::vector<uint16_t> rows = blink_frame_rows(I.dirty, I.blink_rows, I.last_blink_on, snap_, L.rows, full, blink_on);
-
     uint16_t cc = 0, cr = 0; int vis = 0;
     itcore_snapshot_cursor(snap_, &cc, &cr, &vis);
     int cstyle_ps = 0; itcore_snapshot_cursor_style(snap_, &cstyle_ps);
     const CursorStyle cstyle = decscusr_to_style(cstyle_ps);
+    // DS-18 §7：块光标格单独成段。隔离只看 DECTCEM、块形状、预编辑，与闪烁相位和焦点无关；
+    // 隔离状态变化时旧行、新行都要重新塑形
+    IsolateState iso;
+    if (I.glyph_path && vis && preedit_.utf8.empty() && cstyle.shape == CursorShape::Block && cc < L.cols && cr < L.rows) {
+        const CursorCell head = cursor_cell(snap_, cr, cc);
+        iso = {true, cr, {head.col, uint16_t(head.wide ? 2 : 1)}};
+    }
+    if (!(iso == I.last_iso)) {
+        for (uint16_t y : isolateDirtyRows(I.last_iso, iso)) I.dirty.mark(y);
+        I.last_iso = iso;
+    }
+    // 评审第 1 点：只画脏行
+    std::vector<uint16_t> rows = blink_frame_rows(I.dirty, I.blink_rows, I.last_blink_on, snap_, L.rows, full, blink_on);
+
     const uint64_t since_input = now >= last_input_ms_ ? now - last_input_ms_ : 0;
     const bool cursor_on = cursor_visible(cstyle, focused_, since_input);
     bool overlay_changed = cc != I.last_cc || cr != I.last_cr || vis != I.last_vis || preedit_.utf8 != I.last_preedit ||
@@ -511,7 +894,40 @@ bool D2DRenderer::present_frame(PresentMode mode) {
             I.d2d->FillRectangle(D2D1::RectF(float(rc.x), float(rc.y), float(rc.x + rc.w), float(rc.y + rc.h)), I.brush_bg);
             x = x1;
         }
-        // 文本 + 粗体/斜体/下划线（评审第 3 点）
+        // 文本（DS-18）：新路径按段塑形、按格定位；旧路径（ITERM2WIN_TEXT_PATH=drawtext）逐格 DrawTextW。
+        // 只有文本工作计入 render.stats（§9）；背景已画完，装饰在下面按格画，都不计时
+        if (I.glyph_path) {
+            I.timer.begin();
+            std::vector<TextCellIn> tc(cols);
+            std::vector<uint8_t> widths(cols, 0);
+            for (uint16_t col = 0; col < cols; ++col) {
+                const itcore_cell &c = cells[col];
+                TextCellIn &t = tc[col];
+                if (c.flags & ITCORE_CELL_CONTINUATION) { t.width = 0; continue; }
+                const auto rcol = resolve_cell(I.theme, c, rev != 0, search_hl_.kind(y, col));
+                t.width = c.width ? c.width : 1;
+                widths[col] = t.width;
+                t.format = uint8_t(text_style(c.flags, ITCORE_CELL_BOLD, ITCORE_CELL_ITALIC, ITCORE_CELL_UNDERLINE).format_index());
+                t.fg = rcol.fg; t.bg = rcol.bg;
+                t.visible = text_visible(c, now);
+                size_t glen = 0;
+                const char *g = c.grapheme_id ? itcore_snapshot_grapheme(snap_, c.grapheme_id, &glen) : nullptr;
+                if (g && glen) t.text = utf8_to_u16(g, glen);
+            }
+            std::optional<ColRange> isoCols;
+            if (iso.active && iso.row == y) isoCols = iso.cols;
+            const float cellW = float(metrics_.cell_w_px());
+            auto shaper = [&I](const TextRun &r) { return shape_run(I, r); };
+            for (const TextRun &run : segmentRow(tc, isoCols)) {
+                RunPlan plan = planRun(run, widths, cellW, I.ligatures, I.shape_cache, shaper, I.plan_counters);
+                draw_plan(I, metrics_, y, run, plan, run.fg);
+                if (isoCols && run.cols == *isoCols) {  // 覆盖层反色字形用同一份计划（§7）
+                    I.iso_plan.state = iso; I.iso_plan.rowRevision = rr;
+                    I.iso_plan.plan = std::move(plan); I.iso_plan.run = run;
+                }
+            }
+            I.timer.end();
+        }
         for (uint16_t col = 0; col < cols; ++col) {
             const itcore_cell &c = cells[col];
             if (c.flags & ITCORE_CELL_CONTINUATION) continue;
@@ -519,45 +935,17 @@ bool D2DRenderer::present_frame(PresentMode mode) {
             const bool text_on = text_visible(c, now);
             auto st = text_style(c.flags, ITCORE_CELL_BOLD, ITCORE_CELL_ITALIC, ITCORE_CELL_UNDERLINE);
             uint8_t cw = c.width ? c.width : 1;
-            auto rc = metrics_.cell_rect(col, y, cw);
-            D2D1_RECT_F clip = D2D1::RectF(float(rc.x), float(rc.y), float(rc.x + rc.w), float(rc.y + rc.h));
-            if (c.grapheme_id && text_on) {
+            if (!I.glyph_path && c.grapheme_id && text_on) {
+                I.timer.begin();
                 size_t glen = 0;
                 const char *g = itcore_snapshot_grapheme(snap_, c.grapheme_id, &glen);
                 if (g && glen) {
                     int wlen = MultiByteToWideChar(CP_UTF8, 0, g, int(glen), nullptr, 0);
                     std::wstring ws(wlen, 0);
                     MultiByteToWideChar(CP_UTF8, 0, g, int(glen), ws.data(), wlen);
-                    I.brush_fg->SetColor(rgb_f(rcol.fg));
-                    // fit_glyph：advance 超出格宽（回退字体/宽字形）时只缩不放、水平居中；advance 按样式缓存
-                    const int fi = st.format_index();
-                    float adv = 0.f;
-                    auto it = I.advance[fi].find(ws);
-                    if (it != I.advance[fi].end()) adv = it->second;
-                    else {
-                        IDWriteTextLayout *tl = nullptr;
-                        if (SUCCEEDED(I.dwrite->CreateTextLayout(ws.c_str(), UINT32(ws.size()), I.formats[fi], 1e4f, 1e4f, &tl)) && tl) {
-                            DWRITE_TEXT_METRICS tm{};
-                            if (SUCCEEDED(tl->GetMetrics(&tm))) adv = tm.widthIncludingTrailingWhitespace;
-                            tl->Release();
-                        }
-                        if (I.advance[fi].size() > 4096) I.advance[fi].clear();
-                        I.advance[fi].emplace(ws, adv);
-                    }
-                    GlyphFit gf = fit_glyph(adv, cw, float(metrics_.cell_w_px()));
-                    I.d2d->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_ALIASED);
-                    D2D1_MATRIX_3X2_F old; I.d2d->GetTransform(&old);
-                    if (gf.scale < 1.f) {
-                        I.d2d->SetTransform(D2D1::Matrix3x2F::Scale(gf.scale, 1.f, D2D1::Point2F(clip.left, clip.top)) *
-                                            D2D1::Matrix3x2F::Translation(gf.x_offset, 0.f) * old);
-                    }
-                    D2D1_RECT_F box = clip;
-                    if (gf.scale < 1.f) box.right = clip.left + adv + 1.f;
-                    I.d2d->DrawTextW(ws.c_str(), UINT32(ws.size()), I.formats[fi], box, I.brush_fg,
-                                     D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
-                    I.d2d->SetTransform(old);
-                    I.d2d->PopAxisAlignedClip();
+                    draw_cell_text(I, metrics_, ws, st.format_index(), metrics_.cell_rect(col, y, cw), cw, rcol.fg);
                 }
+                I.timer.end();
             }
             if (underline_visible(c, now)) {  // 闪烁隐藏相位不画下划线（BLINK-02）；样式见 underline_style_rects
                 I.brush_fg->SetColor(rgb_f(rcol.underline));
@@ -578,6 +966,15 @@ bool D2DRenderer::present_frame(PresentMode mode) {
     }
     HRESULT hr = I.d2d->EndDraw();
     if (is_lost(hr)) { device_lost_ = true; return false; }
+    {   // DS-18 §9：本帧文本 CPU 时间 → 统计窗口；窗口满时写一条 render.stats
+        uint32_t drawn = 0;
+        for (uint16_t y : rows) if (y < L.rows) ++drawn;
+        const uint64_t textNs = I.timer.takeFrameNs();
+        if (auto st = I.stats.add(qpc_now_ns(), drawn, L.rows, textNs, I.shape_cache.stats(), I.plan_counters); st && diag_sink_) {
+            const RenderStatsContext ctx{I.glyph_path ? "glyphrun" : "drawtext", I.ligatures, metrics_.dpi_scale, L.cols, L.rows};
+            diag_sink_(formatRenderStats(*st, ctx));
+        }
+    }
     animating_ = (vis && cstyle.blink && focused_) || I.blink_rows.any();  // 闪烁字符全部消失后停止定时刷新
 
     // 后缓冲：贴画布 + 预编辑 + 光标（覆盖层每帧重画，不污染画布）
@@ -624,7 +1021,13 @@ bool D2DRenderer::present_frame(PresentMode mode) {
             const itcore_cell &c = row[dc];
             size_t glen = 0;
             const char *g = c.grapheme_id ? itcore_snapshot_grapheme(snap_, c.grapheme_id, &glen) : nullptr;
-            if (g && glen && text_visible(c, now)) {
+            // DS-18 §7：底层画这一格时保存的计划仍有效（隔离状态与行内容都没变）就直接用，只换成反色；
+            // 不查缓存、不重新塑形。计划缺失（例如这一格是空白段）才退回下面的逐格 DrawTextW
+            const bool planned = I.glyph_path && I.iso_plan.usableFor(I.last_iso, rr);
+            if (planned && text_visible(c, now)) {
+                draw_plan(I, metrics_, cr, I.iso_plan.run, *I.iso_plan.plan,
+                          resolve_cell(I.theme, c, rev != 0, search_hl_.kind(cr, dc)).bg);
+            } else if (g && glen && text_visible(c, now)) {
                 int wl = MultiByteToWideChar(CP_UTF8, 0, g, int(glen), nullptr, 0);
                 std::wstring gs(wl, 0);
                 MultiByteToWideChar(CP_UTF8, 0, g, int(glen), gs.data(), wl);
@@ -690,6 +1093,7 @@ GridMetrics::Rect D2DRenderer::caret_rect_px() const {
     return metrics_.cell_rect(col, row, 1);
 }
 bool D2DRenderer::present_frame(PresentMode) { return false; }
+void D2DRenderer::set_ligatures(bool) {}
 bool D2DRenderer::recover_device() { device_lost_ = false; return true; }
 void D2DRenderer::shutdown_device() {}
 

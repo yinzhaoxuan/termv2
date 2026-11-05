@@ -97,6 +97,9 @@ static void directionAndItems() {
   // RLE 之后的拉丁格按层级判定
   assert((rtlCells({0, 1, 1, 0}, cells) == std::vector<bool>{false, true, true, false}));
 
+  // 零宽格式字符：ZWJ、变体选择符、方向控制符；普通字母与组合符不是
+  for (uint32_t cp : {0x200Du, 0xFE0Fu, 0x200Fu, 0x202Bu, 0x2067u, 0xE0100u, 0x061Cu}) assert(isZeroWidthFormat(cp));
+  for (uint32_t cp : {0x41u, 0x301u, 0x4E2Du, 0x1F600u, 0x2069u + 1}) assert(!isZeroWidthFormat(cp));
   // intersectRanges：交错、包含、边界重合、空输入
   std::vector<ScriptRange> sc{{{0, 3}, 1, 0}, {{3, 3}, 2, 0}};
   std::vector<FontRange> fo{{{0, 2}, 0}, {{2, 4}, 1}};

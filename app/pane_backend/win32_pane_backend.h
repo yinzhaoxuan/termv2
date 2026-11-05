@@ -49,6 +49,8 @@ struct PaneBackendConfig {
     std::optional<std::string> wordChars;
     // B4：OSC 52 剪贴板（默认关；读要单独打开，会把本机剪贴板交给远端程序）
     Osc52Config osc52;
+    // DS-18：settings.json 的 fontLigatures（默认关），新建窗格生效
+    bool fontLigatures = false;
     // ADR-006：settings.json 的 sshDefaultTransport；nullopt（缺省或非法）用内置默认 kBuiltinSshDefault。
     std::optional<SshDefaultTransport> sshDefaultTransport;
 };
