@@ -13,9 +13,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# 超时：正常耗时 2–6 分钟（mingw-direct 无缓存时约 6 分钟，含 OpenSSL）。runner 卡住时尽快失败，
+# 不等默认的 6 小时；apt 步骤另设 10 分钟（2026-11-05 曾在 apt-get update 卡住 26 分钟以上）。
+
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: cmake --preset dev
@@ -24,6 +28,7 @@ jobs:
 
   asan:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # 兼容 runner 上 GCC sanitizer 的地址空间布局（google/sanitizers#1614）。
@@ -34,6 +39,7 @@ jobs:
 
   tsan:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       # 避免 Ubuntu 24.04 的高 ASLR 熵与 TSan shadow memory 冲突。
@@ -44,10 +50,12 @@ jobs:
 
   mingw:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       # 工具链显式调用 -posix 编译器，无需切换通用名称的 alternatives。
-      - run: |
+      - timeout-minutes: 10
+        run: |
           sudo apt-get update
           sudo apt-get install -y mingw-w64 g++-mingw-w64-x86-64-posix
       - run: cmake --preset mingw
@@ -65,9 +73,11 @@ jobs:
   # ADR-006 阶段 1：发布包用这个构建，所以每次推送都编，不再只靠手动触发。
   mingw-direct:
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - run: |
+      - timeout-minutes: 10
+        run: |
           sudo apt-get update
           sudo apt-get install -y mingw-w64 g++-mingw-w64-x86-64-posix
       # OpenSSL / libssh2 的 ExternalProject 目录（源码、构建、安装与 stamp）。版本、SHA-256、补丁和工具链
