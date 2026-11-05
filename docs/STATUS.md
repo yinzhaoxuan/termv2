@@ -17,6 +17,14 @@
 - **许可**：GPL-3.0-or-later（[LICENSE-AUDIT.md](LICENSE-AUDIT.md)）。
 - **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认待 ADR（TODO §2.1）。OSC 52 读写默认全关。
 
+## 2026-11-05：ConPTY 复审修复
+
+见 [审查清单-2026-11-05-复审.md](审查清单-2026-11-05-复审.md)。
+
+- 启动与关闭的交接：新增 `lifeLock_`，`close()` 读状态与登记请求成为一个整体；`publishRunning()` 在锁内发布 Running 并取走 Starting 期间的请求。快速退出的子进程不会再停在 Running。
+- 事件创建失败：构造时记下错误码，`start()` 在建任何线程、进程前走 `failStart`；closer 只在 `WAIT_OBJECT_0` 时清理。
+- **未验证**：只做了静态复查，待 CI `mingw` 编译和 Windows 故障注入。
+
 ## 2026-11-05：ADR-006 SSH 默认传输（阶段 1）
 
 见 [ADR-006-SSH默认传输.md](ADR-006-SSH默认传输.md)。用户已批准；阶段 1 不改变现有用户的行为（内置默认仍是兼容）。

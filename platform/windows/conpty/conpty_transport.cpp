@@ -62,11 +62,17 @@ std::vector<wchar_t> buildEnvironmentBlock(const LaunchSpec &spec) {
 }
 
 ConPtyTransport::ConPtyTransport(TransportCallbacks cb) : cb_(std::move(cb)) {
-    writerWake_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    readerResume_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    monitorStop_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    closedEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    closeRequest_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    // 构造函数不报错：记下第一个失败的错误码，start 在建任何线程、进程之前检查。
+    auto event = [this](BOOL manualReset) {
+        HANDLE h = CreateEventW(nullptr, manualReset, FALSE, nullptr);
+        if (!h && !eventError_) { DWORD e = GetLastError(); eventError_ = e ? e : ERROR_INVALID_HANDLE; }
+        return h;
+    };
+    writerWake_ = event(FALSE);
+    readerResume_ = event(FALSE);
+    monitorStop_ = event(TRUE);
+    closedEvent_ = event(TRUE);
+    closeRequest_ = event(TRUE);
 }
 
 ConPtyTransport::~ConPtyTransport() {
@@ -108,11 +114,17 @@ void ConPtyTransport::failStart(TransportFault f, const char *stage, DWORD err) 
 }
 
 bool ConPtyTransport::start(SessionId sid, AttemptId aid, const LaunchSpec &spec) {
-    TransportState expected = TransportState::Idle;
-    if (!state_.compare_exchange_strong(expected, TransportState::Starting)) return false;
+    {
+        Lock l(lifeLock_);  // 与 close() 的 Idle 分支互斥
+        TransportState expected = TransportState::Idle;
+        if (!state_.compare_exchange_strong(expected, TransportState::Starting)) return false;
+    }
     sid_ = sid; aid_ = aid; snapshot_ = spec.sshSnapshotFile;
     setState(TransportState::Starting);
     uint64_t t0 = nowMs();
+    // 0. 同步事件必须都有效：closer 只认 closeRequest_ 的真实信号，写线程、读线程靠其余事件唤醒。
+    //    失败时还没有任何线程和进程，直接走 failStart。
+    if (eventError_) { failStart(TransportFault::StartFailed, "CreateEvent", eventError_); return false; }
 
     // 1. 网格 ≥ 20×5
     COORD size{SHORT(spec.initialSize.cols < 20 ? 20 : spec.initialSize.cols),
@@ -187,9 +199,8 @@ bool ConPtyTransport::start(SessionId sid, AttemptId aid, const LaunchSpec &spec
         // 只有读线程在跑，start 调用线程可安全同步收口。
         // 先占住 closeStarted_，读线程此后的 close() 直接返回。
         fault_ = TransportFault::StartFailed;
-        closeReason_ = CloseReason::Fault;
-        closeStarted_ = true;
-        setState(TransportState::Running);
+        { Lock l(lifeLock_); closeReason_ = CloseReason::Fault; closeStarted_ = true; }
+        publishRunning();  // Starting 期间的请求被这次关闭包含
         doClose();
         return false;
     }
@@ -199,14 +210,26 @@ bool ConPtyTransport::start(SessionId sid, AttemptId aid, const LaunchSpec &spec
     if (!writer_ || !monitor_) {
         // 进程已在 Job 中：走正常关闭路径
         fault_ = TransportFault::StartFailed;
-        setState(TransportState::Running);
+        publishRunning();  // Starting 期间的请求被这次关闭包含
         close(CloseReason::Fault);
         return false;
     }
     diag("start", nowMs() - t0);
-    setState(TransportState::Running);
-    if (closeRequested_) { closeRequested_ = false; close(closeReason_); }  // Starting 期间的关闭请求
+    if (auto why = publishRunning()) close(*why);  // Starting 期间的关闭请求
     return true;
+}
+
+// Starting → Running 与 close() 的 Starting 分支在 lifeLock_ 下交接：close 要么看到 Running 自己发请求，
+// 要么把请求留在 closeRequested_，由这里取走。回调在锁外。
+std::optional<CloseReason> ConPtyTransport::publishRunning() {
+    std::optional<CloseReason> pending;
+    {
+        Lock l(lifeLock_);
+        state_ = TransportState::Running;
+        if (closeRequested_) { closeRequested_ = false; pending = closeReason_; }
+    }
+    if (cb_.onStateChanged) cb_.onStateChanged(sid_, aid_, TransportState::Running, std::nullopt);
+    return pending;
 }
 
 // ---- 输入 ----
@@ -358,27 +381,51 @@ void ConPtyTransport::closePseudoConsoleOnce() {
 
 // ---- 关闭（§1.4）----
 void ConPtyTransport::close(CloseReason why) {
-    TransportState s = state_.load();
-    // 从未 start：没有进程，doClose/failStart 也不会给 closedEvent_ 发信号。
-    // 窗格在启动前失败后重连仍会 startCloser→waitClosed；不在这里收口的话，
-    // 关闭线程 5s 超时后再 waitClosed(INFINITE)，一直占着这条线程。
-    if (s == TransportState::Idle &&
-        state_.compare_exchange_strong(s, TransportState::Closed)) {
-        closeReason_ = why;
+    enum { Nothing, ClosedFromIdle, Signal } action = Nothing;
+    {
+        // 读状态与登记请求是一个整体：否则读到 Starting 之后、写 closeRequested_ 之前，
+        // start 可能已发布 Running 并查过标志，请求就没人取了。
+        Lock l(lifeLock_);
+        switch (state_.load()) {
+        case TransportState::Idle:
+            // 从未 start：没有进程，doClose/failStart 也不会给 closedEvent_ 发信号。
+            // 窗格在启动前失败后重连仍会 startCloser→waitClosed；不在这里收口的话，
+            // 关闭线程 5s 超时后再 waitClosed(INFINITE)，一直占着这条线程。
+            state_ = TransportState::Closed;
+            closeReason_ = why;
+            action = ClosedFromIdle;
+            break;
+        case TransportState::Starting:
+            if (closeStarted_) break;  // start 已在同步收口（closer 创建失败），原因不再改
+            closeReason_ = why;
+            closeRequested_ = true;  // 由 publishRunning 取走
+            break;
+        case TransportState::Closed:
+        case TransportState::Failed:
+            break;
+        default:  // Running / Closing
+            if (!closeStarted_.exchange(true)) { closeReason_ = why; action = Signal; }  // 幂等
+            break;
+        }
+    }
+    if (action == ClosedFromIdle) {
         if (cb_.onStateChanged) cb_.onStateChanged(sid_, aid_, TransportState::Closed, std::nullopt);
         SetEvent(closedEvent_);
-        return;
+    } else if (action == Signal) {
+        SetEvent(closeRequest_);  // closer 已在 start 时建好，不在请求线程上执行清理。
     }
-    // CAS 失败时 s 已是当前状态。Idle 只在被别的 close 抢先收口时再次出现。
-    if (s == TransportState::Idle || s == TransportState::Closed || s == TransportState::Failed) return;
-    if (s == TransportState::Starting) { closeReason_ = why; closeRequested_ = true; return; }
-    if (closeStarted_.exchange(true)) return;  // 幂等
-    closeReason_ = why;
-    SetEvent(closeRequest_);  // closer 已在 start 时建好，不在请求线程上执行清理。
 }
 DWORD WINAPI ConPtyTransport::closerMain(LPVOID p) {
     auto *self = static_cast<ConPtyTransport *>(p);
-    WaitForSingleObject(self->closeRequest_, INFINITE);
+    // 只有真正收到请求才清理。start 已确认事件有效，等待失败不应发生；万一发生也不能当成关闭请求，
+    // 否则会在 start 还没发布 writer / monitor 时拆掉管道和进程。
+    const DWORD w = WaitForSingleObject(self->closeRequest_, INFINITE);
+    if (w != WAIT_OBJECT_0) {
+        const DWORD e = GetLastError();
+        self->diag("closer-wait-failed", 0, 0, "WaitForSingleObject=" + std::to_string(w) + " Win32 错误 " + std::to_string(e),
+                   static_cast<int64_t>(e));
+        return 0;
+    }
     self->doClose();
     return 0;
 }
@@ -447,7 +494,9 @@ void ConPtyTransport::doClose() {
     diag("close.total", nowMs() - closeStartMs_);
     if (timedOut && !fault_) fault_ = TransportFault::CloseTimeout;
     // 8. 最终状态（核心执行器排空由上层在收到 Closed/Failed 后完成）
-    setState(closeReason_ == CloseReason::Fault ? TransportState::Failed : TransportState::Closed, fault_);
+    CloseReason why;
+    { Lock l(lifeLock_); why = closeReason_; }
+    setState(why == CloseReason::Fault ? TransportState::Failed : TransportState::Closed, fault_);
     SetEvent(closedEvent_);
 }
 

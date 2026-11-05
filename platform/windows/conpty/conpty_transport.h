@@ -92,6 +92,7 @@ private:
               std::optional<int64_t> errorCode = std::nullopt);
     void failStart(TransportFault, const char *stage, DWORD err);
     void closePseudoConsoleOnce();
+    std::optional<CloseReason> publishRunning();  // Starting → Running，取走期间登记的关闭请求
 
     TransportCallbacks cb_;
     SessionId sid_{0};
@@ -100,6 +101,10 @@ private:
     std::optional<TransportFault> fault_;
     std::atomic<bool> closeRequested_{false}, closeStarted_{false}, writerStop_{false};
     CloseReason closeReason_ = CloseReason::User;
+    // 生命周期锁：Idle→Starting、Starting→Running 的交接与 close() 的状态判断、closeRequested_ / closeReason_ 登记。
+    // 持锁时不回调、不等待、不做清理。
+    SRWLOCK lifeLock_ = SRWLOCK_INIT;
+    DWORD eventError_ = 0;  // 构造时第一个 CreateEventW 失败的错误码；0 = 全部成功
 
     SRWLOCK lock_ = SRWLOCK_INIT;       // 保护队列
     SRWLOCK pcLock_ = SRWLOCK_INIT;     // 保护 hpc_ 有效性（resize 与 close 串行），不在持锁时等待 I/O
