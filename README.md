@@ -27,6 +27,8 @@ cmake --build --preset mingw -j8
 
 产品壳位于 `build-mingw/ui/it2w_shell.exe`。交叉构建不运行原生测试。
 
+当前 CI Windows 产物**未做 Authenticode 签名**；开启 Smart App Control / Device Guard 的机器可能阻止启动。这些是开发测试包，不保证通过应用控制策略。请在允许未签名开发程序的隔离测试环境验证；正式分发需使用受信任的代码签名证书签名并验证，不能用自签名或“解除文件锁定”保证绕过 SAC。参见 [Windows 测试准备](docs/WINDOWS-手测清单.md#0-准备)。
+
 `mingw-direct` 在 `build-mingw-direct/` 启用 `IT2W_SSH_DIRECT=ON`，首次构建会下载并编译固定版本、校验 SHA-256 的 OpenSSL 与 libssh2：
 
 ```sh

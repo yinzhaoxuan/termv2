@@ -293,6 +293,7 @@ private:
     }
     void flushEvents(); // 取局部副本；之后不得再访问 this
     void drainCoreEvents();
+    void logOsc52(const char *message);
     bool setClipboardUtf8(std::string_view u8);
     std::string getClipboardUtf8();
     void deliverClipboardRead(const itcore_event *request);
@@ -527,6 +528,9 @@ bool Win32PaneBackend::startSession() {
     const auto colors = toCoreColors(appearance_.colors);
     itcore_set_colors(core_, &colors);
     applyOsc52(core_, cfg_->osc52);
+    logOsc52(("policy write=" + std::to_string(cfg_->osc52.allowWrite) +
+              " read=" + std::to_string(cfg_->osc52.allowRead) +
+              " max_bytes=" + std::to_string(cfg_->osc52.maxBytes)).c_str());
     if (applyWordChars(core_, cfg_->wordChars) != 0) std::fprintf(stderr, "[pane] wordChars 非法，使用默认\n");
     renderer_->set_expected_generation(resize_.generation());
 
@@ -820,6 +824,14 @@ void Win32PaneBackend::answerClipboardRead(uint64_t id, uishell::ClipboardReadDe
     if (deliver && request) deliverClipboardRead(request.get());  // 此刻才读取剪贴板，之后释放事件
 }
 
+void Win32PaneBackend::logOsc52(const char *message) {
+    // Opt-in diagnostics only; never include clipboard contents or reply bytes.
+    if (!osc52Ping_) return;
+    const auto line = formatPaneDiagLine(sessionId_, attempt_, "osc52", 0, std::nullopt, 0, message);
+    pumpLog(nullptr, line.c_str());
+    appendPaneDiag(line);
+}
+
 void Win32PaneBackend::drainCoreEvents() {
     if (!core_) return;
     while (itcore_event *e = itcore_next_event(core_)) {
@@ -838,26 +850,29 @@ void Win32PaneBackend::drainCoreEvents() {
                 publishStatus();
             }
             break;
-        case ITCORE_EV_CLIPBOARD_WRITE:
-            if (setClipboardUtf8(std::string_view(reinterpret_cast<const char *>(p), p ? n : 0)) && !clipboardWriteNotified_) {
+        case ITCORE_EV_CLIPBOARD_WRITE: {
+            const bool written = setClipboardUtf8(std::string_view(reinterpret_cast<const char *>(p), p ? n : 0));
+            logOsc52(written ? "write ok" : "write failed (Windows clipboard)");
+            if (written && !clipboardWriteNotified_) {
                 clipboardWriteNotified_ = true;
                 deferEvent(ev_.onClipboardWritten);
             }
             break;
+        }
         case ITCORE_EV_CLIPBOARD_REQUEST:
             // 核心 REQUEST 也包括写拒绝/非法选择器；事件本身无法区分读写。
-            pumpLog(nullptr, "[pane] osc52 read denied");
+            logOsc52("request denied (policy or invalid payload)");
             break;
         case ITCORE_EV_CLIPBOARD_READ:
-            pumpLog(nullptr, "[pane] osc52 read event");
+            logOsc52("read event");
             if (!transport_) {
-                pumpLog(nullptr, "[pane] osc52 read skipped (no transport)");
+                logOsc52("read skipped (no transport)");
             } else if (!osc52ReadEffective(cfg_->osc52.allowRead, transport_->supportsOsc52Read())) {
                 // CAP-01 P06：策略关，或传输不支持读（ConPTY）→ 不交付应答。
                 if (!cfg_->osc52.allowRead)
-                    pumpLog(nullptr, "[pane] osc52 read denied");
+                    logOsc52("read denied");
                 else
-                    pumpLog(nullptr, "[pane] osc52 read unsupported (transport)");
+                    logOsc52("read unsupported (transport)");
             } else {
                 uint64_t id = 0;
                 switch (clipboardGate_.onRequest(static_cast<bool>(ev_.onClipboardReadRequest), &id)) {
@@ -865,12 +880,13 @@ void Win32PaneBackend::drainCoreEvents() {
                     deliverClipboardRead(e);
                     break;
                 case ClipboardReadGate::Action::Drop:
-                    pumpLog(nullptr, "[pane] osc52 read denied (session)");
+                    logOsc52("read denied (session)");
                     break;
                 case ClipboardReadGate::Action::Busy:
-                    pumpLog(nullptr, "[pane] osc52 read busy");
+                    logOsc52("read busy");
                     break;
                 case ClipboardReadGate::Action::Ask:
+                    logOsc52("read confirmation queued");
                     pendingClipboardRead_.reset(e);
                     deferEvent(ev_.onClipboardReadRequest, id);
                     continue;  // 所有权交给 pendingClipboardRead_，跳过循环末尾的释放

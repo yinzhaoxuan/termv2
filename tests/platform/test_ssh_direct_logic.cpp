@@ -394,7 +394,7 @@ static void test_failure_mapping() {
         {Stage::KnownHosts, Kind::KnownHostsOpenFailed, SshError::ConfigError, "open"},
         {Stage::KnownHosts, Kind::KnownHostsParseFailed, SshError::ConfigError, "parse"},
         {Stage::KnownHosts, Kind::KnownHostsMarker, SshError::ConfigError, "markers"},
-        {Stage::HostKey, Kind::HostKeyUnknown, SshError::HostKeyUnknown, "请先用兼容模式"},
+        {Stage::HostKey, Kind::HostKeyUnknown, SshError::HostKeyUnknown, "请点击「核对指纹…」"},
         {Stage::HostKey, Kind::HostKeyChanged, SshError::HostKeyChanged, "changed"},
         {Stage::Agent, Kind::AgentUnavailable, SshError::AuthFailed, "pipe unavailable"},
         {Stage::Auth, Kind::NoAcceptedIdentity, SshError::AuthFailed, "no accepted identity"},
