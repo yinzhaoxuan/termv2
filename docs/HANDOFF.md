@@ -1,6 +1,6 @@
 # termv2 交接说明
 
-日期：2026-11-03（2026-11-05 更新第 2、4、5、6 节）  
+日期：2026-11-03（2026-11-05 更新第 2、4、5、6 节；2026-11-06 更正 mingw-direct 与 CAP-01 / S6 证据指针）  
 读者：仓库所有者，以及之后不再经过协调助手、直接改这个仓库的人。  
 写入时 main 顶端：`87cdf84ab18a4fa8cf7cf7e0abfef4e46437b79c`（`fix(conpty): D-5 gate Reply ODS on OSC52 ping`）。本文只追加文档，不改行为。
 
@@ -8,7 +8,9 @@ termv2 是从 iTerm2 派生的 Windows 终端。本地会话走 ConPTY；SSH 默
 
 先读本文，再按需要打开文末索引里的原文。进度流水在 [STATUS.md](STATUS.md)。设计决策在 `docs/ADR-*.md`。与 iTerm2 的差距和 v0.1 待办在仓库根的 `REVIEW.md` 与两份 `REVIEW-增补-*.md`（不在 `docs/` 下）。v0.1 之后的能力提纲在 [ROADMAP-iTerm2-parity.md](ROADMAP-iTerm2-parity.md)。
 
-**2026-11-05 更新（先读这段）：** 11-04 至 11-05 又落地了 DS-9（外观 Profile）、DS-13（按连接选择传输）、DS-14（连接编辑器）、ADR-004（Ctrl+C）、DS-15（诊断包导出）、DS-16（快捷键展示）、DS-10（OSC 52 读逐次确认）、NEW-05 余项、E7、E6（许可改为 GPL-3.0-or-later）、ADR-005（ABI 规则）、DS-17（内存账本）。现状看 [STATUS.md](STATUS.md) 顶部「当前状态」，剩余工作看 [TODO.md](TODO.md)，Windows 实机手测按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 做（CI 会上传 `it2w_shell.exe`）。第 2 节环境变量、第 4、5、6 节已按 11-05 改写；第 3 节是 11-03 之前的落地记录，保留原样。
+**2026-11-06 更新（先读这段）：** CI `mingw-direct` 已通过，不再是「一次没编译 / 待手动触发」。推送 [run 42044779579](https://github.com/yinzhaoxuan/termv2/actions/runs/42044779579)（`bbd98e5853723d225306d4f1c760a4cefebc6155`，含 Direct artifact）与更早的 [run 41937535260](https://github.com/yinzhaoxuan/termv2/actions/runs/41937535260)（`839a5269d31bbe311d3a467b8905b2bb2e90b1fc`）都包含成功的 mingw-direct。CAP-01 第 16–18 轮与 S6 结果表已入仓（不含原始 hex）：[CAP01-r16-r18-results.md](CAP01-r16-r18-results.md)、[S6-results-table.md](S6-results-table.md)。主要缺口仍是 Windows 实机手测。
+
+**2026-11-05 更新：** 11-04 至 11-05 又落地了 DS-9（外观 Profile）、DS-13（按连接选择传输）、DS-14（连接编辑器）、ADR-004（Ctrl+C）、DS-15（诊断包导出）、DS-16（快捷键展示）、DS-10（OSC 52 读逐次确认）、NEW-05 余项、E7、E6（许可改为 GPL-3.0-or-later）、ADR-005（ABI 规则）、DS-17（内存账本）。现状看 [STATUS.md](STATUS.md) 顶部「当前状态」，剩余工作看 [TODO.md](TODO.md)，Windows 实机手测按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 做（CI 会上传 `it2w_shell.exe`）。第 2 节环境变量、第 4、5、6 节已按 11-05 改写；第 3 节是 11-03 之前的落地记录，证据指针已指到入仓结果表。
 
 **两份增补里的勾选是当时的状态。** `REVIEW-增补-2026-11-02.md` 写于 `c1d475d..06497a0`，当时 GAP-01/14/15/16、A2–A4、A′、D-1–D-4 都还没落地。增补正文不改，文首的回写表与根目录 `REVIEW.md` §8 的勾选已经回写到 2026-11-05，以它们和 `git log` 为准。
 
@@ -144,7 +146,7 @@ $env:ITERM2WIN_SSH_DIRECT = '1'
 | 诊断落盘（S6 基线） | `fde8e9932f34a28dcbf0b1d4b727aa76ce225b08` | `ssh.direct.*` 追加写入 `%APPDATA%\it2w\logs\pane-diag.log`。 |
 | S6 收口（文档） | `06497a05b52d4095f2b2fdfaf4b83a9f08907df8` | 记录 gavin 的 `it2w_shell` 手测。代码手测本身不在 git 里。 |
 
-S6 手测（STATUS 2026-11-02，证据在本机 QA 目录，**未入仓**）：
+S6 手测（STATUS 2026-11-02；入仓结果表 [S6-results-table.md](S6-results-table.md)，原始日志不入仓）：
 
 - `ssh_direct_accept.exe`：gavin PASS（dns-cancel、server-only-ecdsa 等有条件用例 SKIP）。
 - `it2w_shell`，`ITERM2WIN_SSH_DIRECT=1`，目标 hc-lab。round1（lab 关机）：diag 有 `ssh.direct.*`，无 `ssh.exe`，连接超时；exit / resize / vim SKIP。round2（UbuntuDev 开着）：resize 104×34 → 71×24 → 115×40，vim PASS，exit 0，`protocol close`，hostkey ed25519，agent `\\.\pipe\openssh-ssh-agent`。CLEAN_OK。
@@ -155,7 +157,7 @@ S6 手测（STATUS 2026-11-02，证据在本机 QA 目录，**未入仓**）：
 
 `89854826744037ab0ca0d8f3fba1a5ccae11b9d5`：接受「经 ConPTY 的会话不支持 OSC 52 读」，写入能力门和 [ADR-002](ADR-002-CAP01-P06-osc52-read.md)。写仍可用，由 `osc52.allowWrite` 控制，默认关。
 
-真机结论记在 ADR-002 / STATUS，原始 hex **未入仓**：
+真机结论记在 ADR-002 / STATUS，以及入仓结果表 [CAP01-r16-r18-results.md](CAP01-r16-r18-results.md)（不含原始 hex）：
 
 - 第 16 轮（gavin，Windows build 26300.9711，conhost 10.0.26100.9949，系统 ConPTY）：OSC 1337、OSC 133 透传；OSC 8 被改写（加 `id=`，BEL→ST）；DCS（tmux -CC）和 Sixel 被吞。由此重评直连。
 - 第 17 轮：增量路径上 OSC 133;A 与提示符同位。整屏重绘未测。core 仍无 OSC 133 状态机（属 T04 之后的 Shell Integration）。
@@ -230,20 +232,20 @@ B 批退出标准（REVIEW §7）：从主程序走通本地 PowerShell、手动
 逐项勾选以根目录 `REVIEW.md` §8 为准（已回写到 2026-11-05），剩余工作与推荐顺序以 [TODO.md](TODO.md) 为准。概括：
 
 - **已落地**：A 批全部（含 A5、A1 目录锁清理）、A′、B1–B5、D1 连接编辑器、D3 / D4 外观 Profile、D5 快捷键展示（只读）、D6（ADR-004）、D8 诊断包、E2 / NEW-02、E3 内存账本、E4 / E5（CI、预设、README）、E6 许可、E7 文档整理、NEW-03、NEW-04（DS-10）、NEW-05、DS-8 的 ABI 规则（ADR-005）、SSH 默认传输阶段 1（ADR-006）。设计文档都在 `docs/DS-*.md` / `docs/ADR-*.md`。
-- **仍开放**：C1–C6 全部实机验证（[WINDOWS-手测清单.md](WINDOWS-手测清单.md)）；D2 搜索的正则与大历史耗时；D7 OSC 52 开关仍是 settings.json 隐藏字段、没有界面；E1 执行器 / UI 线程模型 ADR（需实测）；E8 字形运行渲染（DS-18 已实现，待 Windows 手测）；DS-7 的 TERM / terminfo 对齐（需实机）；E6 余项（MinGW 运行时许可文本打包）；D-5 的 QA 证据入仓。
+- **仍开放**：C1–C6 全部实机验证（[WINDOWS-手测清单.md](WINDOWS-手测清单.md)）；D2 搜索的正则与大历史耗时；D7 OSC 52 开关仍是 settings.json 隐藏字段、没有界面；E1 执行器 / UI 线程模型 ADR（需实测）；E8 字形运行渲染（DS-18 已实现，待 Windows 手测）；DS-7 的 TERM / terminfo 对齐（需实机）；E6 余项（MinGW 运行时许可文本打包）。D-5 的 QA 结果表已入仓（[CAP01-r16-r18-results.md](CAP01-r16-r18-results.md)、[S6-results-table.md](S6-results-table.md)）；CORE-01/02 向量仍未入仓。
 
 ### 4.4 D-5 余项
 
 出处：`REVIEW-增补-2026-11-02.md` §1 D-5 三条。ODS 那条已由 PR #10 落地。剩下两条原文是：
 
 - Direct 只能用 MinGW 构建，MSVC 产物里没有它。按连接选择传输已由 DS-13 完成（`ssh.transport`，环境变量降为全局默认）。
-- CAP-01 第 16–18 轮和 S6 手测的证据都「留在本机 QA 目录，未入仓」。C6 要求结果绑定提交号和环境。建议至少把结果表（不含原始输出）入仓。
+- CAP-01 第 16–18 轮和 S6 手测的结果表已入仓（不含原始 hex / 日志）：[CAP01-r16-r18-results.md](CAP01-r16-r18-results.md)、[S6-results-table.md](S6-results-table.md)。原始文件仍在旧机器的 QA 目录，不入仓。
 
-路径在 ADR-002 / STATUS 里写过、但不在 git 中：`/workspace/qa/realmachine-results-r16/`、`/workspace/qa/realmachine-results-r18/manual-r18.md`，以及 S6 的本机 QA 目录。A 探针产物同样不入仓。
+路径原先只写在 ADR-002 / STATUS 里：`/workspace/qa/realmachine-results-r16/`、`/workspace/qa/realmachine-results-r18/manual-r18.md`，以及 S6 的本机 QA 目录。A 探针产物同样不入仓。
 
 ### 4.5 Direct 改成默认传输之前
 
-已由 [ADR-006](ADR-006-SSH默认传输.md) 决定，分两阶段。阶段 1 已落地：`auto`（agent → 直连）、settings.json `sshDefaultTransport`、环境变量 `1` / `0`、失败文字说明来源、发布包用 `mingw-direct`、CI 每次编 Direct。内置默认 `kBuiltinSshDefault` 仍是兼容。阶段 2 把它改成 `Auto`，前提是 ADR-006 §决策 4 的四道门槛都过了（编译、手测、一个工作日的实际使用、退回路径）。在那之前不要改 `kBuiltinSshDefault`。
+已由 [ADR-006](ADR-006-SSH默认传输.md) 决定，分两阶段。阶段 1 已落地：`auto`（agent → 直连）、settings.json `sshDefaultTransport`、环境变量 `1` / `0`、失败文字说明来源、发布包用 `mingw-direct`、CI 每次编 Direct。内置默认 `kBuiltinSshDefault` 仍是兼容。阶段 2 把它改成 `Auto`，前提是 ADR-006 §决策 4 的四道门槛都过了（编译已在文首两次 CI 通过；手测、一个工作日的实际使用、退回路径仍开放）。在那之前不要改 `kBuiltinSshDefault`。
 
 ### 4.6 Windows 实机待验
 
@@ -345,7 +347,7 @@ REVIEW §8.F1–F13 是同一批能力的另一份清单（Shell Integration、�
 
 ## 6. 接手建议
 
-1. **先做 Windows 实机验证。** 11-04 以来的功能都还没在 Windows 上跑过，`mingw-direct` 也一次没编译。按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 从 P0 做起，结果写进 STATUS，绑定提交号与 Windows 版本（诊断包里有）。
+1. **先做 Windows 实机验证。** 11-04 以来的功能都还没在 Windows 上跑过。CI `mingw-direct` 已经编译通过：推送 `bbd98e5853723d225306d4f1c760a4cefebc6155`（[run 42044779579](https://github.com/yinzhaoxuan/termv2/actions/runs/42044779579)，含 artifact）与更早的 `839a5269d31bbe311d3a467b8905b2bb2e90b1fc`（[run 41937535260](https://github.com/yinzhaoxuan/termv2/actions/runs/41937535260)）。按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 从 P0 做起，结果写进 STATUS，绑定提交号与 Windows 版本（诊断包里有）。
 2. **不要把 Direct 改成默认**，直到上一步的 Direct 相关项通过，并按 TODO §2.1 写了 ADR。
 3. **剩下的开发项**见 TODO §2.2：E1、DS-7 需要实机，E8 已实现、待实机验证；E6 余项依赖构建机。F-0..F-5 只写设计（ROADMAP）。
 4. **工作方式**：先在 `docs/DS-*.md` 写设计，再实现；平台无关的逻辑放 `ui/src`（uicfg）、`app/pane_backend/pane_logic.*`、`renderer/layout/` 并单测，Win32 文件只做薄胶水；CI 的 mingw 是唯一的 Windows 编译检查。改完回写 STATUS 顶部与 TODO，提交信息写清行为、测试结果与「未验证」项；动了 itcore 公开头文件要按 ADR-005 写明兼容性。

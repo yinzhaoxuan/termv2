@@ -3,7 +3,7 @@
 - **状态**：Accepted（Gavin 批准设计 §7 的五项倾向）
 - **范围**：Windows/MinGW 的 SSH 与 Hyper-V 内层 SSH；本地继续使用 ConPTY。
 - **状态与使用**：[STATUS](STATUS.md)、[ssh-direct.md](ssh-direct.md)。
-- **S6 产品手测**：gavin 上 `it2w_shell` Direct（含 diag / 无 ssh.exe / exit / resize / vim）已于 2026-11-02 收口，细节见 [STATUS](STATUS.md)。
+- **S6 产品手测**：gavin 上 `it2w_shell` Direct（含 diag / 无 ssh.exe / exit / resize / vim）已于 2026-11-02 收口，细节见 [STATUS](STATUS.md) 与 [S6-results-table.md](S6-results-table.md)。
 
 ## 决策
 

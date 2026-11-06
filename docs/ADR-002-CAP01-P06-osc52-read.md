@@ -3,7 +3,7 @@
 - **状态**：Accepted（Gavin 2026-10-31 拍板）
 - **证据提交**：`7a901d4`（第 15 轮真机，机器 gavin）
 - **验证环境（第 16 轮 gavin 实测，2026-10-31）**：Windows build 26300.9711（26H2）；conhost.exe 文件版本 10.0.26100.9949；conpty.dll：System32 下不存在；来源：**系统自带**（`conpty_transport.cpp` 直接调 kernel32 `CreatePseudoConsole`，无 `LoadLibrary("conpty.dll")`；`rb-7a901d4` 安装包递归无 OpenConsole/conpty）
-- **第 16 轮方法（对齐版，取代 PowerShell/120×30 首轮）**：独立 C# harness 调 `CreatePseudoConsole(COORD{80,24}, …, dwFlags=0)` → `hr=0x0`，与产品 `conpty_transport.cpp:113` 一致（无 `INHERIT_CURSOR`）；管道不可继承，子进程 `cmd.exe /c type <probe>`（`bInheritHandles=FALSE`，`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`），未启 `it2w_shell`。对照与第 15 轮一致：`]52;c;aGk=` 写**完整出现**（conhost 立即透传，排在其整屏重绘之前，字节不变、位置提前），`52;c;?` 读**完全消失**。结果：`/workspace/qa/realmachine-results-r16/`（`manual-r16.md`、`notes/harness-aligned.md`、`notes/aligned-hex.txt`，未入仓）。
+- **第 16 轮方法（对齐版，取代 PowerShell/120×30 首轮）**：独立 C# harness 调 `CreatePseudoConsole(COORD{80,24}, …, dwFlags=0)` → `hr=0x0`，与产品 `conpty_transport.cpp:113` 一致（无 `INHERIT_CURSOR`）；管道不可继承，子进程 `cmd.exe /c type <probe>`（`bInheritHandles=FALSE`，`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`），未启 `it2w_shell`。对照与第 15 轮一致：`]52;c;aGk=` 写**完整出现**（conhost 立即透传，排在其整屏重绘之前，字节不变、位置提前），`52;c;?` 读**完全消失**。原始记录仍在 `/workspace/qa/realmachine-results-r16/`（`manual-r16.md`、`notes/harness-aligned.md`、`notes/aligned-hex.txt`，不入仓）。不含 hex 的结果表见 [CAP01-r16-r18-results.md](CAP01-r16-r18-results.md)。
 
 ## 决策
 
@@ -82,7 +82,7 @@ DS-10（2026-11-04）加了逐次确认后，Direct 声明 `supportsOsc52Read=tr
 **A 探针（2026-11-01，Gavin 的 Windows lab）**：独立 `ssh_a_probe`（进程内 libssh2 + OpenSSL 静态 MinGW）`--test all` 六项 PASS（agent auth、79B、stty、33×window-change、close-flood、close-auth CancelSynchronousIo）。产品直连以方案 A 为主；产物不入仓。
 **当前立场：** Direct SSH v0 已按 A 为主落地；B 保留为控制序列透明性的对照证据，不采用 A+B 混合。
 决策见 [ADR-003](ADR-003-ssh-direct.md)，使用方式见 [ssh-direct.md](ssh-direct.md)。
-第 18 轮证据见 `/workspace/qa/realmachine-results-r18/manual-r18.md`（未入仓）。
+第 18 轮原始记录仍在 `/workspace/qa/realmachine-results-r18/manual-r18.md`（不入仓）。不含 hex 的结果表见 [CAP01-r16-r18-results.md](CAP01-r16-r18-results.md)。
 
 ## 实现要点
 
