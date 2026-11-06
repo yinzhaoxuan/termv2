@@ -42,6 +42,7 @@ cmake --build --preset mingw-direct -j8
 - [当前状态与待验证项](docs/STATUS.md)
 - [剩余工作与推荐顺序](docs/TODO.md)
 - [Windows 实机手测清单](docs/WINDOWS-手测清单.md)
+- [2026-11-06 QA 手测 bug 清单](docs/qa/buglist-20261106.md)、[手测矩阵（commit bbd98e5）](docs/qa/handtest-matrix-bbd98e5.md)
 - [实现审查清单 2026-11-05](docs/审查清单-2026-11-05.md)（ConPTY 关闭路径、Ctrl 符号键）与[复审](docs/审查清单-2026-11-05-复审.md)（启动 / 关闭交接、事件创建失败）
 - ADR：[窗格 pump](docs/ADR-001-pump状态机.md)、[OSC 52 读能力](docs/ADR-002-CAP01-P06-osc52-read.md)、[Direct SSH](docs/ADR-003-ssh-direct.md)、[Ctrl+C 默认](docs/ADR-004-Ctrl+C默认行为.md)、[itcore ABI 规则](docs/ADR-005-itcore-ABI版本规则.md)、[SSH 默认传输](docs/ADR-006-SSH默认传输.md)
 - 设计：[DS-2 启动描述与 B 批](docs/DS-2-启动描述与B批.md)、[DS-9 外观 Profile](docs/DS-9-外观Profile.md)、[DS-10 OSC 52 读确认](docs/DS-10-OSC52读确认.md)、[DS-12 Direct 首次信任](docs/DS-12-Direct首次信任.md)、[DS-13 按连接选择传输](docs/DS-13-按连接选择传输.md)、[DS-14 连接编辑器](docs/DS-14-连接编辑器.md)、[DS-15 诊断包导出](docs/DS-15-诊断包导出.md)、[DS-16 快捷键展示](docs/DS-16-快捷键展示.md)、[DS-17 内存账本](docs/DS-17-内存账本.md)、[DS-18 字形运行渲染](docs/DS-18-字形运行渲染.md)
