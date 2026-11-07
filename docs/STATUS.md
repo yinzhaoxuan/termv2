@@ -13,20 +13,27 @@
 - 本机使用便携 LLVM-MinGW 20261104（Clang 23.1.5）、CMake 4.4.5、Ninja 1.13.2，Windows x64 Debug 完整构建通过（含 `it2w_shell.exe`，`IT2W_SSH_DIRECT=OFF`）。CTest 共 171 项：首轮 169 项通过；`extra.golden` 的编码/行尾问题修正后单独通过；`PANE-11` 首轮触发人为设置的 60 秒超时，单独放宽到 240 秒后于 104.84 秒通过。最终 171 项全部通过，含配置、Direct 错误映射、核心 OSC 52 与读确认门的回归。测试临时目录显式设在工作目录，避免沙箱默认临时目录差异；未运行私有 SSH 实验环境的在线验收。
 - **未完成的实机验收**：正式签名；有效配置下的 OSC 52 本地/Direct 写和 Direct 读确认；固定窗格数的重连资源测量。未构建 Direct 依赖，不把纯逻辑测试当作 Direct 产品验收；外部 CORE-01/02 向量仍缺失。
 
-## 当前状态（2026-11-04）
+## 当前状态（2026-11-06）
 
 | 模块 | 现状 | 验证 |
 |---|---|---|
 | 终端核心 `ports/core` | VT 解析、屏幕与历史（10000 行 / 64 MiB 默认）、SGR 子参数与下划线样式、UCD 16 宽度、OSC 8 / 52、DA / DECRQSS / XTVERSION / XTGETTCAP（VT220 身份）、选区、搜索、编码（键 / 鼠标 / 粘贴） | Linux / macOS ctest；CORE-01/02 外部向量未入仓 |
 | 渲染 `renderer` | D2D / DWrite，脏行画布，光标与 IME，配色读自核心（DS-9） | 逻辑单测；像素效果未实机 |
 | 窗格后端 `app/pane_backend` | pump 状态机（ADR-001）、ConPTY / 兼容 SSH / Direct SSH / Hyper-V、诊断日志 5 MiB × 3、OSC 52 读逐次确认（DS-10）、丢弃字节上报、会话 / 应用内存账本（DS-17） | 纯逻辑单测；Windows 只经 CI mingw 编译 |
-| 传输 `platform/windows` | ConPTY、`ssh.exe` 快照、libssh2 Direct（含首次信任 DS-12）、Hyper-V 解析；默认传输按 ADR-006 选择（内置默认仍兼容） | Direct 由 CI `mingw-direct` 编译（ADR-006 起每次推送） |
+| 传输 `platform/windows` | ConPTY、`ssh.exe` 快照、libssh2 Direct（含首次信任 DS-12）、Hyper-V 解析；默认传输按 ADR-006 选择（内置默认仍兼容） | Direct 由 CI `mingw-direct` 编译（ADR-006 起每次推送；`bbd98e5` 与 `839a526` 已通过） |
 | 主界面 `ui` | 会话树与连接编辑器（DS-14）、标签 / 分屏、历史搜索、多行粘贴确认、外观 Profile 与 `.itermcolors`（DS-9）、按连接选择传输（DS-13）、快捷键展示（DS-16）、诊断包导出（DS-15） | uicfg 单测；Win32 代码只经 CI mingw 编译 |
 
 - **测试**：macOS 本机 ctest 172 项全过；CI 每次推送跑 linux / asan / tsan / mingw。
-- **最大缺口**：上表「未实机」的部分全部没有在 Windows 上跑过。手测清单汇总在 [TODO.md](TODO.md) §1（每个设计文档的「只能在 Windows 上验」一节）。手测结果请写进本文件，并附「导出诊断包…」里的提交号与 Windows 版本（REVIEW C6）。
+- **最大缺口**：Windows 实机手测。上表「未实机」的部分全部没有在 Windows 上跑过。手测清单汇总在 [TODO.md](TODO.md) §1 第 2 条（每个设计文档的「只能在 Windows 上验」一节）。手测结果请写进本文件，并附「导出诊断包…」里的提交号与 Windows 版本（REVIEW C6）。
+- **已入仓的结果表**（不含原始 hex / 日志）：[CAP01-r16-r18-results.md](CAP01-r16-r18-results.md)、[S6-results-table.md](S6-results-table.md)。CORE-01/02 外部向量仍未入仓（TODO §1 第 4 条）。
 - **许可**：GPL-3.0-or-later（[LICENSE-AUDIT.md](LICENSE-AUDIT.md)）。
-- **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认待 ADR（TODO §2.1）。OSC 52 读写默认全关。
+- **默认值**：SSH 默认仍走兼容模式（`ssh.exe`）；Direct 改默认仍待 TODO §2.1 的其余门槛（不要改 `kBuiltinSshDefault`）。OSC 52 读写默认全关。
+
+## 2026-11-06：mingw-direct 已确认，CAP-01 / S6 结果表入仓
+
+- CI `mingw-direct` 已通过，不再待手动触发。推送 [run 42044779579](https://github.com/yinzhaoxuan/termv2/actions/runs/42044779579)（`bbd98e5853723d225306d4f1c760a4cefebc6155`）linux / asan / tsan / mingw / mingw-direct 全绿，并上传 `it2w_shell-mingw-direct-<sha>`。更早的 [run 41937535260](https://github.com/yinzhaoxuan/termv2/actions/runs/41937535260)（`839a5269d31bbe311d3a467b8905b2bb2e90b1fc`，`workflow_dispatch`）同样 mingw-direct 成功。
+- 结果表（不含原始 hex / 日志）已在 `docs/`：[CAP01-r16-r18-results.md](CAP01-r16-r18-results.md)、[S6-results-table.md](S6-results-table.md)。原始文件仍在本机 QA 目录。
+- **主要缺口仍是 Windows 实机手测**（[TODO.md](TODO.md) §1 第 2 条、[WINDOWS-手测清单.md](WINDOWS-手测清单.md)）。CORE-01/02 向量仍未入仓（TODO §1 第 4 条）。
 
 ## 2026-11-05：DS-18 字形运行渲染（E8）
 
@@ -58,7 +65,7 @@
 - 连接编辑器：传输第一项显示「跟随全局默认（当前：直连 / 兼容）」，切换认证方式时刷新。
 - CI：`mingw-direct` 每次推送都跑，缓存 `build-mingw-direct/ssh-a-deps`。发布包用这个构建。
 - 测试：`resolveSshTransport` 全表（连接 × 环境变量三态 × settings 四态 × 内置三态 × 构建 × 认证）、`sshDirectEnv`、来源提示与诊断文字；settings 往返与 8 种非法值；编辑器标签；诊断包摘要。macOS ctest 172 项全过。
-- **未验证**：`win32_pane_backend.cpp`、`connection_dialog.cpp`、`main.cpp` 的改动要等 CI `mingw` / `mingw-direct`；缓存是否命中要看第二次运行；Windows 手测见手测清单 P1-3 新增的五项。
+- **未验证**：`win32_pane_backend.cpp`、`connection_dialog.cpp`、`main.cpp` 的改动当时要等 CI `mingw` / `mingw-direct`；2026-11-06 的推送运行已通过（见文首）。缓存是否命中当时要看第二次运行。Windows 手测见手测清单 P1-3 新增的五项。
 
 ## 2026-11-05：实现审查修复
 
@@ -71,7 +78,7 @@
 
 - [WINDOWS-手测清单.md](WINDOWS-手测清单.md)：把各设计文档、STATUS B 批、HANDOFF §4.6、REVIEW C 批的手测项合并，按 P0–P3 排好，写明期望、出处与回报格式。CI 的 mingw / mingw-direct 任务改为上传 `it2w_shell.exe` 与 `licenses/`（`89e5f52`，首个 artifact 已生成）。
 - 文档回写到 11-05：HANDOFF（11-05 更新说明、环境变量语义、第 4–6 节）、README 文档索引、REVIEW §8 C 批指向清单、REVIEW 增补 10-31 回写表、ROADMAP（OSC 52 读、F-1、F-4、Direct 补齐）。
-- CI：`89e5f52` 全绿（linux / asan / tsan / mingw）。`mingw-direct` 仍待手动触发。
+- CI：`89e5f52` 全绿（linux / asan / tsan / mingw）。该提交当时的 `mingw-direct` 仍是手动任务、这次没跑；ADR-006 起改为每次推送，2026-11-06 已确认通过（见文首）。
 
 ## 2026-11-05：DS-17 会话与应用两级内存账本（E3）
 
@@ -121,7 +128,7 @@
 - 写入：每个 attempt 第一次经 OSC 52 成功写剪贴板时，状态栏提示「「<连接名>」中的程序写入了剪贴板（OSC 52）」。
 - 可移植：`ClipboardReadGate` 状态机、`clipboardReadPrompt` 文案（复用粘贴预览规则）；真实核心上验证读请求事件可在之后的 feed 之后再编码应答（BEL / ST 结尾）。`itcore.h` 只补注释。
 - macOS ctest 164/164（新增 10 项）。
-- **未验证**：`win32_pane_backend.cpp`、`main.cpp`、`clipboard_prompt.cpp` 等 CI `mingw`；`direct_ssh_transport.h` 只在 `mingw-direct` 里编译（需手动触发）；Windows 手测见 DS-10 §7。
+- **未验证**：`win32_pane_backend.cpp`、`main.cpp`、`clipboard_prompt.cpp` 等 CI `mingw`；`direct_ssh_transport.h` 只在 `mingw-direct` 里编译（当时需手动触发；2026-11-06 已确认通过，见文首）；Windows 手测见 DS-10 §7。
 
 ## 2026-11-04：DS-16 快捷键展示（D5）
 
@@ -168,7 +175,7 @@
 - 加载校验：未知值或非字符串 → `ssh.transport` 错误；`"direct"` 配 KeyFile / Interactive → `ssh.auth.mode` 错误。两者都只阻止该连接启动，不让文件变 Corrupt。
 - 传输偏好经 `SshLaunchDesc` → `it2w::SshLaunchOptions.transport` 带到后端，每次 attempt 由 `wantDirectSsh` 选择；构建不含 Direct 时照旧失败、不回落。两条报错文字改为指向连接字段。
 - macOS ctest 124/124，CI 全绿（含 mingw）（新增 uicfg_ssh_transport_{store,validate,launch}、PANE-30）。
-- **未验证**：Windows 手测见 DS-13 §6；改了 `win32_pane_backend.cpp`，需要手动触发一次 CI `mingw-direct`。
+- **未验证**：Windows 手测见 DS-13 §6。当时改了 `win32_pane_backend.cpp`，Direct 路径要等 CI `mingw-direct`；2026-11-06 已确认通过（见文首）。
 
 ## 2026-11-04：DS-9 最小外观 Profile（D3、D4）
 
@@ -183,11 +190,11 @@
 
 ## 2026-11-04：E4/E5、NEW-02、NEW-03、DS-12 Direct 首次信任
 
-- **E4 / E5**（`299b3c1`）：ui 默认用仓库内 nlohmann；`IT2W_REQUIRE_VECTORS`；`IT2W_SANITIZE_THREAD`；`CMakePresets.json`（dev / asan / tsan / mingw / mingw-direct）；根 README；GitHub Actions（linux / asan / tsan 测试 + mingw 交叉编译，mingw-direct 仅手动触发）。首次 CI 全绿，`986cdf7` 的 Windows 文件经 mingw 编译通过。
+- **E4 / E5**（`299b3c1`）：ui 默认用仓库内 nlohmann；`IT2W_REQUIRE_VECTORS`；`IT2W_SANITIZE_THREAD`；`CMakePresets.json`（dev / asan / tsan / mingw / mingw-direct）；根 README；GitHub Actions（linux / asan / tsan 测试 + mingw 交叉编译；`299b3c1` 时 mingw-direct 仅手动触发，ADR-006 起改为每次推送，2026-11-06 已确认通过，见文首）。首次 CI 全绿，`986cdf7` 的 Windows 文件经 mingw 编译通过。
 - **NEW-02**（`c69bc48`）：`itcore_history_rows` 改为按组增量计数，push / 淘汰只置脏首尾组，查询时惰性重排。5000 行历史再输出 10 万行：整段重建 100000 → 0 次（197.9 s → 0.19 s）；单条 10 万段软换行行：157.7 s → 1.6 s。
 - **NEW-03**（`2fcaac3`）：核对确认没有地方跨 feed 缓存 `abs_row`；`itcore.h` 写明它只在同一时刻有效；新增淘汰后高亮回归测试。
 - **DS-12**（设计 [DS-12-Direct首次信任.md](DS-12-Direct首次信任.md)）：Direct 遇到未知主机时窗格给出「核对指纹…」，确认框默认取消，确认后把本次出示的密钥原子写入 `configDir/ssh/known_hosts` 并重连一次。密钥变化只追加提示，不给信任按钮；DSS 可照常校验已信任的条目，但不提供信任。Direct 默认值不变。
-- macOS ctest 113/113。**待验证**：Direct 代码只在 `IT2W_SSH_DIRECT=ON` 时编译，需要在 GitHub Actions 手动触发 `mingw-direct`；Windows 手测见 DS-12 §6。
+- macOS ctest 113/113。**待验证**：Direct 代码只在 `IT2W_SSH_DIRECT=ON` 时编译。当时需要在 GitHub Actions 手动触发 `mingw-direct`；2026-11-06 已确认通过（见文首）。Windows 手测见 DS-12 §6。
 
 ## 2026-11-04：A5、A1 余量、DS-2、B1–B5（`986cdf7`）
 
@@ -286,7 +293,7 @@
 - `it2w_shell` Direct 手测（gavin，`ITERM2WIN_SSH_DIRECT=1` → hc-lab）：
   - round1（lab 关机）：`pane-diag.log` 写有 `ssh.direct.*` PASS；无 `ssh.exe` PASS；connect timeout；exit / resize / vim SKIP。
   - round2（UbuntuDev 已开）：resize PASS（`tput`/`stty` 104×34→71×24→115×40，diag `window-change`）；vim PASS；exit PASS（退出码 0，`protocol close`）；diag 复核 hostkey ed25519、agent `\\.\pipe\openssh-ssh-agent`、pty/shell/running；CLEAN_OK。
-- 证据留在本机 QA 目录，未入仓。Direct SSH v0 产品手测（含诊断落盘）收口。
+- 结果表（不含原始日志）已入仓：[S6-results-table.md](S6-results-table.md)。原始日志仍在本机 QA 目录。Direct SSH v0 产品手测（含诊断落盘）收口。
 
 ## 2026-11-01：Direct SSH v0 / S7
 
