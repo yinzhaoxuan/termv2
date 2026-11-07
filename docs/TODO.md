@@ -16,7 +16,7 @@
 1. **CI 的 `mingw-direct` 已通过**（ADR-006 起自动跑，不再待手动触发）。DS-10、DS-12、DS-13、ADR-006 的 Direct 代码已在 CI 编译成功，并上传了 Direct 产物：
    - 推送 [run 42044779579](https://github.com/yinzhaoxuan/termv2/actions/runs/42044779579)，提交 `bbd98e5853723d225306d4f1c760a4cefebc6155`（linux / asan / tsan / mingw / mingw-direct 全绿；artifact `it2w_shell-mingw-direct-<sha>`）。
    - 更早的 [run 41937535260](https://github.com/yinzhaoxuan/termv2/actions/runs/41937535260)，提交 `839a5269d31bbe311d3a467b8905b2bb2e90b1fc`（`workflow_dispatch`，mingw-direct 同样成功）。
-2. **Windows 实机手测**（仍开放）：按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 从上往下做（已把下面各处的手测项合并并排好优先级；CI 的 mingw / mingw-direct 任务会上传 `it2w_shell.exe` 供下载）。代码都在 main 上，只缺实机记录。结果写进 STATUS，并绑定提交号和 Windows / conhost 版本（REVIEW C6）：
+2. **Windows 实机手测**（仍开放）：按 [WINDOWS-手测清单.md](WINDOWS-手测清单.md) 复测未关闭项目。2026-11-06 的手测记录及 2026-11-07 修复核查见 [qa/buglist-20261106.md](qa/buglist-20261106.md)、[qa/handtest-matrix-bbd98e5.md](qa/handtest-matrix-bbd98e5.md)。保留已完成的结果，不将未验收项视为通过。复测结果写进 STATUS，并绑定提交号和 Windows / conhost 版本（REVIEW C6）：
    - `986cdf7` 的清单：STATUS 2026-11-04「A5、A1 余量、DS-2、B1–B5」一节末尾（PowerShell 本地连接、Hyper-V 各分支、恢复不自动连接、多行粘贴确认、启动清理快照）。
    - DS-17 的清单：[DS-17-内存账本.md](DS-17-内存账本.md) §6。
    - DS-10 的清单：[DS-10-OSC52读确认.md](DS-10-OSC52读确认.md) §7。

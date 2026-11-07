@@ -64,6 +64,10 @@ Parse parseSettings(const fs::path& p, SettingsFile& out, std::string& why) {
   try {
     std::ifstream in(p, std::ios::binary);
     json j = json::parse(in);
+    if (!j.contains("schemaVersion")) {
+      why = "缺少必填字段 schemaVersion；当前格式应为 \"schemaVersion\": 1";
+      return Parse::Bad;
+    }
     int v = j.at("schemaVersion");
     if (v > kSchemaVersion) { why = "schemaVersion " + std::to_string(v); return Parse::Newer; }
     if (v < 1) { why = "无效 schemaVersion"; return Parse::Bad; }
@@ -192,6 +196,22 @@ SettingsLoadResult loadSettings(const fs::path& file) {
   r.readOnly = true;
   r.data = defaultSettings();
   return r;
+}
+
+std::string settingsLoadWarning(const SettingsLoadResult& result) {
+  std::string message;
+  switch (result.status) {
+    case LoadStatus::Ok:
+    case LoadStatus::NotFound: return {};
+    case LoadStatus::RecoveredBackup:
+      message = "settings.json 无法加载，已使用备份 settings.json.bak"; break;
+    case LoadStatus::Corrupt:
+      message = "settings.json 无法加载，已使用默认设置（OSC 52 读写关闭），原文件只读保护"; break;
+    case LoadStatus::NewerSchema:
+      message = "settings.json 版本高于当前程序，已使用默认设置，原文件只读保护"; break;
+  }
+  if (!result.detail.empty()) message += "：" + result.detail;
+  return message;
 }
 
 bool saveSettings(const fs::path& file, SettingsFile& data, bool readOnly, std::string* error) {

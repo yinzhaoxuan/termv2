@@ -36,12 +36,26 @@ cmake --build --preset mingw-direct -j8
 
 运行时环境变量见 [HANDOFF §2](docs/HANDOFF.md#2-如何构建与测试)。
 
+## Windows 手测配置与启动
+
+当前 CI artifact 是未签名的开发构建；本机 QA 已记录 Smart App Control / Device Guard 阻止启动的情况（bug `2026110600000001`）。这些产物不保证能在要求签名的设备上运行。正式交付仍需发布方完成代码签名及受管策略下的启动验收；源码修复不能替代签名证书。
+
+手写 `%APPDATA%\it2w\settings.json` 时必须保留根字段 `"schemaVersion": 1`。OSC 52 手测的最小完整配置如下；已有文件只增加相关字段，保留其它设置。退出程序后编辑，重启并用诊断包确认配置加载正常、读写已开启。默认读写仍关闭，Direct 读需用户确认。
+
+```json
+{
+  "schemaVersion": 1,
+  "osc52": { "allowWrite": true, "allowRead": true, "maxBytes": 786432 }
+}
+```
+
 ## 接下来读
 
 - [交接与构建测试说明](docs/HANDOFF.md)（构建依赖与 preset 以本 README 和 CMake 为准）
 - [当前状态与待验证项](docs/STATUS.md)
 - [剩余工作与推荐顺序](docs/TODO.md)
 - [Windows 实机手测清单](docs/WINDOWS-手测清单.md)
+- [2026-11-06 QA 手测 bug 清单](docs/qa/buglist-20261106.md)、[手测矩阵（commit bbd98e5）](docs/qa/handtest-matrix-bbd98e5.md)
 - [实现审查清单 2026-11-05](docs/审查清单-2026-11-05.md)（ConPTY 关闭路径、Ctrl 符号键）与[复审](docs/审查清单-2026-11-05-复审.md)（启动 / 关闭交接、事件创建失败）
 - ADR：[窗格 pump](docs/ADR-001-pump状态机.md)、[OSC 52 读能力](docs/ADR-002-CAP01-P06-osc52-read.md)、[Direct SSH](docs/ADR-003-ssh-direct.md)、[Ctrl+C 默认](docs/ADR-004-Ctrl+C默认行为.md)、[itcore ABI 规则](docs/ADR-005-itcore-ABI版本规则.md)、[SSH 默认传输](docs/ADR-006-SSH默认传输.md)
 - 设计：[DS-2 启动描述与 B 批](docs/DS-2-启动描述与B批.md)、[DS-9 外观 Profile](docs/DS-9-外观Profile.md)、[DS-10 OSC 52 读确认](docs/DS-10-OSC52读确认.md)、[DS-12 Direct 首次信任](docs/DS-12-Direct首次信任.md)、[DS-13 按连接选择传输](docs/DS-13-按连接选择传输.md)、[DS-14 连接编辑器](docs/DS-14-连接编辑器.md)、[DS-15 诊断包导出](docs/DS-15-诊断包导出.md)、[DS-16 快捷键展示](docs/DS-16-快捷键展示.md)、[DS-17 内存账本](docs/DS-17-内存账本.md)、[DS-18 字形运行渲染](docs/DS-18-字形运行渲染.md)

@@ -1869,6 +1869,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   app.settings = (ls.status == LoadStatus::NotFound || ls.status == LoadStatus::Corrupt) ? defaultSettings() : ls.data;
   app.settingsLoadStatus = ls.status;
   app.settingsReadOnly = ls.readOnly;
+  if (const auto warning = settingsLoadWarning(ls); !warning.empty()) {
+    appendNote(app.statusNote, warning);
+    OutputDebugStringW(W("it2w_shell: " + warning + "\n").c_str());
+  }
   app.settings.fontSize = normalizeFontSize(app.settings.fontSize);
   {  // 非法或 DirectWrite 不存在的字体名：本次运行回退默认（不改 settings.json），免得渲染退回比例字体
     auto fam = normalizeFontFamily(app.settings.fontFamily);
