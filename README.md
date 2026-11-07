@@ -36,6 +36,19 @@ cmake --build --preset mingw-direct -j8
 
 运行时环境变量见 [HANDOFF §2](docs/HANDOFF.md#2-如何构建与测试)。
 
+## Windows 手测配置与启动
+
+当前 CI artifact 是未签名的开发构建；本机 QA 已记录 Smart App Control / Device Guard 阻止启动的情况（bug `2026110600000001`）。这些产物不保证能在要求签名的设备上运行。正式交付仍需发布方完成代码签名及受管策略下的启动验收；源码修复不能替代签名证书。
+
+手写 `%APPDATA%\it2w\settings.json` 时必须保留根字段 `"schemaVersion": 1`。OSC 52 手测的最小完整配置如下；已有文件只增加相关字段，保留其它设置。退出程序后编辑，重启并用诊断包确认配置加载正常、读写已开启。默认读写仍关闭，Direct 读需用户确认。
+
+```json
+{
+  "schemaVersion": 1,
+  "osc52": { "allowWrite": true, "allowRead": true, "maxBytes": 786432 }
+}
+```
+
 ## 接下来读
 
 - [交接与构建测试说明](docs/HANDOFF.md)（构建依赖与 preset 以本 README 和 CMake 为准）
