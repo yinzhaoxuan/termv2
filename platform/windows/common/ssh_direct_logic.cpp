@@ -274,7 +274,9 @@ SshExitInfo mapDirectFailure(DirectFailure failure) {
     case DirectFailureKind::HostKeyUnknown:
         result.error = SshError::HostKeyUnknown;
         result.hostKey = std::move(failure.hostKey);
-        reason = "请点击「核对指纹…」，与可信来源核对后再连接"; break;
+        reason = result.hostKey ? "未知主机，请点击「核对指纹…」并向管理员核对后再信任"
+                                : "未知主机，无法在此核对指纹；请用兼容模式连接并核对主机指纹";
+        break;
     case DirectFailureKind::HostKeyChanged:
         result.error = SshError::HostKeyChanged; reason = "host key changed"; break;
     case DirectFailureKind::AgentUnavailable:

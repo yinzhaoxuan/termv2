@@ -93,6 +93,8 @@ void clearProfileColors(SettingsFile&, const std::string& profileId);
 SettingsFile defaultSettings();
 
 SettingsLoadResult loadSettings(const std::filesystem::path& file);
+// 启动时可见的加载提示；正常加载/首次启动为空，不改变加载策略或有效权限。
+std::string settingsLoadWarning(const SettingsLoadResult& result);
 bool saveSettings(const std::filesystem::path& file, SettingsFile& data,
                   bool readOnly, std::string* error);
 

@@ -219,6 +219,36 @@ int main() {
     }
   }
 
+  {  // QA 2026110600000002/4：缺 schemaVersion 的 OSC 52 配置必须明确告知回退。
+    const auto config = dir / "qa-settings.json";
+    CHECK(settingsLoadWarning(loadSettings(config)).empty());
+    const std::string osc = R"("osc52":{"allowWrite":true,"allowRead":true,"maxBytes":786432})";
+    { std::ofstream out(config); out << "{" << osc << "}"; }
+    auto loaded = loadSettings(config);
+    CHECK(loaded.status == LoadStatus::Corrupt && loaded.readOnly);
+    CHECK(!loaded.data.osc52OrDefault().allowWrite && !loaded.data.osc52OrDefault().allowRead);
+    CHECK(loaded.detail.find("schemaVersion") != std::string::npos);
+    CHECK(settingsLoadWarning(loaded).find("OSC 52 读写关闭") != std::string::npos);
+    CHECK(settingsLoadWarning(loaded).find(loaded.detail) != std::string::npos);
+    { std::ofstream out(config); out << "{\"schemaVersion\":1," << osc << "}"; }
+    loaded = loadSettings(config);
+    CHECK(loaded.status == LoadStatus::Ok && !loaded.readOnly);
+    CHECK(loaded.data.osc52OrDefault().allowWrite && loaded.data.osc52OrDefault().allowRead);
+    CHECK(settingsLoadWarning(loaded).empty());
+    fs::path backup = config; backup += ".bak";
+    fs::copy_file(config, backup);
+    { std::ofstream out(config); out << "{" << osc << "}"; }
+    loaded = loadSettings(config);
+    CHECK(loaded.status == LoadStatus::RecoveredBackup && !loaded.readOnly);
+    CHECK(loaded.data.osc52OrDefault().allowRead);
+    CHECK(settingsLoadWarning(loaded).find("已使用备份") != std::string::npos);
+    { std::ofstream out(config); out << "{\"schemaVersion\":999," << osc << "}"; }
+    loaded = loadSettings(config);
+    CHECK(loaded.status == LoadStatus::NewerSchema && loaded.readOnly);
+    CHECK(!loaded.data.osc52OrDefault().allowRead);
+    CHECK(settingsLoadWarning(loaded).find("版本高于当前程序") != std::string::npos);
+  }
+
   resetKeybindings(r.data);
   CHECK(r.data.keybindings.at("newTab") == "Ctrl+Shift+T");
 

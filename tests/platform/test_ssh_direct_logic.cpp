@@ -340,6 +340,10 @@ static void test_presented_host_key() {
     const auto key = presentHostKey("hv-guid", T::Ed25519, "raw", "SHA256:test");
     auto exit = mapDirectFailure({DirectStage::HostKey, DirectFailureKind::HostKeyUnknown, 0, key});
     CHECK(exit.error == SshError::HostKeyUnknown && exit.hostKey && exit.hostKey->knownHostsName == "hv-guid");
+    CHECK(exit.detail.find("核对指纹…") != std::string::npos);
+    CHECK(exit.detail.find("兼容模式") == std::string::npos);
+    auto unavailable = mapDirectFailure({DirectStage::HostKey, DirectFailureKind::HostKeyUnknown});
+    CHECK(!unavailable.hostKey && unavailable.detail.find("无法在此核对指纹") != std::string::npos);
     exit = mapDirectFailure({DirectStage::HostKey, DirectFailureKind::HostKeyChanged, 0, key});
     CHECK(exit.error == SshError::HostKeyChanged && !exit.hostKey);
 }
@@ -394,7 +398,7 @@ static void test_failure_mapping() {
         {Stage::KnownHosts, Kind::KnownHostsOpenFailed, SshError::ConfigError, "open"},
         {Stage::KnownHosts, Kind::KnownHostsParseFailed, SshError::ConfigError, "parse"},
         {Stage::KnownHosts, Kind::KnownHostsMarker, SshError::ConfigError, "markers"},
-        {Stage::HostKey, Kind::HostKeyUnknown, SshError::HostKeyUnknown, "请点击「核对指纹…」"},
+        {Stage::HostKey, Kind::HostKeyUnknown, SshError::HostKeyUnknown, "请用兼容模式"},
         {Stage::HostKey, Kind::HostKeyChanged, SshError::HostKeyChanged, "changed"},
         {Stage::Agent, Kind::AgentUnavailable, SshError::AuthFailed, "pipe unavailable"},
         {Stage::Auth, Kind::NoAcceptedIdentity, SshError::AuthFailed, "no accepted identity"},
