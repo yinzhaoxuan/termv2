@@ -38,7 +38,7 @@ cmake --build --preset mingw-direct -j8
 
 ## Windows 手测配置与启动
 
-当前 CI artifact 是未签名的开发构建；本机 QA 已记录 Smart App Control / Device Guard 阻止启动的情况（bug `2026110600000001`）。这些产物不保证能在要求签名的设备上运行。正式交付仍需发布方完成代码签名及受管策略下的启动验收；源码修复不能替代签名证书。
+当前 CI artifact 是未签名的开发构建；本机 QA 已记录 Smart App Control / Device Guard 阻止启动的情况（bug `2026110600000001`）。这些产物不保证能在要求签名的设备上运行。正式交付仍需发布方完成代码签名及受管策略下的启动验收；源码修复不能替代签名证书。参见 [Windows 测试准备](docs/WINDOWS-手测清单.md#0-准备)。
 
 手写 `%APPDATA%\it2w\settings.json` 时必须保留根字段 `"schemaVersion": 1`。OSC 52 手测的最小完整配置如下；已有文件只增加相关字段，保留其它设置。退出程序后编辑，重启并用诊断包确认配置加载正常、读写已开启。默认读写仍关闭，Direct 读需用户确认。
 
